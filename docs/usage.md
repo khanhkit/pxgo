@@ -31,11 +31,18 @@ pxgo tries the returned proxy list in order and falls back when a proxy fails.
 ./pxgo --pac=/path/to/proxy.pac
 ```
 
-For non-UTF-8 PAC files:
+For non-UTF-8 PAC files, select the source encoding explicitly:
 
 ```bash
 ./pxgo --pac=/path/to/proxy.pac --pac-encoding=latin1
+./pxgo --pac=/path/to/proxy.pac --pac-encoding=cp1252
+./pxgo --pac=/path/to/proxy.pac --pac-encoding=cp1251
+./pxgo --pac=/path/to/proxy.pac --pac-encoding=utf-16
 ```
+
+`--pac-encoding=auto` detects UTF BOMs, accepts valid UTF-8, and otherwise
+falls back to Windows-1252. PAC result lists are bounded to 32 candidates and
+16 KiB and malformed directives fail explicitly.
 
 ## Bypass Rules
 

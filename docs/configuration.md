@@ -64,7 +64,7 @@ human-edited config with explanations.
 | --- | --- | --- |
 | `server`, `proxy` / `--proxy` | empty | Upstream proxy server list |
 | `pac` / `--pac` | empty | PAC URL or local file |
-| `pac_encoding` / `--pac-encoding` | `utf-8` | PAC file encoding |
+| `pac_encoding` / `--pac-encoding` | `utf-8` | PAC source encoding: `utf-8`/`utf8`, `latin1`/`latin-1`, `cp1252`/`windows-1252`, `cp1251`/`windows-1251`, `utf-16`, `utf-16le`, `utf-16be`, or `auto` |
 | `port` / `--port` | `3128` | Local listen port |
 | `listen` / `--listen` | `127.0.0.1` | Local listen address list |
 | `gateway` / `--gateway` | `0` | Bind all interfaces; requires restrictive `allow`, `hostonly`, or strong downstream auth |
@@ -75,6 +75,30 @@ human-edited config with explanations.
 | `username` / `--username` | empty | Upstream auth username or Kerberos principal |
 | `auth` / `--auth` | empty | Upstream auth selector; empty + reusable credentials uses `ANYSAFE`, while explicit `ANY` includes Basic fallback |
 | `kerberos` / `--kerberos` | `0` | Enable Kerberos ticket management |
+
+## PAC Semantics
+
+PAC source decoding is explicit. The default remains `utf-8`; `latin1` is an
+alias for ISO-8859-1, and Windows-1252/Windows-1251 plus UTF-16 variants are
+supported when selected. `auto` recognizes UTF BOMs, otherwise accepts valid
+UTF-8 and falls back to Windows-1252.
+
+One loaded PAC generation owns one JavaScript global state. Calls are
+serialized at that generation boundary, so unusual PAC files that intentionally
+use mutable global counters/caches behave deterministically instead of getting
+independent state from a VM pool. Reloading the PAC creates a new generation
+and therefore a new global state.
+
+`myIpAddress()` snapshots local interfaces once when the generation is loaded.
+Loopback, link-local, multicast and unspecified IPv4 addresses are ignored;
+private IPv4 addresses are preferred, with deterministic address ordering.
+Reload the PAC generation when network-interface selection must be refreshed.
+
+PAC routing results are tokenized on semicolons. Supported directives are
+`PROXY`/`HTTP`, `HTTPS`, `SOCKS`, `SOCKS4`, `SOCKS4A`, `SOCKS5`,
+and `DIRECT`. Malformed/unknown directives fail explicitly in production PAC
+routing. Results are limited to 16 KiB and 32 candidates so a pathological PAC
+cannot multiply dial/auth fallback work without bound.
 
 ## Client Section
 
