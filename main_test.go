@@ -423,3 +423,48 @@ func mustAtoi(t *testing.T, value string) int {
 	}
 	return out
 }
+
+func TestAPISS0011InstallPersistsConfigBeforeRegistry(t *testing.T) {
+	oldArgs := os.Args
+	oldInstall := installStartupFunc
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		installStartupFunc = oldInstall
+	})
+
+	path := filepath.Join(t.TempDir(), "fresh config", "pxgo.ini")
+	os.Args = []string{
+		oldArgs[0],
+		"--install",
+		"--config=" + path,
+		"--server=proxy.example.test:8080",
+		"--port=4141",
+	}
+
+	called := false
+	installStartupFunc = func(cmd string, force bool) error {
+		called = true
+		if force {
+			t.Fatal("force unexpectedly enabled")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("config not persisted before registry install: %v", err)
+		}
+		text := string(data)
+		if !strings.Contains(text, "server = proxy.example.test:8080") || !strings.Contains(text, "port = 4141") {
+			t.Fatalf("persisted config missing effective values:\n%s", text)
+		}
+		if !strings.Contains(cmd, "--config="+path) {
+			t.Fatalf("startup command %q does not reference persisted config %q", cmd, path)
+		}
+		return nil
+	}
+
+	if code := run(); code != 0 {
+		t.Fatalf("run exit=%d", code)
+	}
+	if !called {
+		t.Fatal("registry installer was not called")
+	}
+}
