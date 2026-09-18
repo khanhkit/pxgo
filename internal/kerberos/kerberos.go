@@ -44,6 +44,7 @@ type Manager struct {
 
 	mu         sync.Mutex
 	refreshing bool
+	closed     bool
 
 	KinitWithPasswordFunc func() bool
 	KinitRenewFunc        func() bool
@@ -128,6 +129,10 @@ func itoa(i int) string {
 func (m *Manager) Check(force bool) *bool {
 	now := time.Now()
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
 	if !force && !m.NextCheck.IsZero() && now.Before(m.NextCheck) {
 		m.mu.Unlock()
 		return nil
@@ -147,7 +152,11 @@ func (m *Manager) refresh(force bool) {
 	defer func() {
 		m.mu.Lock()
 		m.refreshing = false
+		closed := m.closed
 		m.mu.Unlock()
+		if closed {
+			m.removeCCache()
+		}
 	}()
 
 	now := time.Now()
@@ -359,6 +368,13 @@ func parseHeimdal(output string) (time.Time, bool) {
 }
 
 func (m *Manager) Cleanup() {
+	m.mu.Lock()
+	m.closed = true
+	m.mu.Unlock()
+	m.removeCCache()
+}
+
+func (m *Manager) removeCCache() {
 	path := strings.TrimPrefix(m.CCacheName, "FILE:")
 	if path != m.CCacheName {
 		_ = os.Remove(path)
