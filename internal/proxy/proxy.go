@@ -773,10 +773,6 @@ func (s *Server) newOutboundRequest(req *http.Request, u *url.URL, body *replaya
 	return outReq, nil
 }
 
-func stripProxyHeaders(header http.Header) {
-	stripIntermediaryHeaders(header, true)
-}
-
 func cloneHeader(h http.Header) http.Header {
 	out := make(http.Header, len(h))
 	copyHeader(out, h)

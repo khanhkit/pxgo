@@ -98,6 +98,7 @@ func TestHTTPUpgradeForwardsPipelinedClientBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status=%s", resp.Status)
 	}
@@ -151,6 +152,7 @@ func TestShutdownOwnsHTTPUpgradeTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status=%s", resp.Status)
 	}
@@ -187,7 +189,12 @@ func FuzzStripIntermediaryHeaders(f *testing.F) {
 			return
 		}
 		for _, r := range token {
-			if !(r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+			switch {
+			case r == '-', r == '_':
+			case r >= '0' && r <= '9':
+			case r >= 'A' && r <= 'Z':
+			case r >= 'a' && r <= 'z':
+			default:
 				return
 			}
 		}
