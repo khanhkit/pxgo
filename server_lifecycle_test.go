@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/pavelsimo/pxgo/internal/proxy"
 )
 
 type blockingShutdowner struct{}
@@ -75,6 +76,52 @@ func TestAPISS0022DoSelfTestRejectsNilRequest(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("expected nil self-test request error")
+	}
+}
+
+func TestAPISS0022SelfTestReadinessDoesNotCreateProbeConnection(t *testing.T) {
+	cfg := config.Default()
+	cfg.Listen = "127.0.0.1"
+	cfg.Port = 0
+	s, err := proxy.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- s.Start() }()
+
+	if err := waitSelfTestReady(s, errc, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := shutdownWithTimeout(s, 250*time.Millisecond); err != nil {
+		t.Fatalf("shutdown after readiness wait: %v", err)
+	}
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("Start returned error after shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Start did not return after shutdown")
+	}
+}
+
+func TestAPISS0022SelfTestStartFailureDoesNotDoubleWait(t *testing.T) {
+	cfg := config.Default()
+	cfg.Listen = "127.0.0.1,::bad"
+	cfg.Port = freePort(t)
+	cfg.Test = "http://127.0.0.1"
+
+	start := time.Now()
+	err := runSelfTest(cfg)
+	if err == nil {
+		t.Fatal("expected self-test listener start failure")
+	}
+	if strings.Contains(err.Error(), "did not stop after shutdown") {
+		t.Fatalf("start failure was polluted by second errc wait: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 750*time.Millisecond {
+		t.Fatalf("start failure cleanup took too long: %v", elapsed)
 	}
 }
 

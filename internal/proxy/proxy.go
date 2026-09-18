@@ -414,6 +414,12 @@ func (s *Server) Port() int {
 	return s.port
 }
 
+func (s *Server) Ready() bool {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.srv != nil && len(s.listeners) != 0
+}
+
 func (s *Server) ActiveTunnels() int64 {
 	return atomic.LoadInt64(&s.active)
 }

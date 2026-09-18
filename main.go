@@ -352,6 +352,14 @@ func runSelfTest(cfg config.Config) (retErr error) {
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- s.Start() }()
+
+	if err := waitSelfTestReady(s, errc, 5*time.Second); err != nil {
+		if shutdownErr := shutdownWithTimeout(s, controlShutdownTimeout); shutdownErr != nil {
+			return errors.Join(err, fmt.Errorf("self-test shutdown after start failure: %w", shutdownErr))
+		}
+		return err
+	}
+
 	defer func() {
 		shutdownErr := shutdownWithTimeout(s, controlShutdownTimeout)
 		if shutdownErr != nil {
@@ -367,10 +375,6 @@ func runSelfTest(cfg config.Config) (retErr error) {
 			retErr = errors.Join(retErr, errors.New("self-test proxy did not stop after shutdown"))
 		}
 	}()
-
-	if err := waitPort(cfg.Listen, cfg.Port); err != nil {
-		return err
-	}
 
 	urls := selfTestURLs(cfg.Test)
 	allMode := selfTestAllMode(cfg.Test)
@@ -493,18 +497,30 @@ func selfTestAllMode(test string) bool {
 	return test == "all" || test == "1" || strings.HasPrefix(test, "all:")
 }
 
-func waitPort(listen string, port int) error {
-	addr := net.JoinHostPort(listenForClient(listen), fmt.Sprint(port))
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
+func waitSelfTestReady(s *proxy.Server, errc <-chan error, timeout time.Duration) error {
+	if s == nil {
+		return errors.New("nil self-test proxy")
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if s.Ready() {
 			return nil
 		}
-		time.Sleep(25 * time.Millisecond)
+		select {
+		case err := <-errc:
+			if err != nil {
+				return fmt.Errorf("self-test proxy start: %w", err)
+			}
+			return errors.New("self-test proxy stopped before becoming ready")
+		case <-ticker.C:
+		case <-timer.C:
+			return errors.New("self-test proxy did not become ready before timeout")
+		}
 	}
-	return fmt.Errorf("proxy did not start at %s", addr)
 }
 
 func listenForClient(listen string) string {
