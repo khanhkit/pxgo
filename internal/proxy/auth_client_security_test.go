@@ -284,3 +284,41 @@ func FuzzParseNTLMAuthenticateBounded(f *testing.F) {
 		}
 	})
 }
+
+func BenchmarkDownstreamAuthRejectOversizedNTLM(b *testing.B) {
+	const oversized = 8193
+	msg := make([]byte, 64+oversized)
+	copy(msg, "NTLMSSP\x00")
+	binary.LittleEndian.PutUint32(msg[8:12], 3)
+	binary.LittleEndian.PutUint16(msg[20:22], oversized)
+	binary.LittleEndian.PutUint16(msg[22:24], oversized)
+	binary.LittleEndian.PutUint32(msg[24:28], 64)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := parseNTLMAuthenticateMessage(msg); err == nil {
+			b.Fatal("oversized NTLM response accepted")
+		}
+	}
+}
+
+func BenchmarkDownstreamAuthRejectKnownDigestReplay(b *testing.B) {
+	s := digestTestServer()
+	remote := "127.0.0.1:51300"
+	target := "http://example.test/resource"
+	nonce := digestNonce(remote)
+	header := digestTestHeader(http.MethodGet, target, nonce, "auth", "MD5")
+	if !digestNonceMarkIfNew(nonce, "00000001") {
+		b.Fatal("failed to seed replay state")
+	}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.RemoteAddr = remote
+	req.Header.Set("Proxy-Authorization", header)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if s.checkDigestClientAuth(req) {
+			b.Fatal("known replay authenticated")
+		}
+	}
+}
