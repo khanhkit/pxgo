@@ -2939,7 +2939,7 @@ func TestNeedsReplayableBody(t *testing.T) {
 		want     bool
 	}{
 		{name: "no body never buffers", withBody: false, proxies: []wproxy.Server{upstreamServer}, want: false},
-		{name: "direct streams", withBody: true, proxies: nil, want: false},
+		{name: "direct streams", withBody: true, proxies: []wproxy.Server{wproxy.Direct}, want: false},
 		{name: "multiple candidates buffer for fallback", withBody: true, proxies: []wproxy.Server{upstreamServer, wproxy.Direct}, want: true},
 		{name: "upstream with credentials buffers", withBody: true, proxies: []wproxy.Server{upstreamServer}, cfg: func(c *config.Config) { c.Username = "u"; c.Password = "p" }, want: true},
 		{name: "upstream auth NONE streams", withBody: true, proxies: []wproxy.Server{upstreamServer}, cfg: func(c *config.Config) { c.Auth = "NONE" }, want: false},

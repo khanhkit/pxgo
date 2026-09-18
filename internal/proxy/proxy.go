@@ -706,6 +706,9 @@ func (s *Server) needsReplayableBody(req *http.Request, proxies []wproxy.Server)
 		return false
 	}
 	candidates := proxyCandidates(proxies)
+	if len(candidates) == 0 {
+		return false
+	}
 	if len(candidates) > 1 {
 		return true
 	}
@@ -770,9 +773,6 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 }
 
 func proxyCandidates(proxies []wproxy.Server) []wproxy.Server {
-	if len(proxies) == 0 {
-		return []wproxy.Server{wproxy.Direct}
-	}
 	return proxies
 }
 
