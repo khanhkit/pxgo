@@ -38,7 +38,7 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	debug.Dprintf("CONNECT proxies: %v", proxies)
-	upstream, leftover, err := s.connectWithProxyFallback(target, req.Header.Get("Proxy-Authorization"), proxies)
+	upstream, leftover, err := s.connectWithProxyFallback(req.Context(), target, req.Header.Get("Proxy-Authorization"), proxies)
 	if err != nil {
 		debug.Dprint("CONNECT failed: " + err.Error())
 		http.Error(rw, err.Error(), http.StatusBadGateway)
@@ -86,8 +86,9 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 	}()
 }
 
-func (s *Server) connectWithProxyFallback(target, incomingProxyAuth string, proxies []wproxy.Server) (net.Conn, []byte, error) {
+func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingProxyAuth string, proxies []wproxy.Server) (net.Conn, []byte, error) {
 	timeout := time.Duration(s.cfg.SockTimeout * float64(time.Second))
+	dialer := &net.Dialer{Timeout: timeout}
 	var lastErr error
 	for _, p := range proxyCandidates(proxies) {
 		var upstream net.Conn
@@ -95,24 +96,38 @@ func (s *Server) connectWithProxyFallback(target, incomingProxyAuth string, prox
 		var err error
 		if p == wproxy.Direct {
 			debug.Dprint("CONNECT: dialing direct to " + target)
-			upstream, err = net.DialTimeout("tcp", target, timeout) // #nosec G704 -- this proxy must dial client-requested CONNECT targets.
+			upstream, err = dialer.DialContext(ctx, "tcp", target) // #nosec G704 -- this proxy must dial client-requested CONNECT targets.
 		} else {
 			addr := net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
 			debug.Dprintf("CONNECT: dialing via %s proxy %s for %s", proxyScheme(p), addr, target)
 			switch scheme := proxyScheme(p); {
 			case scheme == httpsScheme:
-				upstream, err = tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", addr, &tls.Config{ServerName: p.Host})
+				upstream, err = dialer.DialContext(ctx, "tcp", addr)
 				if err == nil {
-					leftover, err = s.sendUpstreamConnect(upstream, target, incomingProxyAuth)
+					tlsConn := tls.Client(upstream, &tls.Config{ServerName: p.Host})
+					handshakeCtx := ctx
+					cancel := func() {}
+					if timeout > 0 {
+						handshakeCtx, cancel = context.WithTimeout(ctx, timeout)
+					}
+					err = tlsConn.HandshakeContext(handshakeCtx)
+					cancel()
+					if err == nil {
+						upstream = tlsConn
+						leftover, err = s.sendUpstreamConnectBounded(ctx, upstream, target, incomingProxyAuth, timeout)
+					}
 				}
 			case strings.HasPrefix(scheme, "socks"):
-				upstream, err = dialSOCKSProxy(context.Background(), scheme, addr, target, timeout)
+				upstream, err = dialSOCKSProxy(ctx, scheme, addr, target, timeout)
 			default:
-				upstream, err = net.DialTimeout("tcp", addr, timeout)
+				upstream, err = dialer.DialContext(ctx, "tcp", addr)
 				if err == nil {
-					leftover, err = s.sendUpstreamConnect(upstream, target, incomingProxyAuth)
+					leftover, err = s.sendUpstreamConnectBounded(ctx, upstream, target, incomingProxyAuth, timeout)
 				}
 			}
+		}
+		if err == nil && ctx.Err() != nil {
+			err = ctx.Err()
 		}
 		if err == nil {
 			debug.Dprint("CONNECT: upstream connected to " + target)
@@ -129,6 +144,22 @@ func (s *Server) connectWithProxyFallback(target, incomingProxyAuth string, prox
 	}
 	debug.Dprint("CONNECT: all candidates failed for " + target + ": " + lastErr.Error())
 	return nil, nil, lastErr
+}
+
+func (s *Server) sendUpstreamConnectBounded(ctx context.Context, conn net.Conn, target, passthroughAuth string, timeout time.Duration) ([]byte, error) {
+	if timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(timeout))
+	}
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+	})
+	leftover, err := s.sendUpstreamConnect(conn, target, passthroughAuth)
+	stopCancel()
+	_ = conn.SetDeadline(time.Time{})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	return leftover, err
 }
 
 func (s *Server) sendUpstreamConnect(conn net.Conn, target string, passthroughAuth string) ([]byte, error) {
@@ -179,8 +210,9 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target stri
 		if selected := selectProxyAuthenticateChallenge(cfg.Auth, resp.Header.Values("Proxy-Authenticate")); selected != "" {
 			nextChallenge = selected
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
+		if err := drainUpstream407Body(resp.Body); err != nil {
+			return err
+		}
 		nextSession := session
 		if nextSession == nil && isWindowsSSPICandidate(cfg, nextChallenge) {
 			if sess, err := newSSPISession(); err == nil {
@@ -198,6 +230,7 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target stri
 		if onAuthFailure != nil {
 			onAuthFailure(resp)
 		}
+		_ = resp.Body.Close()
 		return fmt.Errorf("upstream CONNECT failed: %s", resp.Status)
 	}
 	return nil

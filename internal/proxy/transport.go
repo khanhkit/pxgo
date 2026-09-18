@@ -54,6 +54,7 @@ func (s *Server) newHTTPTransport(p wproxy.Server) *http.Transport {
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 		ResponseHeaderTimeout: timeout,
+		TLSHandshakeTimeout:   timeout,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   32,
 		IdleConnTimeout:       90 * time.Second,
@@ -97,19 +98,28 @@ func dialSOCKSProxy(ctx context.Context, scheme, proxyAddr, target string, timeo
 	}
 }
 
-func dialSOCKS5(ctx context.Context, proxyAddr, target string, timeout time.Duration) (net.Conn, error) {
+func dialSOCKS5(ctx context.Context, proxyAddr, target string, timeout time.Duration) (result net.Conn, retErr error) {
 	dialer := net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
 		return nil, err
 	}
 	closeOnErr := true
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+	})
 	defer func() {
+		stopCancel()
+		if retErr != nil && ctx.Err() != nil {
+			retErr = ctx.Err()
+		}
 		if closeOnErr {
 			_ = conn.Close()
 		}
 	}()
-	_ = conn.SetDeadline(time.Now().Add(timeout))
+	if timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(timeout))
+	}
 	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
 		return nil, err
 	}
@@ -181,24 +191,37 @@ func dialSOCKS5(ctx context.Context, proxyAddr, target string, timeout time.Dura
 	if _, err := io.ReadFull(conn, make([]byte, skip+2)); err != nil {
 		return nil, err
 	}
+	stopCancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	_ = conn.SetDeadline(time.Time{})
 	closeOnErr = false
 	return conn, nil
 }
 
-func dialSOCKS4(ctx context.Context, proxyAddr, target string, timeout time.Duration) (net.Conn, error) {
+func dialSOCKS4(ctx context.Context, proxyAddr, target string, timeout time.Duration) (result net.Conn, retErr error) {
 	dialer := net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
 		return nil, err
 	}
 	closeOnErr := true
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+	})
 	defer func() {
+		stopCancel()
+		if retErr != nil && ctx.Err() != nil {
+			retErr = ctx.Err()
+		}
 		if closeOnErr {
 			_ = conn.Close()
 		}
 	}()
-	_ = conn.SetDeadline(time.Now().Add(timeout))
+	if timeout > 0 {
+		_ = conn.SetDeadline(time.Now().Add(timeout))
+	}
 	host, portText, err := net.SplitHostPort(target)
 	if err != nil {
 		return nil, err
@@ -230,6 +253,10 @@ func dialSOCKS4(ctx context.Context, proxyAddr, target string, timeout time.Dura
 	}
 	if reply[1] != 0x5a {
 		return nil, fmt.Errorf("SOCKS4 connect failed with code %d", reply[1])
+	}
+	stopCancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	_ = conn.SetDeadline(time.Time{})
 	closeOnErr = false

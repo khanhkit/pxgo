@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,8 +56,12 @@ func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request
 			s.forceKerberosReloadForUpstreamAuth(resp)
 			return finish(resp), nil
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
+		if err := drainUpstream407Body(resp.Body); err != nil {
+			if pinned != nil {
+				pinned.CloseIdleConnections()
+			}
+			return nil, err
+		}
 		nextReq, reqErr := s.newOutboundRequest(req, u, body, auth)
 		if reqErr != nil {
 			if pinned != nil {
@@ -73,6 +78,27 @@ func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request
 	}
 	s.forceKerberosReloadForUpstreamAuth(resp)
 	return finish(resp), nil
+}
+
+const maxUpstream407Body = 64 << 10
+
+func drainUpstream407Body(body io.ReadCloser) error {
+	if body == nil {
+		return nil
+	}
+	defer body.Close()
+
+	n, err := io.CopyN(io.Discard, body, maxUpstream407Body+1)
+	switch {
+	case err == nil && n > maxUpstream407Body:
+		return fmt.Errorf("upstream 407 body exceeds %d bytes", maxUpstream407Body)
+	case errors.Is(err, io.EOF):
+		return nil
+	case err != nil:
+		return fmt.Errorf("drain upstream 407 body: %w", err)
+	default:
+		return nil
+	}
 }
 
 // transportClosingBody releases a single-connection pinned transport after the
