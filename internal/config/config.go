@@ -472,7 +472,9 @@ func ParseArgs(args []string) (Config, error) {
 			return cfg, fmt.Errorf("command line --%s: %w", name, err)
 		}
 	}
-	loadStoredPasswords(&cfg)
+	if err := loadStoredPasswords(&cfg); err != nil {
+		return cfg, err
+	}
 	normalizeDependencies(&cfg)
 	return cfg, nil
 }
@@ -792,17 +794,26 @@ func normalizeDependencies(cfg *Config) {
 	}
 }
 
-func loadStoredPasswords(cfg *Config) {
+func loadStoredPasswords(cfg *Config) error {
 	if cfg.Password == "" && cfg.Username != "" {
-		if pwd, ok := GetPassword(Realm, cfg.Username); ok {
+		pwd, ok, err := getPasswordStrict(Realm, cfg.Username)
+		if err != nil {
+			return fmt.Errorf("load stored upstream password: %w", err)
+		}
+		if ok {
 			cfg.Password = pwd
 		}
 	}
 	if cfg.ClientPassword == "" && cfg.ClientUsername != "" {
-		if pwd, ok := GetPassword(ClientRealm, cfg.ClientUsername); ok {
+		pwd, ok, err := getPasswordStrict(ClientRealm, cfg.ClientUsername)
+		if err != nil {
+			return fmt.Errorf("load stored client password: %w", err)
+		}
+		if ok {
 			cfg.ClientPassword = pwd
 		}
 	}
+	return nil
 }
 
 func StorePassword(realm, username, password string) error {
@@ -823,16 +834,21 @@ func StorePassword(realm, username, password string) error {
 }
 
 func GetPassword(realm, username string) (string, bool) {
+	pwd, ok, _ := getPasswordStrict(realm, username)
+	return pwd, ok
+}
+
+func getPasswordStrict(realm, username string) (string, bool, error) {
 	if username == "" {
-		return "", false
+		return "", false, nil
 	}
 	if os.Getenv(envPrefix+"KEYRING_PLAINTEXT") == "1" {
-		return getPlaintext(realm, username)
+		return getPlaintextStrict(realm, username)
 	}
 	if pwd, err := keyring.Get(realm, username); err == nil {
-		return pwd, true
+		return pwd, true, nil
 	}
-	return "", false
+	return "", false, nil
 }
 
 func storePlaintext(realm, username, password string) error {
@@ -865,16 +881,25 @@ func storePlaintext(realm, username, password string) error {
 }
 
 func getPlaintext(realm, username string) (string, bool) {
-	raw, err := os.ReadFile(keyringPath())
+	password, ok, _ := getPlaintextStrict(realm, username)
+	return password, ok
+}
+
+func getPlaintextStrict(realm, username string) (string, bool, error) {
+	path := keyringPath()
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
 	if err != nil {
-		return "", false
+		return "", false, fmt.Errorf("read plaintext keyring %s: %w", path, err)
 	}
 	data := map[string]map[string]string{}
 	if err := json.Unmarshal(raw, &data); err != nil {
-		return "", false
+		return "", false, fmt.Errorf("parse plaintext keyring %s: %w", path, err)
 	}
 	password := data[realm][username]
-	return password, password != ""
+	return password, password != "", nil
 }
 
 func keyringPath() string {
