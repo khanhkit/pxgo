@@ -36,9 +36,6 @@ type clientState struct {
 
 func (s *Server) authenticateClient(req *http.Request) bool {
 	if req.Header.Get("Proxy-Authorization") == "" && s.isClientAuthed(req.RemoteAddr) {
-		if isBodyMethod(req.Method) && req.ContentLength == 0 {
-			return false
-		}
 		debug.Dprint("client already authenticated: " + req.RemoteAddr)
 		return true
 	}
@@ -48,10 +45,6 @@ func (s *Server) authenticateClient(req *http.Request) bool {
 	s.setClientAuthed(req.RemoteAddr)
 	debug.Dprint("client authenticated: " + req.RemoteAddr)
 	return true
-}
-
-func isBodyMethod(method string) bool {
-	return method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch
 }
 
 // clientStateFor returns the state entry for remoteAddr, creating it if
@@ -152,24 +145,56 @@ func (s *Server) checkDigestClientAuth(req *http.Request) bool {
 	qop := params["qop"]
 	nc := params["nc"]
 	cnonce := params["cnonce"]
+	algorithm := params["algorithm"]
 	if realm != digestRealm || uri == "" || response == "" || !verifyDigestNonce(nonce, req.RemoteAddr) {
 		return false
 	}
+	if uri != digestRequestTarget(req) {
+		return false
+	}
+	if !strings.EqualFold(qop, "auth") || !validDigestNC(nc) || cnonce == "" || len(cnonce) > maxDigestCnonceLen {
+		return false
+	}
+	if algorithm != "" && !strings.EqualFold(algorithm, "MD5") {
+		return false
+	}
+	if digestNonceSeen(nonce, nc) {
+		return false
+	}
+
 	ha1 := md5hex(username + ":" + realm + ":" + s.cfg.ClientPassword)
 	ha2 := md5hex(req.Method + ":" + uri)
-	var expected string
-	if qop != "" {
-		expected = md5hex(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2)
-	} else {
-		expected = md5hex(ha1 + ":" + nonce + ":" + ha2)
-	}
+	expected := md5hex(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2)
 	if !subtleEqualHex(response, expected) {
 		return false
 	}
-	// Reject replays of a verified nonce/nc pair (only detectable with qop,
-	// where the client must increment nc per request).
-	if qop != "" && digestNonceReplayed(nonce, nc) {
+	return digestNonceMarkIfNew(nonce, nc)
+}
+
+func digestRequestTarget(req *http.Request) string {
+	if req.RequestURI != "" {
+		return req.RequestURI
+	}
+	if req.Method == http.MethodConnect && req.Host != "" {
+		return req.Host
+	}
+	if req.URL == nil {
+		return ""
+	}
+	if req.URL.IsAbs() {
+		return req.URL.String()
+	}
+	return req.URL.RequestURI()
+}
+
+func validDigestNC(nc string) bool {
+	if len(nc) != 8 {
 		return false
+	}
+	for _, c := range nc {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
 	}
 	return true
 }
@@ -180,8 +205,12 @@ func (s *Server) checkNTLMClientAuth(req *http.Request, expectedScheme string) b
 	if !ok || !strings.EqualFold(scheme, expectedScheme) {
 		return false
 	}
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(token))
-	if err != nil {
+	token = strings.TrimSpace(token)
+	if len(token) > base64.StdEncoding.EncodedLen(maxSPNEGOTokenLen) {
+		return false
+	}
+	raw, err := base64.StdEncoding.DecodeString(token)
+	if err != nil || len(raw) > maxSPNEGOTokenLen {
 		return false
 	}
 	usesSPNEGO := false
@@ -354,13 +383,13 @@ func spnegoNegTokenResp(ntlmToken []byte) []byte {
 }
 
 func readDERTLV(data []byte) (byte, []byte, []byte, bool) {
-	if len(data) < 2 {
+	if len(data) < 2 || len(data) > maxSPNEGOTokenLen {
 		return 0, nil, nil, false
 	}
 	tag := data[0]
 	lengthByte := data[1]
 	offset := 2
-	length := int(lengthByte)
+	length := uint64(lengthByte)
 	if lengthByte&0x80 != 0 {
 		count := int(lengthByte & 0x7f)
 		if count == 0 || count > 4 || len(data) < offset+count {
@@ -368,14 +397,15 @@ func readDERTLV(data []byte) (byte, []byte, []byte, bool) {
 		}
 		length = 0
 		for i := 0; i < count; i++ {
-			length = (length << 8) | int(data[offset+i])
+			length = (length << 8) | uint64(data[offset+i])
 		}
 		offset += count
 	}
-	if length < 0 || len(data) < offset+length {
+	if offset > len(data) || length > uint64(len(data)-offset) {
 		return 0, nil, nil, false
 	}
-	return tag, data[offset : offset+length], data[offset+length:], true
+	end := offset + int(length)
+	return tag, data[offset:end], data[end:], true
 }
 
 func derTLV(tag byte, content []byte) []byte {
@@ -438,7 +468,7 @@ type ntlmAuthenticateMessage struct {
 }
 
 func parseNTLMAuthenticateMessage(msg []byte) (ntlmAuthenticateMessage, error) {
-	if len(msg) < 64 || string(msg[:8]) != "NTLMSSP\x00" || binary.LittleEndian.Uint32(msg[8:12]) != 3 {
+	if len(msg) < 64 || len(msg) > maxSPNEGOTokenLen || string(msg[:8]) != "NTLMSSP\x00" || binary.LittleEndian.Uint32(msg[8:12]) != 3 {
 		return ntlmAuthenticateMessage{}, errors.New("invalid NTLM authenticate message")
 	}
 	unicode := binary.LittleEndian.Uint32(msg[60:64])&1 != 0
@@ -447,11 +477,12 @@ func parseNTLMAuthenticateMessage(msg []byte) (ntlmAuthenticateMessage, error) {
 			return nil, errors.New("invalid NTLM field")
 		}
 		length := int(binary.LittleEndian.Uint16(msg[offset : offset+2]))
-		start := int(binary.LittleEndian.Uint32(msg[offset+4 : offset+8]))
-		if start < 0 || length < 0 || start+length > len(msg) {
+		start := uint64(binary.LittleEndian.Uint32(msg[offset+4 : offset+8]))
+		if start > uint64(len(msg)) || uint64(length) > uint64(len(msg))-start {
 			return nil, errors.New("NTLM field out of range")
 		}
-		return msg[start : start+length], nil
+		begin := int(start)
+		return msg[begin : begin+length], nil
 	}
 	decode := func(data []byte) (string, error) {
 		if unicode {
@@ -466,6 +497,9 @@ func parseNTLMAuthenticateMessage(msg []byte) (ntlmAuthenticateMessage, error) {
 	nt, err := readField(20)
 	if err != nil {
 		return ntlmAuthenticateMessage{}, err
+	}
+	if len(lm) > maxNTLMResponseLen || len(nt) > maxNTLMResponseLen {
+		return ntlmAuthenticateMessage{}, errors.New("NTLM response exceeds resource limit")
 	}
 	domainRaw, err := readField(28)
 	if err != nil {
@@ -605,21 +639,39 @@ func isSupportedClientAuth(auth string) bool {
 	}
 }
 
-func digestNonce(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
+const (
+	digestNonceLifetime   = 120 * time.Second
+	digestNonceFutureSkew = 5 * time.Second
+	maxDigestCnonceLen    = 256
+	maxNTLMResponseLen    = 8192
+	maxSPNEGOTokenLen     = 16 * 1024
+)
+
+var digestNonceKey = func() [32]byte {
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		panic("unable to initialize Digest nonce key: " + err.Error())
 	}
-	ts := time.Now().Unix()
-	// The random salt makes each issued nonce unique, so nonce/nc replay
-	// tracking cannot collide across clients behind the same address.
+	return key
+}()
+
+func digestNonce(remoteAddr string) string {
+	return digestNonceAt(remoteAddr, time.Now())
+}
+
+func digestNonceAt(remoteAddr string, issuedAt time.Time) string {
+	ts := issuedAt.Unix()
 	salt := newCnonce()
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%s:%s", ts, salt, host, digestRealm)))
-	raw := fmt.Sprintf("%d:%s:%s", ts, salt, hex.EncodeToString(sum[:]))
+	mac := digestNonceMAC(strconv.FormatInt(ts, 10), salt, digestClientHost(remoteAddr))
+	raw := fmt.Sprintf("%d:%s:%s", ts, salt, hex.EncodeToString(mac))
 	return base64.StdEncoding.EncodeToString([]byte(raw))
 }
 
 func verifyDigestNonce(nonce, remoteAddr string) bool {
+	return verifyDigestNonceAt(nonce, remoteAddr, time.Now())
+}
+
+func verifyDigestNonceAt(nonce, remoteAddr string, now time.Time) bool {
 	raw, err := base64.StdEncoding.DecodeString(nonce)
 	if err != nil {
 		return false
@@ -628,25 +680,38 @@ func verifyDigestNonce(nonce, remoteAddr string) bool {
 	if len(parts) != 3 {
 		return false
 	}
-	tsText, salt, hash := parts[0], parts[1], parts[2]
+	tsText, salt, macHex := parts[0], parts[1], parts[2]
 	ts, err := strconv.ParseInt(tsText, 10, 64)
 	if err != nil {
 		return false
 	}
-	if time.Since(time.Unix(ts, 0)) > digestNonceLifetime {
+	age := now.Sub(time.Unix(ts, 0))
+	if age > digestNonceLifetime || age < -digestNonceFutureSkew {
 		return false
 	}
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%s:%s", ts, salt, host, digestRealm)))
-	return subtleEqualHex(hash, hex.EncodeToString(sum[:]))
+	want := hex.EncodeToString(digestNonceMAC(tsText, salt, digestClientHost(remoteAddr)))
+	return subtleEqualHex(macHex, want)
 }
 
-// digestNonceLifetime bounds both client nonce validity and the retention of
-// the digest bookkeeping maps below.
-const digestNonceLifetime = 120 * time.Second
+func digestNonceMAC(tsText, salt, host string) []byte {
+	mac := hmac.New(sha256.New, digestNonceKey[:])
+	_, _ = mac.Write([]byte(tsText))
+	_, _ = mac.Write([]byte{':'})
+	_, _ = mac.Write([]byte(salt))
+	_, _ = mac.Write([]byte{':'})
+	_, _ = mac.Write([]byte(host))
+	_, _ = mac.Write([]byte{':'})
+	_, _ = mac.Write([]byte(digestRealm))
+	return mac.Sum(nil)
+}
+
+func digestClientHost(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
+}
 
 type digestNonceCount struct {
 	count   atomic.Uint64
@@ -667,12 +732,29 @@ func nextDigestNC(nonce string) string {
 	return fmt.Sprintf("%08x", v.(*digestNonceCount).count.Add(1))
 }
 
-// digestNonceReplayed records a verified client nonce/nc pair and reports
-// whether it was already seen within the nonce lifetime.
-func digestNonceReplayed(nonce, nc string) bool {
+func digestNonceSeen(nonce, nc string) bool {
+	key := nonce + "|" + nc
+	v, ok := seenClientNonces.Load(key)
+	if !ok {
+		return false
+	}
+	if time.Now().After(v.(time.Time)) {
+		seenClientNonces.Delete(key)
+		return false
+	}
+	return true
+}
+
+func digestNonceMarkIfNew(nonce, nc string) bool {
 	_, loaded := seenClientNonces.LoadOrStore(nonce+"|"+nc, time.Now().Add(digestNonceLifetime))
 	pruneDigestMaps()
-	return loaded
+	return !loaded
+}
+
+// digestNonceReplayed is retained for focused replay tests and reports whether
+// the pair was already marked by a verified request.
+func digestNonceReplayed(nonce, nc string) bool {
+	return !digestNonceMarkIfNew(nonce, nc)
 }
 
 // pruneDigestMaps drops expired entries from both digest maps, at most once
