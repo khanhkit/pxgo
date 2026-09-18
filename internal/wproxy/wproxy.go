@@ -47,6 +47,7 @@ const (
 	socks4aScheme = "socks4a"
 	socks5Scheme  = "socks5"
 	pacScheme     = "pac"
+	httpProxyEnv  = "HTTP_PROXY"
 )
 
 var Direct = Server{Host: directHost, Port: 80, Scheme: "direct"}
@@ -481,7 +482,7 @@ func discoverEnvironmentProxies() (environmentProxySet, bool, error) {
 		scheme string
 		keys   []string
 	}{
-		{httpScheme, []string{"http_proxy", "HTTP_PROXY"}},
+		{httpScheme, []string{"http_proxy", httpProxyEnv}},
 		{httpsScheme, []string{"https_proxy", "HTTPS_PROXY"}},
 	} {
 		raw := firstEnv(item.keys...)
