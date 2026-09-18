@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -50,9 +52,18 @@ func TestAPISS0022StartBlocksUntilShutdown(t *testing.T) {
 }
 
 func TestAPISS0022MultiListenerBindFailureReturnsPromptly(t *testing.T) {
+	reservation, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := reservation.Addr().(*net.TCPAddr).Port
+	if err := reservation.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := config.Default()
 	cfg.Listen = "127.0.0.1,::bad"
-	cfg.Port = 0
+	cfg.Port = port
 	s, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +77,13 @@ func TestAPISS0022MultiListenerBindFailureReturnsPromptly(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("multi-listener bind failure took too long: %v", elapsed)
 	}
-	if s.Port() != 0 {
-		t.Fatalf("partial server published port %d after bind failure", s.Port())
+	if s.Port() != cfg.Port {
+		t.Fatalf("server port changed after bind failure: got=%d want=%d", s.Port(), cfg.Port)
 	}
+
+	rebound, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("first listener leaked after second bind failed: %v", err)
+	}
+	_ = rebound.Close()
 }

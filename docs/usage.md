@@ -152,4 +152,4 @@ pxgo supports four log destinations controlled by `--log=N`, `PXGO_LOG=N`, or `s
 ./pxgo --test=all:https://httpbin.org
 ```
 
-`all` mode checks several HTTP methods through the proxy.
+`all` mode checks several HTTP methods through the proxy. Self-test startup and shutdown are deadline-bounded; malformed target URLs and shutdown/start failures are returned as errors instead of being ignored or panicking.
