@@ -840,19 +840,28 @@ func storePlaintext(realm, username, password string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	data := map[string]map[string]string{}
-	if raw, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(raw, &data)
-	}
-	if data[realm] == nil {
-		data[realm] = map[string]string{}
-	}
-	data[realm][username] = password
-	raw, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, raw, 0o600)
+	return withFileLock(path, 0o600, func() error {
+		data := map[string]map[string]string{}
+		raw, err := os.ReadFile(path)
+		switch {
+		case err == nil:
+			if err := json.Unmarshal(raw, &data); err != nil {
+				return fmt.Errorf("parse plaintext keyring %s: %w", path, err)
+			}
+		case errors.Is(err, os.ErrNotExist):
+		default:
+			return fmt.Errorf("read plaintext keyring %s: %w", path, err)
+		}
+		if data[realm] == nil {
+			data[realm] = map[string]string{}
+		}
+		data[realm][username] = password
+		raw, err = json.MarshalIndent(data, "", "  ")
+		if err != nil {
+			return err
+		}
+		return atomicWriteFile(path, raw, 0o600)
+	})
 }
 
 func getPlaintext(realm, username string) (string, bool) {
@@ -1007,6 +1016,9 @@ func SaveINI(path string, cfg Config) error {
 	if path == "" {
 		return errors.New("empty config path")
 	}
+	if err := validateINIStrings(cfg); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -1045,7 +1057,34 @@ log = %d
 `, cfg.Server, cfg.PAC, cfg.PACEncoding, cfg.Port, listen, btoi(cfg.Gateway), btoi(cfg.Hostonly), cfg.Allow, cfg.NoProxy,
 		cfg.UserAgent, cfg.Username, cfg.Auth, btoi(cfg.Kerberos), cfg.ClientAuth, cfg.ClientUsername, btoi(cfg.ClientNoSSPI), cfg.Workers, cfg.Threads, cfg.Idle,
 		cfg.SockTimeout, cfg.ProxyReload, btoi(cfg.Foreground), cfg.Log)
-	return os.WriteFile(path, []byte(content), 0o600)
+	return withFileLock(path, 0o600, func() error {
+		return atomicWriteFile(path, []byte(content), 0o600)
+	})
+}
+
+func validateINIStrings(cfg Config) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{"server", cfg.Server},
+		{"pac", cfg.PAC},
+		{"pac_encoding", cfg.PACEncoding},
+		{"listen", cfg.Listen},
+		{"allow", cfg.Allow},
+		{"noproxy", cfg.NoProxy},
+		{"useragent", cfg.UserAgent},
+		{"username", cfg.Username},
+		{"auth", cfg.Auth},
+		{"client_auth", cfg.ClientAuth},
+		{"client_username", cfg.ClientUsername},
+	}
+	for _, field := range fields {
+		if strings.ContainsAny(field.value, "\r\n") {
+			return fmt.Errorf("%s contains a line break", field.name)
+		}
+	}
+	return nil
 }
 
 func btoi(v bool) int {
