@@ -880,11 +880,6 @@ func storePlaintext(realm, username, password string) error {
 	})
 }
 
-func getPlaintext(realm, username string) (string, bool) {
-	password, ok, _ := getPlaintextStrict(realm, username)
-	return password, ok
-}
-
 func getPlaintextStrict(realm, username string) (string, bool, error) {
 	path := keyringPath()
 	raw, err := os.ReadFile(path)
