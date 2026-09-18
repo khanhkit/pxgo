@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -97,5 +98,48 @@ func TestAPISS0001ConnectAuthBodyIsSizeBounded(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "407 body exceeds") {
 		t.Fatalf("error=%q, want bounded-body failure", err)
+	}
+}
+
+type trackingReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (b *trackingReadCloser) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestAPISS0001RetryBuildFailureCloses407Body(t *testing.T) {
+	cfg := config.Default()
+	cfg.Auth = "BASIC"
+	cfg.Username = "user"
+	cfg.Password = "secret"
+	s := &Server{cfg: cfg}
+
+	req, err := http.NewRequest(http.MethodPost, "http://example.com/upload", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := &replayableBody{path: t.TempDir() + "/missing-body", size: 1}
+	trackedBody := &trackingReadCloser{Reader: strings.NewReader("challenge-body")}
+	resp := &http.Response{
+		StatusCode: http.StatusProxyAuthRequired,
+		Header: http.Header{
+			"Proxy-Authenticate": {`Basic realm="test"`},
+		},
+		Body: trackedBody,
+	}
+
+	got, err := s.retryHTTPProxyAuth(&http.Transport{}, req, req.URL, body, req.URL.String(), "", resp)
+	if err == nil {
+		t.Fatal("expected replay body open failure")
+	}
+	if got != nil {
+		t.Fatalf("response=%v, want nil on terminal request-build failure", got)
+	}
+	if !trackedBody.closed {
+		t.Fatal("407 response body was not closed on terminal request-build failure")
 	}
 }
