@@ -8,6 +8,17 @@ import (
 const RegistryValueName = "PxGo"
 
 type FileExistsFunc func(path string) bool
+type SaveConfigFunc func(path string) error
+
+func PrepareRunCommand(executable, pxini string, exists FileExistsFunc, save SaveConfigFunc) (string, error) {
+	if save == nil {
+		return "", fmt.Errorf("startup config persistence is required")
+	}
+	if err := save(pxini); err != nil {
+		return "", fmt.Errorf("persist startup config %s: %w", pxini, err)
+	}
+	return BuildRunCommand(executable, pxini, exists)
+}
 
 func BuildRunCommand(executable, pxini string, exists FileExistsFunc) (string, error) {
 	if exists == nil {

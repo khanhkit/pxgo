@@ -1,6 +1,7 @@
 package winstartup
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,5 +75,57 @@ func TestAPISS0011ReleaseBuildsWindowsPxgoArtifact(t *testing.T) {
 	text := string(raw)
 	if !strings.Contains(text, "project_name: pxgo") || !strings.Contains(text, "- windows") {
 		t.Fatal("GoReleaser config does not establish a Windows pxgo artifact")
+	}
+}
+
+func TestAPISS0011PrepareRunCommandPersistsConfigFirst(t *testing.T) {
+	exe := `C:\PxGo\pxgo.exe`
+	cfg := `C:\Fresh Config\pxgo.ini`
+	configExists := false
+	var events []string
+
+	exists := func(path string) bool {
+		switch path {
+		case exe:
+			return true
+		case cfg:
+			events = append(events, "exists-config")
+			return configExists
+		default:
+			return false
+		}
+	}
+	save := func(path string) error {
+		events = append(events, "save-config")
+		if path != cfg {
+			t.Fatalf("save path=%q want=%q", path, cfg)
+		}
+		configExists = true
+		return nil
+	}
+
+	got, err := PrepareRunCommand(exe, cfg, exists, save)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) < 2 || events[0] != "save-config" || events[1] != "exists-config" {
+		t.Fatalf("event order=%v, want save before existence validation", events)
+	}
+	want := `"C:\PxGo\pxgo.exe" "--config=C:\Fresh Config\pxgo.ini"`
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
+func TestAPISS0011PrepareRunCommandStopsOnSaveFailure(t *testing.T) {
+	wantErr := errors.New("save failed")
+	_, err := PrepareRunCommand(
+		`C:\PxGo\pxgo.exe`,
+		`C:\Cfg\pxgo.ini`,
+		func(string) bool { t.Fatal("existence check must not run after save failure"); return false },
+		func(string) error { return wantErr },
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err=%v want %v", err, wantErr)
 	}
 }
