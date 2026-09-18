@@ -66,6 +66,7 @@ grep -q 'FuzzParseProxyCanonical' .github/workflows/ci.yml &&
 # TC-CI-REG-008: manual exact-ref native Windows SSPI verification is schedulable.
 grep -q 'workflow_dispatch:' .github/workflows/ci.yml || bad "CI lacks workflow_dispatch"
 grep -q 'verification_ref:' .github/workflows/ci.yml || bad "manual CI lacks exact verification_ref input"
+grep -q 'windows-native-sspi:' .github/workflows/ci.yml || bad "independent native Windows SSPI job missing"
 grep -q 'PXGO_SSPI_NATIVE' .github/workflows/ci.yml || bad "native Windows SSPI gate missing"
 grep -Fq "TCSSPIWIN(INT008|SOAK009)" .github/workflows/ci.yml || bad "native Windows SSPI testcase guard missing"
 
