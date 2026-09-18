@@ -144,7 +144,7 @@ func TestForwardProxyPreservesCompressedRepresentation(t *testing.T) {
 func TestForwardProxyAddsViaBothDirections(t *testing.T) {
 	seenVia := make(chan string, 1)
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seenVia <- r.Header.Get("Via")
+		seenVia <- strings.Join(r.Header.Values("Via"), ", ")
 		w.Header().Set("Via", "1.0 origin-gateway")
 		_, _ = io.WriteString(w, "ok")
 	}))
@@ -161,7 +161,7 @@ func TestForwardProxyAddsViaBothDirections(t *testing.T) {
 	if got := <-seenVia; !strings.Contains(got, "1.0 client-proxy") || !strings.Contains(strings.ToLower(got), "pxgo") {
 		t.Fatalf("request Via chain=%q", got)
 	}
-	got := resp.Header.Get("Via")
+	got := strings.Join(resp.Header.Values("Via"), ", ")
 	if !strings.Contains(got, "1.0 origin-gateway") || !strings.Contains(strings.ToLower(got), "pxgo") {
 		t.Fatalf("response Via chain=%q", got)
 	}
