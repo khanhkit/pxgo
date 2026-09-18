@@ -46,14 +46,14 @@ func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request
 		}
 		return r
 	}
-	failSSPI := func(err error) (*http.Response, error) {
+	failSSPI := func(err error) error {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}
 		if pinned != nil {
 			pinned.CloseIdleConnections()
 		}
-		return nil, err
+		return err
 	}
 
 	for attempts := 0; attempts < 3 && resp.StatusCode == http.StatusProxyAuthRequired; attempts++ {
@@ -72,16 +72,16 @@ func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request
 		case session != nil:
 			auth, err = sspiSessionAuth(session, challenge)
 			if err != nil {
-				return failSSPI(fmt.Errorf("continue SSPI proxy authentication: %w", err))
+				return nil, failSSPI(fmt.Errorf("continue SSPI proxy authentication: %w", err))
 			}
 		case sspiSessionCandidate(s.cfg, challenge):
 			session, err = sspiSessionFactory(challenge, proxyHost)
 			if err != nil {
-				return failSSPI(fmt.Errorf("start SSPI proxy authentication: %w", err))
+				return nil, failSSPI(fmt.Errorf("start SSPI proxy authentication: %w", err))
 			}
 			auth, err = session.Negotiate()
 			if err != nil {
-				return failSSPI(fmt.Errorf("start SSPI proxy negotiation: %w", err))
+				return nil, failSSPI(fmt.Errorf("start SSPI proxy negotiation: %w", err))
 			}
 		default:
 			auth = upstreamProxyAuthHeader(s.cfg, req.Method, targetURL, challenge, passthroughAuth)
