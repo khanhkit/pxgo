@@ -1,6 +1,7 @@
 package pac
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,13 +20,23 @@ import (
 const (
 	directProxy = "DIRECT"
 	localhostIP = "127.0.0.1"
+	maxPACBytes = 4 << 20
 )
+
+var errPACExecutionTimeout = errors.New("PAC JavaScript execution timeout")
 
 // Overridable in tests.
 var (
 	pacHTTPTimeout   = 10 * time.Second
+	pacExecTimeout   = 2 * time.Second
 	pacRetryInterval = 30 * time.Second
 )
+
+var pacHTTPTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
+	return t
+}()
 
 type Pac struct {
 	location string
@@ -35,6 +46,7 @@ type Pac struct {
 	// current runtime so concurrent requests do not serialize on the VM.
 	mu              sync.Mutex
 	lastLoadAttempt time.Time
+	lastLoadErr     error
 	runtime         atomic.Pointer[pacRuntime]
 }
 
@@ -68,39 +80,58 @@ func (p *Pac) Close() {
 	defer p.mu.Unlock()
 	p.runtime.Store(nil)
 	p.lastLoadAttempt = time.Time{} // allow an immediate reload
+	p.lastLoadErr = nil
+}
+
+// Load fetches, compiles, and validates one PAC generation before activation.
+func (p *Pac) Load() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.runtime.Load() != nil {
+		return nil
+	}
+	rt, err := p.load()
+	p.lastLoadAttempt = time.Now()
+	p.lastLoadErr = err
+	if err != nil {
+		return err
+	}
+	p.runtime.Store(rt)
+	return nil
 }
 
 // ensureLoaded returns the current runtime, loading the PAC source if needed.
 // Failed loads are retried at most every pacRetryInterval so a broken PAC
 // source is not re-fetched on every request.
-func (p *Pac) ensureLoaded() *pacRuntime {
+func (p *Pac) ensureLoaded() (*pacRuntime, error) {
 	if rt := p.runtime.Load(); rt != nil {
-		return rt
+		return rt, nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if rt := p.runtime.Load(); rt != nil {
-		return rt
+		return rt, nil
 	}
-	if time.Since(p.lastLoadAttempt) < pacRetryInterval {
-		return nil
+	if time.Since(p.lastLoadAttempt) < pacRetryInterval && p.lastLoadErr != nil {
+		return nil, p.lastLoadErr
 	}
-	rt := p.load()
-	if rt == nil {
-		p.lastLoadAttempt = time.Now()
-		return nil
+	rt, err := p.load()
+	p.lastLoadAttempt = time.Now()
+	p.lastLoadErr = err
+	if err != nil {
+		return nil, err
 	}
 	p.runtime.Store(rt)
-	return rt
+	return rt, nil
 }
 
-func (p *Pac) load() *pacRuntime {
+func (p *Pac) load() (*pacRuntime, error) {
 	data, err := p.readPACData()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read PAC: %w", err)
 	}
 	if p.encoding != "utf-8" && p.encoding != "latin-1" {
-		return nil
+		return nil, fmt.Errorf("unsupported PAC encoding %q", p.encoding)
 	}
 	text := string(data)
 	if p.encoding == "latin-1" {
@@ -112,62 +143,120 @@ func (p *Pac) load() *pacRuntime {
 	}
 	program, err := goja.Compile("pac.js", pacUtils+"\n"+text, false)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("compile PAC: %w", err)
 	}
 	rt := &pacRuntime{program: program, owner: p}
-	rt.pool.New = func() any { return rt.newVM() }
-	// Run the program once now so scripts without a usable FindProxyForURL
-	// are rejected at load time, matching the previous behavior.
-	vm := rt.newVM()
-	if vm == nil {
-		return nil
+	vm, err := rt.newVM()
+	if err != nil {
+		return nil, fmt.Errorf("initialize PAC: %w", err)
 	}
 	rt.pool.Put(vm)
-	return rt
+	return rt, nil
 }
 
-func (rt *pacRuntime) newVM() *pacVM {
+func (rt *pacRuntime) newVM() (*pacVM, error) {
 	vm := goja.New()
 	_ = vm.Set("dnsResolve", rt.owner.DNSResolve)
 	_ = vm.Set("myIpAddress", rt.owner.MyIPAddress)
 	_ = vm.Set("alert", func(string) {})
-	if _, err := vm.RunProgram(rt.program); err != nil {
-		return nil
+	if _, err := runPACBounded(vm, func() (goja.Value, error) {
+		return vm.RunProgram(rt.program)
+	}); err != nil {
+		return nil, err
 	}
 	fn, ok := goja.AssertFunction(vm.Get("FindProxyForURL"))
 	if !ok {
-		return nil
+		return nil, errors.New("FindProxyForURL is not callable")
 	}
-	return &pacVM{vm: vm, fn: fn}
+	return &pacVM{vm: vm, fn: fn}, nil
+}
+
+func runPACBounded(vm *goja.Runtime, run func() (goja.Value, error)) (goja.Value, error) {
+	if pacExecTimeout <= 0 {
+		return run()
+	}
+	interrupted := make(chan struct{})
+	timer := time.AfterFunc(pacExecTimeout, func() {
+		vm.Interrupt(errPACExecutionTimeout)
+		close(interrupted)
+	})
+	defer func() {
+		if !timer.Stop() {
+			<-interrupted
+		}
+		vm.ClearInterrupt()
+	}()
+	return run()
 }
 
 func (p *Pac) readPACData() ([]byte, error) {
-	if strings.HasPrefix(strings.ToLower(p.location), "http://") || strings.HasPrefix(strings.ToLower(p.location), "https://") {
-		client := http.Client{Timeout: pacHTTPTimeout}
+	loc := strings.ToLower(p.location)
+	if strings.HasPrefix(loc, "http://") || strings.HasPrefix(loc, "https://") {
+		client := http.Client{
+			Transport: pacHTTPTransport,
+			Timeout:   pacHTTPTimeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 		resp, err := client.Get(p.location)
 		if err != nil {
 			return nil, err
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode >= 400 {
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 			return nil, fmt.Errorf("PAC URL returned %s", resp.Status)
 		}
-		return io.ReadAll(resp.Body)
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxPACBytes+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > maxPACBytes {
+			return nil, fmt.Errorf("PAC body exceeds %d bytes", maxPACBytes)
+		}
+		return data, nil
 	}
 	return os.ReadFile(p.location)
 }
 
-func (p *Pac) FindProxyForURL(rawurl, host string) string {
-	proxies := directProxy
-	if rt := p.ensureLoaded(); rt != nil {
-		if v, _ := rt.pool.Get().(*pacVM); v != nil {
-			if out, err := v.fn(goja.Undefined(), v.vm.ToValue(rawurl), v.vm.ToValue(host)); err == nil {
-				proxies = out.String()
-			}
-			rt.pool.Put(v)
+// FindProxyForURLWithError evaluates the active PAC generation and surfaces
+// load/execution failures so callers can fail explicitly rather than route DIRECT.
+func (p *Pac) FindProxyForURLWithError(rawurl, host string) (string, error) {
+	rt, err := p.ensureLoaded()
+	if err != nil {
+		return "", err
+	}
+	v, _ := rt.pool.Get().(*pacVM)
+	if v == nil {
+		v, err = rt.newVM()
+		if err != nil {
+			return "", fmt.Errorf("create PAC VM: %w", err)
 		}
 	}
-	return normalizePACResult(proxies)
+	reusable := false
+	defer func() {
+		if reusable {
+			rt.pool.Put(v)
+		}
+	}()
+	out, err := runPACBounded(v.vm, func() (goja.Value, error) {
+		return v.fn(goja.Undefined(), v.vm.ToValue(rawurl), v.vm.ToValue(host))
+	})
+	if err != nil {
+		return "", fmt.Errorf("execute PAC: %w", err)
+	}
+	reusable = true
+	return normalizePACResult(out.String()), nil
+}
+
+// FindProxyForURL preserves the package's legacy fail-open API. Production
+// routing uses FindProxyForURLWithError so PAC failures are not implicit DIRECT.
+func (p *Pac) FindProxyForURL(rawurl, host string) string {
+	out, err := p.FindProxyForURLWithError(rawurl, host)
+	if err != nil {
+		return directProxy
+	}
+	return out
 }
 
 var pacResultReplacer = strings.NewReplacer(
