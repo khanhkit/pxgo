@@ -1344,7 +1344,7 @@ func TestUpstreamNegotiateFailureForcesKerberosReloadHTTP(t *testing.T) {
 	childCfg.Username = "user@REALM"
 	childCfg.Password = "secret"
 	child := startTestProxy(t, childCfg)
-	var reloads int
+	var reloads atomic.Int32
 	child.krb = testKerberosManager(&reloads)
 	client := proxyClient(t, child.Port())
 	resp, err := client.Get("http://kerberos.example.test/resource")
@@ -1356,9 +1356,7 @@ func TestUpstreamNegotiateFailureForcesKerberosReloadHTTP(t *testing.T) {
 	if resp.StatusCode != http.StatusProxyAuthRequired {
 		t.Fatalf("expected upstream 407, got %s", resp.Status)
 	}
-	if reloads != 1 {
-		t.Fatalf("forced kerberos reload count=%d, want 1", reloads)
-	}
+	waitForKerberosReloads(t, &reloads, 1)
 }
 
 func TestUpstreamNegotiateFailureForcesKerberosReloadConnect(t *testing.T) {
@@ -1377,7 +1375,7 @@ func TestUpstreamNegotiateFailureForcesKerberosReloadConnect(t *testing.T) {
 	childCfg.Username = "user@REALM"
 	childCfg.Password = "secret"
 	child := startTestProxy(t, childCfg)
-	var reloads int
+	var reloads atomic.Int32
 	child.krb = testKerberosManager(&reloads)
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", child.Port()))
 	if err != nil {
@@ -1393,9 +1391,7 @@ func TestUpstreamNegotiateFailureForcesKerberosReloadConnect(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected local 502 for failed upstream CONNECT, got %s", resp.Status)
 	}
-	if reloads != 1 {
-		t.Fatalf("forced kerberos reload count=%d, want 1", reloads)
-	}
+	waitForKerberosReloads(t, &reloads, 1)
 }
 
 func TestUnsupportedUpstreamNTLMDoesNotFallBackToBasic(t *testing.T) {
@@ -2100,16 +2096,28 @@ func authTokenBytes(t *testing.T, header string) []byte {
 	return raw
 }
 
-func testKerberosManager(reloads *int) *kerberos.Manager {
+func waitForKerberosReloads(t *testing.T, reloads *atomic.Int32, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if reloads.Load() == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("forced kerberos reload count=%d, want %d", reloads.Load(), want)
+}
+
+func testKerberosManager(reloads *atomic.Int32) *kerberos.Manager {
 	password := "secret"
 	mgr := kerberos.New("user@REALM", func() *string { return &password }, false)
 	mgr.NextCheck = time.Now().Add(time.Hour)
 	mgr.KinitWithPasswordFunc = func() bool {
-		*reloads++
+		reloads.Add(1)
 		return true
 	}
 	mgr.KinitRenewFunc = func() bool {
-		*reloads++
+		reloads.Add(1)
 		return true
 	}
 	mgr.KlistValidFunc = func() bool {
