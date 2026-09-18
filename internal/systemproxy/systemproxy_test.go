@@ -77,6 +77,35 @@ func TestTCWINPACREG001ResolverReusesBackendUntilClose(t *testing.T) {
 	}
 }
 
+func TestTCRouteREG007ManualProxyMapPreservesPerSchemeSemantics(t *testing.T) {
+	got := ParseManualProxyMap("http=proxy-a.example:8080;https=proxy-b.example:8443;socks=socks.example:1080")
+	if got.Default != "" {
+		t.Fatalf("Default = %q, want empty", got.Default)
+	}
+	if got.ForScheme("http") != "proxy-a.example:8080" {
+		t.Fatalf("http proxy = %q", got.ForScheme("http"))
+	}
+	if got.ForScheme("https") != "proxy-b.example:8443" {
+		t.Fatalf("https proxy = %q", got.ForScheme("https"))
+	}
+	if got.ForScheme("socks") != "socks5://socks.example:1080" {
+		t.Fatalf("socks proxy = %q", got.ForScheme("socks"))
+	}
+	if got.ForScheme("ftp") != "" {
+		t.Fatalf("ftp proxy = %q, want empty", got.ForScheme("ftp"))
+	}
+}
+
+func TestTCRouteREG008ManualProxyMapKeepsUnqualifiedDefault(t *testing.T) {
+	got := ParseManualProxyMap("proxy-default.example:3128")
+	if got.Default != "proxy-default.example:3128" {
+		t.Fatalf("Default = %q", got.Default)
+	}
+	if got.ForScheme("http") != got.Default || got.ForScheme("https") != got.Default {
+		t.Fatalf("default proxy not reused by scheme: %+v", got)
+	}
+}
+
 func TestTCWINPACREG003DiscoveryPreservesAvailableSources(t *testing.T) {
 	cfg := configFromDiscoveredSources(
 		true,
@@ -91,8 +120,8 @@ func TestTCWINPACREG003DiscoveryPreservesAvailableSources(t *testing.T) {
 	if cfg.PACURL != "http://wpad.example/proxy.pac" {
 		t.Fatalf("PACURL = %q", cfg.PACURL)
 	}
-	if cfg.ManualProxy != "manual.example:8080" {
-		t.Fatalf("ManualProxy = %q", cfg.ManualProxy)
+	if cfg.ManualProxy.ForScheme("http") != "manual.example:8080" {
+		t.Fatalf("ManualProxy(http) = %q", cfg.ManualProxy.ForScheme("http"))
 	}
 	if cfg.Bypass != "<local>" {
 		t.Fatalf("Bypass = %q", cfg.Bypass)

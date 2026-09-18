@@ -71,10 +71,62 @@ func (r *Resolver) Close() error {
 	return r.backend.close()
 }
 
+type ManualProxyMap struct {
+	Default  string
+	ByScheme map[string]string
+}
+
+func (m ManualProxyMap) Empty() bool {
+	return m.Default == "" && len(m.ByScheme) == 0
+}
+
+func (m ManualProxyMap) ForScheme(scheme string) string {
+	if proxy := m.ByScheme[strings.ToLower(strings.TrimSpace(scheme))]; proxy != "" {
+		return proxy
+	}
+	return m.Default
+}
+
+func ParseManualProxyMap(proxyServer string) ManualProxyMap {
+	out := ManualProxyMap{ByScheme: make(map[string]string)}
+	trimmed := strings.TrimSpace(proxyServer)
+	if trimmed == "" {
+		return out
+	}
+	if !strings.Contains(trimmed, "=") {
+		out.Default = ParseManualProxyString(trimmed)
+		return out
+	}
+	for _, item := range strings.Split(trimmed, ";") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		scheme, proxy, ok := strings.Cut(item, "=")
+		if !ok {
+			if value := ParseManualProxyString(item); value != "" {
+				out.Default = value
+			}
+			continue
+		}
+		scheme = strings.ToLower(strings.TrimSpace(scheme))
+		proxy = strings.TrimSpace(proxy)
+		if scheme == "" || proxy == "" {
+			continue
+		}
+		if scheme == "socks" && !strings.Contains(proxy, "://") {
+			proxy = "socks5://" + proxy
+		}
+		out.ByScheme[scheme] = ParseManualProxyString(proxy)
+	}
+	return out
+}
+
 type Config struct {
-	ManualProxy string
+	ManualProxy ManualProxyMap
 	PACURL      string
 	Bypass      string
+	Supported   bool
 	Found       bool
 	IsPAC       bool
 	AutoDetect  bool
@@ -82,15 +134,14 @@ type Config struct {
 
 func configFromDiscoveredSources(autoDetect bool, pacURL, proxy, bypass string) Config {
 	cfg := Config{
-		AutoDetect: autoDetect,
-		PACURL:     pacURL,
-		Bypass:     bypass,
-		IsPAC:      pacURL != "",
+		AutoDetect:  autoDetect,
+		PACURL:      pacURL,
+		Bypass:      bypass,
+		Supported:   true,
+		IsPAC:       pacURL != "",
+		ManualProxy: ParseManualProxyMap(proxy),
 	}
-	if proxy != "" {
-		cfg.ManualProxy = ParseManualProxyString(proxy)
-	}
-	cfg.Found = cfg.AutoDetect || cfg.IsPAC || cfg.ManualProxy != ""
+	cfg.Found = cfg.AutoDetect || cfg.IsPAC || !cfg.ManualProxy.Empty()
 	return cfg
 }
 

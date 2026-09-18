@@ -146,9 +146,12 @@ func NewResolver() (*Resolver, error) {
 
 func Discover() Config {
 	if cfg, ok := discoverWinHTTPIEProxyConfig(); ok {
+		cfg.Supported = true
 		return cfg
 	}
-	return discoverRegistryProxyConfig()
+	cfg := discoverRegistryProxyConfig()
+	cfg.Supported = true
+	return cfg
 }
 
 func discoverWinHTTPIEProxyConfig() (Config, bool) {
