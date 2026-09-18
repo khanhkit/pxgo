@@ -64,6 +64,7 @@ func TestHTTPUpgrade101RelaysBidirectionally(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("upgrade status=%s", resp.Status)
 	}

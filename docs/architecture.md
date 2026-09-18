@@ -39,11 +39,35 @@ The proxy server runs one `http.Server` over one or more listeners.
 - per-connection client auth state lives in a `sync.Map` of `clientState`
   entries keyed by remote address, dropped when the connection closes
 - Kerberos check and renewal state is guarded by the Kerberos manager mutex
-- hijacked CONNECT tunnels use a server-owned lifecycle registry. A reservation is
-  taken before `Hijack`, converted to an active tunnel immediately after ownership
-  transfer, and released only when both relay directions terminate. `Shutdown`
-  prevents new reservations, closes registered tunnel sockets, and waits for both
-  pending handoffs and active tunnels to reach zero within its context.
+- hijacked CONNECT tunnels and HTTP Upgrade streams use one server-owned lifecycle
+  registry. A reservation is taken before `Hijack`, converted to an active managed
+  stream immediately after ownership transfer, and released only when both relay
+  directions terminate. `Shutdown` prevents new reservations, closes registered
+  endpoints, and waits for both pending handoffs and active streams to reach zero
+  within its context.
+
+## HTTP Intermediary Boundary
+
+Plain HTTP forwarding is an explicit intermediary boundary rather than a request
+clone pass-through:
+
+- the absolute request-target authority is canonical for outbound `Host`;
+- `Connection`-nominated fields and standard hop-by-hop fields are consumed on
+  requests and responses;
+- downstream `Proxy-*` credentials/metadata terminate locally. The explicit
+  `Auth=NONE` parent-proxy compatibility path may forward client
+  `Proxy-Authorization` and relay the parent's 407 `Proxy-Authenticate`;
+- PxGo appends `Via: 1.1 pxgo` to forwarded requests, informational responses,
+  and final responses;
+- forward transports disable automatic compression so representation bytes and
+  `Content-Encoding` are not silently transformed;
+- response trailers are declared before the final status and populated after body
+  EOF; informational 1xx responses such as 103 Early Hints are forwarded
+  deliberately;
+- HTTP `101 Switching Protocols` is a dedicated path: only Upgrade semantics are
+  restored after generic hop-header stripping, downstream is hijacked, buffered
+  client bytes are preserved, and the bidirectional stream joins the same managed
+  lifecycle registry used by CONNECT.
 
 Time-based housekeeping (proxy reload, Kerberos ticket refresh) runs on a
 background one-second ticker owned by `Start`/`Shutdown`, not on the request
