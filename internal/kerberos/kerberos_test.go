@@ -136,9 +136,12 @@ func TestCheckNearExpiryRenewalAndFallback(t *testing.T) {
 		kinit = true
 		return true
 	}
-	got := mgr.Check(false)
-	if got == nil || !*got || !renewed || !kinit {
-		t.Fatalf("renewed=%v kinit=%v got=%v", renewed, kinit, got)
+	if got := mgr.Check(false); got != nil {
+		t.Fatalf("non-blocking Check returned %v", *got)
+	}
+	waitForRefresh(t, mgr, time.Second)
+	if !renewed || !kinit {
+		t.Fatalf("renewed=%v kinit=%v", renewed, kinit)
 	}
 }
 
@@ -151,14 +154,16 @@ func TestCheckHealthyTicketUsesKlistFastValidation(t *testing.T) {
 		return true
 	}
 	mgr.KinitWithPasswordFunc = func() bool {
-		t.Fatal("kinit should not run for a healthy valid ticket")
+		t.Error("kinit should not run for a healthy valid ticket")
 		return false
 	}
 	if got := mgr.Check(false); got != nil {
-		t.Fatalf("got %v", *got)
+		t.Fatalf("non-blocking Check returned %v", *got)
 	}
-	if !validated || !mgr.NextCheck.After(time.Now()) {
-		t.Fatalf("validated=%v next=%v", validated, mgr.NextCheck)
+	waitForRefresh(t, mgr, time.Second)
+	_, next, _ := managerState(mgr)
+	if !validated || !next.After(time.Now()) {
+		t.Fatalf("validated=%v next=%v", validated, next)
 	}
 }
 
@@ -171,15 +176,22 @@ func TestBackoffPreventsKinitOnce(t *testing.T) {
 		return true
 	}
 	if got := mgr.Check(false); got != nil {
-		t.Fatalf("got %v", *got)
+		t.Fatalf("non-blocking Check returned %v", *got)
 	}
-	if calls != 0 || mgr.Backoff != 0 || !mgr.NextCheck.After(time.Now()) {
-		t.Fatalf("calls=%d backoff=%s next=%v", calls, mgr.Backoff, mgr.NextCheck)
+	waitForRefresh(t, mgr, time.Second)
+	_, next, backoff := managerState(mgr)
+	if calls != 0 || backoff != 0 || !next.After(time.Now()) {
+		t.Fatalf("calls=%d backoff=%s next=%v", calls, backoff, next)
 	}
+	mgr.mu.Lock()
 	mgr.NextCheck = time.Time{}
-	got := mgr.Check(false)
-	if got == nil || !*got || calls != 1 {
-		t.Fatalf("calls=%d got=%v", calls, got)
+	mgr.mu.Unlock()
+	if got := mgr.Check(false); got != nil {
+		t.Fatalf("non-blocking Check returned %v", *got)
+	}
+	waitForRefresh(t, mgr, time.Second)
+	if calls != 1 {
+		t.Fatalf("calls=%d want 1", calls)
 	}
 }
 
@@ -191,19 +203,24 @@ func TestForceBypassesBackoff(t *testing.T) {
 		calls++
 		return true
 	}
-	got := mgr.Check(true)
-	if got == nil || !*got || calls != 1 {
-		t.Fatalf("calls=%d got=%v", calls, got)
+	if got := mgr.Check(true); got != nil {
+		t.Fatalf("non-blocking Check returned %v", *got)
+	}
+	waitForRefresh(t, mgr, time.Second)
+	if calls != 1 {
+		t.Fatalf("calls=%d want 1", calls)
 	}
 }
 
-func TestConcurrentThreadsWaitForRenewal(t *testing.T) {
+func TestConcurrentThreadsDoNotWaitForRenewal(t *testing.T) {
 	mgr := makeManager()
-	mgr.NextCheck = time.Time{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls int
 	mgr.KinitWithPasswordFunc = func() bool {
-		time.Sleep(150 * time.Millisecond)
-		mgr.TicketExpiry = time.Now().Add(time.Hour)
-		mgr.NextCheck = time.Now().Add(CheckInterval)
+		calls++
+		close(started)
+		<-release
 		return true
 	}
 	var wg sync.WaitGroup
@@ -213,18 +230,32 @@ func TestConcurrentThreadsWaitForRenewal(t *testing.T) {
 		defer wg.Done()
 		results[0] = mgr.Check(false)
 	}()
-	time.Sleep(25 * time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not start")
+	}
 	go func() {
 		defer wg.Done()
 		results[1] = mgr.Check(false)
 	}()
-	wg.Wait()
-	if results[0] == nil || !*results[0] {
-		t.Fatalf("renewer result=%v", results[0])
+	returned := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(100 * time.Millisecond):
+		close(release)
+		t.Fatal("concurrent Check callers waited for refresh")
 	}
-	if results[1] != nil {
-		t.Fatalf("waiter result=%v", *results[1])
+	if results[0] != nil || results[1] != nil || calls != 1 {
+		close(release)
+		t.Fatalf("results=%v calls=%d", results, calls)
 	}
+	close(release)
+	waitForRefresh(t, mgr, time.Second)
 }
 
 func TestDetectHeimdal(t *testing.T) {

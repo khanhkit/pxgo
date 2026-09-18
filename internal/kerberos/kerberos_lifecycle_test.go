@@ -105,3 +105,45 @@ func TestNearExpiryIgnoresBackoffAndAttemptsRenewal(t *testing.T) {
 		t.Fatal("near-expiry ticket was delayed by backoff")
 	}
 }
+
+func TestConcurrentExpiryStateUpdatesAreSynchronized(t *testing.T) {
+	mgr := makeManager()
+	const workers = 16
+	done := make(chan struct{}, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			mgr.ParseAndSetExpiry(mitKlistOutput)
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < workers; i++ {
+		<-done
+	}
+	expiry, next, _ := managerState(mgr)
+	if expiry.IsZero() || next.IsZero() {
+		t.Fatalf("expiry=%v next=%v", expiry, next)
+	}
+}
+
+func waitForRefresh(t *testing.T, mgr *Manager, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		mgr.mu.Lock()
+		refreshing := mgr.refreshing
+		mgr.mu.Unlock()
+		if !refreshing {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for Kerberos refresh")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func managerState(mgr *Manager) (time.Time, time.Time, time.Duration) {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	return mgr.TicketExpiry, mgr.NextCheck, mgr.Backoff
+}
