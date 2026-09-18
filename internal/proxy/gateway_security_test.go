@@ -3,10 +3,13 @@ package proxy
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -249,5 +252,126 @@ func TestGatewayPolicyErrorIsActionable(t *testing.T) {
 	msg := strings.ToLower(err.Error())
 	if !strings.Contains(msg, "gateway") || (!strings.Contains(msg, "allow") && !strings.Contains(msg, "auth")) {
 		t.Fatalf("gateway rejection is not actionable: %q", err)
+	}
+}
+
+func TestSlowRequestBodyIsBoundedBySockTimeout(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	cfg := config.Default()
+	cfg.SockTimeout = 0.1
+	px := startTestProxy(t, cfg)
+	conn, err := net.Dial("tcp", px.ListenAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	u, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(conn, "POST %s/slow HTTP/1.1\r\nHost: %s\r\nContent-Length: 100\r\nConnection: close\r\n\r\nx", upstream.URL, u.Host); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(900 * time.Millisecond))
+	one := make([]byte, 1)
+	_, err = conn.Read(one)
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("slow request body kept downstream connection open beyond read budget: %v", err)
+	}
+}
+
+func TestSlowDownstreamReaderIsBoundedByWriteTimeout(t *testing.T) {
+	originDone := make(chan error, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, _ := w.(http.Flusher)
+		chunk := make([]byte, 32*1024)
+		for i := 0; i < 2048; i++ { // 64 MiB exceeds local socket buffering by a wide margin.
+			if _, err := w.Write(chunk); err != nil {
+				originDone <- err
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		originDone <- nil
+	}))
+	defer upstream.Close()
+
+	cfg := config.Default()
+	cfg.SockTimeout = 0.1 // downstream WriteTimeout is deliberately 2x this value.
+	px := startTestProxy(t, cfg)
+	conn, err := net.Dial("tcp", px.ListenAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if tcp, ok := conn.(*net.TCPConn); ok {
+		_ = tcp.SetReadBuffer(1024)
+	}
+	u, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(conn, "GET %s/large HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", upstream.URL, u.Host); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-originDone:
+		if err == nil {
+			t.Fatal("origin wrote entire 64 MiB despite downstream client not reading")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("slow downstream reader kept origin producer blocked beyond bounded write window")
+	}
+}
+
+func TestServerResourceBudgetsRejectDisabledOrOverflowingValues(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*config.Config)
+	}{
+		{name: "zero workers", mutate: func(c *config.Config) { c.Workers = 0 }},
+		{name: "zero threads", mutate: func(c *config.Config) { c.Threads = 0 }},
+		{name: "zero idle", mutate: func(c *config.Config) { c.Idle = 0 }},
+		{name: "zero socktimeout", mutate: func(c *config.Config) { c.SockTimeout = 0 }},
+		{name: "nan socktimeout", mutate: func(c *config.Config) { c.SockTimeout = math.NaN() }},
+		{name: "infinite socktimeout", mutate: func(c *config.Config) { c.SockTimeout = math.Inf(1) }},
+		{name: "connection budget overflow", mutate: func(c *config.Config) {
+			c.Workers = int(^uint(0) >> 1)
+			c.Threads = 2
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			tc.mutate(&cfg)
+			if _, err := New(cfg); err == nil {
+				t.Fatalf("unsafe resource budget %q was accepted", tc.name)
+			}
+		})
+	}
+}
+
+func TestBasicClientAuthAllowedOnlyOnLoopbackPlaintextListener(t *testing.T) {
+	loopback := config.Default()
+	loopback.ClientAuth = "BASIC"
+	loopback.ClientUsername = "user"
+	loopback.ClientPassword = "secret"
+	if _, err := New(loopback); err != nil {
+		t.Fatalf("loopback BASIC compatibility should remain available: %v", err)
+	}
+
+	remote := loopback
+	remote.Listen = "0.0.0.0"
+	if _, err := New(remote); err == nil {
+		t.Fatal("explicit non-loopback plaintext listener accepted BASIC client auth")
 	}
 }
