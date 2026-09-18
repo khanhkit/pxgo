@@ -1143,6 +1143,7 @@ func TestUpstreamProxyBasicAuthHTTPAndConnect(t *testing.T) {
 	parent := startTestProxy(t, parentCfg)
 	childCfg := config.Default()
 	childCfg.Server = fmt.Sprintf("127.0.0.1:%d", parent.Port())
+	childCfg.Auth = "ANY" // Explicit opt-in to Basic fallback for this compatibility fixture.
 	childCfg.Username = "test"
 	childCfg.Password = "12345"
 	child := startTestProxy(t, childCfg)

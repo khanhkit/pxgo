@@ -306,6 +306,7 @@ func TestAPISS0016AuthRetryReplaysLargeBodyExactly(t *testing.T) {
 
 	childCfg := config.Default()
 	childCfg.Server = parent.ListenAddr()
+	childCfg.Auth = "ANY" // Explicit opt-in keeps this test focused on replay, not auth default policy.
 	childCfg.Username = "user"
 	childCfg.Password = "pass"
 	child := startTestProxy(t, childCfg)
