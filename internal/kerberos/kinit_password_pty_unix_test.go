@@ -5,6 +5,7 @@ package kerberos
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,5 +35,8 @@ exit 0
 	}
 	if result.ExitCode != 0 {
 		t.Fatalf("exit=%d stderr=%q", result.ExitCode, result.Stderr)
+	}
+	if strings.Contains(result.Stdout, "secret") || strings.Contains(result.Stderr, "secret") {
+		t.Fatalf("password leaked through PTY echo: stdout=%q stderr=%q", result.Stdout, result.Stderr)
 	}
 }

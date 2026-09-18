@@ -49,9 +49,10 @@ func makeManager() *Manager {
 }
 
 func TestInit(t *testing.T) {
+	t.Setenv("KRB5CCNAME", "caller-owned-cache")
 	mgr := makeManager()
-	if got := os.Getenv("KRB5CCNAME"); got != mgr.CCacheName {
-		t.Fatalf("KRB5CCNAME=%q want %q", got, mgr.CCacheName)
+	if got := os.Getenv("KRB5CCNAME"); got != "caller-owned-cache" {
+		t.Fatalf("New mutated process-global KRB5CCNAME=%q", got)
 	}
 	if mgr.Env["KRB5CCNAME"] != mgr.CCacheName {
 		t.Fatalf("env missing ccache")
