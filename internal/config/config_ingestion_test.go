@@ -1,8 +1,11 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +78,107 @@ func TestAPISS0009DoesNotTrustCWDDotenvByDefault(t *testing.T) {
 	}
 	if cfg.Username == "cwd-injected" {
 		t.Fatal("implicit CWD .env injected configuration")
+	}
+}
+
+func TestAPISS0009RecordsEffectiveSourceProvenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pxgo.ini")
+	if err := os.WriteFile(path, []byte("[proxy]\nserver = file.proxy:8080\nport = 1111\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PXGO_THREADS", "8")
+	cfg, err := ParseArgs([]string{"--config=" + path, "--port=3333"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.SourceOf("server"); got != "ini:"+path {
+		t.Fatalf("server source=%q", got)
+	}
+	if got := cfg.SourceOf("threads"); got != "env:PXGO_THREADS" {
+		t.Fatalf("threads source=%q", got)
+	}
+	if got := cfg.SourceOf("port"); got != "cli" {
+		t.Fatalf("port source=%q", got)
+	}
+	if got := cfg.SourceOf("idle"); got != "default" {
+		t.Fatalf("idle source=%q", got)
+	}
+}
+
+func TestAPISS0009ReadINIAcceptsBoundedLongLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pxgo.ini")
+	value := strings.Repeat("x", 70<<10)
+	if err := os.WriteFile(path, []byte("[proxy]\nusername = "+value+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ReadINI(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Username != value {
+		t.Fatalf("username length=%d want=%d", len(cfg.Username), len(value))
+	}
+}
+
+func TestAPISS0009ReadINIRejectsOversizedLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pxgo.ini")
+	value := strings.Repeat("x", maxConfigLineBytes+1)
+	if err := os.WriteFile(path, []byte("username = "+value+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadINI(path); err == nil {
+		t.Fatal("expected oversized INI line to fail")
+	}
+}
+
+func TestAPISS0009MalformedExplicitDotenvFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("PXGO_PORT\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PXGO_DOTENV", path)
+	if _, err := ParseArgs(nil); err == nil {
+		t.Fatal("expected malformed explicit dotenv to fail")
+	}
+}
+
+func TestAPISS0009UnknownEnvironmentKeyFails(t *testing.T) {
+	t.Setenv("PXGO_DEFINITELY_UNKNOWN", "1")
+	if _, err := ParseArgs(nil); err == nil {
+		t.Fatal("expected unknown PXGO environment key to fail")
+	}
+}
+
+func TestAPISS0009InvalidPACFileURLFails(t *testing.T) {
+	if _, err := ParseArgs([]string{"--pac=file:///%zz"}); err == nil {
+		t.Fatal("expected invalid PAC file URL to fail")
+	}
+}
+
+func TestAPISS0009ExplicitConfigDirectoryFails(t *testing.T) {
+	if _, err := ParseArgs([]string{"--config=" + t.TempDir()}); err == nil {
+		t.Fatal("expected config directory to fail")
+	}
+}
+
+func TestAPISS0009HomeDirFailurePropagates(t *testing.T) {
+	if runtime.GOOS == goosWindows {
+		t.Skip("Windows config-dir resolution does not call os.UserHomeDir")
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	tmp := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	oldUserHomeDir := userHomeDir
+	userHomeDir = func() (string, error) { return "", errors.New("home unavailable") }
+	t.Cleanup(func() { userHomeDir = oldUserHomeDir })
+	if _, err := ParseArgs(nil); err == nil || !strings.Contains(err.Error(), "home unavailable") {
+		t.Fatalf("expected home-dir error, got %v", err)
 	}
 }

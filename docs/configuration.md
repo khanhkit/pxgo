@@ -3,11 +3,33 @@
 pxgo configuration sources are applied in this order:
 
 ```text
-defaults < pxgo.ini < .env < environment < command line
+defaults < pxgo.ini < explicitly selected dotenv < environment < command line
 ```
 
 Environment variables use the `PXGO_` prefix. For example, `--proxy` maps to
 `PXGO_PROXY`, and `--client-username` maps to `PXGO_CLIENT_USERNAME`.
+
+Configuration is strict: malformed typed values, unsupported `PXGO_*` options,
+unknown INI keys, unreadable explicit config files, and missing explicit local
+PAC files fail startup instead of silently falling back to defaults. An
+explicitly present empty environment value is still an override, so string
+settings can intentionally clear lower-precedence values.
+
+A `.env` file in the current working directory is **not** loaded implicitly.
+Select one explicitly when needed:
+
+```bash
+PXGO_DOTENV=/path/to/pxgo.env pxgo
+```
+
+For installed/portable deployments, pxgo still checks for a `.env` next to
+the executable as its compatibility fallback. Set `PXGO_DOTENV=` to disable
+dotenv loading entirely.
+
+When pxgo is consumed as a Go package, the returned `Config` records the
+winning source for effective values. `cfg.SourceOf("port")`, for example,
+returns values such as `default`, `ini:/path/pxgo.ini`, `env:PXGO_PORT`, or
+`cli`.
 
 ## Config File Lookup
 

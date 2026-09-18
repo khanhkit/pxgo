@@ -70,12 +70,17 @@ pxgo --quit
 
 ## Configuration
 
-pxgo accepts command-line flags, `PXGO_*` environment variables, `.env`, and
-`pxgo.ini`. Precedence is:
+pxgo accepts command-line flags, `PXGO_*` environment variables, explicitly
+selected dotenv files, and `pxgo.ini`. Precedence is:
 
 ```text
-command line > environment > .env > pxgo.ini > defaults
+command line > environment > explicit dotenv > pxgo.ini > defaults
 ```
+
+Current-working-directory `.env` files are not trusted implicitly. Use
+`PXGO_DOTENV=/path/to/file` when dotenv loading is desired. Invalid known
+values and unknown configuration keys fail startup rather than silently
+falling back.
 
 Create a starter config:
 
