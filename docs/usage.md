@@ -83,6 +83,10 @@ Supported auth selectors:
 - `NONE`: pass proxy authentication through from the client
 - `ONLYNTLM`, `NOBASIC`, `SAFENONTLM`: selector forms matching the Python Px convention
 
+When reusable upstream username/password credentials are configured and `--auth` is omitted, pxgo uses the `ANYSAFE` challenge set so a Basic-only parent cannot silently downgrade those credentials. Use explicit `--auth=ANY`, `--auth=BASIC`, or `--auth=ONLYBASIC` only when Basic fallback is intentionally accepted. Credentials are emitted only after a matching upstream challenge.
+
+Upstream Digest supports legacy MD5 without qop and MD5 with `qop=auth`. Unsupported qop values such as `auth-int` and unsupported algorithms such as `MD5-sess` or `SHA-256` are rejected rather than being signed with an incompatible MD5 formula.
+
 ## Kerberos
 
 Kerberos ticket management is available on Linux and macOS:

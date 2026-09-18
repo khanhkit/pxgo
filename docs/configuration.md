@@ -73,7 +73,7 @@ human-edited config with explanations.
 | `noproxy` / `--noproxy` | empty | Direct-connect bypass list |
 | `useragent` / `--useragent` | empty | Override or set `User-Agent` |
 | `username` / `--username` | empty | Upstream auth username or Kerberos principal |
-| `auth` / `--auth` | empty | Upstream auth selector |
+| `auth` / `--auth` | empty | Upstream auth selector; empty + reusable credentials uses `ANYSAFE`, while explicit `ANY` includes Basic fallback |
 | `kerberos` / `--kerberos` | `0` | Enable Kerberos ticket management |
 
 ## Client Section
