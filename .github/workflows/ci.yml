@@ -120,7 +120,7 @@ jobs:
         env:
           PXGO_SSPI_NATIVE: "1"
         run: |
-          $listed = go test ./internal/proxy -list 'TCSSPIWIN(INT008|SOAK009)'
+          $listed = (go test ./internal/proxy -list 'TCSSPIWIN(INT008|SOAK009)' | Out-String)
           if ($listed -notmatch 'TestTCSSPIWININT008' -or $listed -notmatch 'TestTCSSPIWINSOAK009') {
             throw 'required native SSPI fixture tests are missing from verification_ref'
           }
@@ -152,7 +152,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:PXGO_SSPI_AD_PROXY_HOST)) {
             throw 'pxgo-ad environment must define PXGO_SSPI_AD_PROXY_HOST'
           }
-          $listed = go test ./internal/proxy -list 'TCSSPIWINAD010'
+          $listed = (go test ./internal/proxy -list 'TCSSPIWINAD010' | Out-String)
           if ($listed -notmatch 'TestTCSSPIWINAD010') {
             throw 'verification_ref does not contain the required real-AD Kerberos testcase TCSSPIWINAD010'
           }
