@@ -181,3 +181,85 @@ func TestAPISS0002HTTPSSPIStartFailureIsExplicitAndCloses407(t *testing.T) {
 		t.Fatal("407 body not closed on SSPI start failure")
 	}
 }
+
+type fakeSSPIStep struct {
+	complete bool
+	output   []byte
+	err      error
+}
+
+type fakeSequencedSSPIContext struct {
+	steps    []fakeSSPIStep
+	index    int
+	releases int
+}
+
+func (c *fakeSequencedSSPIContext) Update(_ []byte) (bool, []byte, error) {
+	if c.index >= len(c.steps) {
+		return false, nil, errors.New("unexpected extra SSPI update")
+	}
+	step := c.steps[c.index]
+	c.index++
+	return step.complete, step.output, step.err
+}
+
+func (c *fakeSequencedSSPIContext) Release() error {
+	c.releases++
+	return nil
+}
+
+// TC-SSPI-REG-006
+func TestAPISS0002ManagedSSPISessionSupportsMultiLegContinuation(t *testing.T) {
+	cred := &fakeSSPICredential{}
+	ctx := &fakeSequencedSSPIContext{steps: []fakeSSPIStep{
+		{complete: false, output: []byte("continue")},
+		{complete: true, output: []byte("final")},
+	}}
+	session := newManagedSSPISession("Negotiate", []byte("initial"), cred, ctx)
+
+	if _, err := session.Negotiate(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := session.Authenticate("Negotiate " + base64.StdEncoding.EncodeToString([]byte("challenge-1")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Negotiate " + base64.StdEncoding.EncodeToString([]byte("continue")); first != want {
+		t.Fatalf("first continuation=%q want=%q", first, want)
+	}
+	second, err := session.Authenticate("Negotiate " + base64.StdEncoding.EncodeToString([]byte("challenge-2")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Negotiate " + base64.StdEncoding.EncodeToString([]byte("final")); second != want {
+		t.Fatalf("final continuation=%q want=%q", second, want)
+	}
+	if _, err := session.Authenticate("Negotiate " + base64.StdEncoding.EncodeToString([]byte("challenge-3"))); err == nil {
+		t.Fatal("completed SSPI session accepted an extra continuation leg")
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if ctx.index != 2 || ctx.releases != 1 || cred.releases != 1 {
+		t.Fatalf("updates=%d ctx releases=%d cred releases=%d, want 2/1/1", ctx.index, ctx.releases, cred.releases)
+	}
+}
+
+// TC-SSPI-REG-007
+func TestAPISS0002ManagedSSPISessionCloseReportsReleaseErrorOnce(t *testing.T) {
+	cred := &fakeSSPICredential{err: errors.New("credential release failed")}
+	ctx := &fakeSSPIContext{complete: true, output: []byte("final")}
+	session := newManagedSSPISession("NTLM", []byte("initial"), cred, ctx)
+
+	firstErr := session.Close()
+	if firstErr == nil || !strings.Contains(firstErr.Error(), "credential release failed") {
+		t.Fatalf("Close error=%v, want credential release failure", firstErr)
+	}
+	secondErr := session.Close()
+	if secondErr == nil || secondErr.Error() != firstErr.Error() {
+		t.Fatalf("second Close error=%v, want stable first error=%v", secondErr, firstErr)
+	}
+	if ctx.releases != 1 || cred.releases != 1 {
+		t.Fatalf("release counts ctx=%d cred=%d, want 1/1", ctx.releases, cred.releases)
+	}
+}
