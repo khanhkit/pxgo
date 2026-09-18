@@ -1,26 +1,35 @@
 package systemproxy
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
+	"time"
 )
 
 var ErrResolverClosed = errors.New("system proxy resolver is closed")
 
+const defaultResolverTimeout = 15 * time.Second
+
 type resolverBackend interface {
-	resolve(rawurl string, cfg Config) (string, error)
+	resolve(ctx context.Context, rawurl string, cfg Config) (string, error)
 	close() error
 }
 
 type Resolver struct {
 	mu      sync.RWMutex
 	backend resolverBackend
+	timeout time.Duration
 	closed  bool
 }
 
 func newResolverWithBackend(backend resolverBackend) *Resolver {
-	return &Resolver{backend: backend}
+	return newResolverWithBackendTimeout(backend, defaultResolverTimeout)
+}
+
+func newResolverWithBackendTimeout(backend resolverBackend, timeout time.Duration) *Resolver {
+	return &Resolver{backend: backend, timeout: timeout}
 }
 
 func (r *Resolver) ResolveProxyForURL(rawurl string, cfg Config) (string, error) {
@@ -36,7 +45,13 @@ func (r *Resolver) ResolveProxyForURL(rawurl string, cfg Config) (string, error)
 	if r.closed || r.backend == nil {
 		return "", ErrResolverClosed
 	}
-	return r.backend.resolve(rawurl, cfg)
+	timeout := r.timeout
+	if timeout <= 0 {
+		timeout = defaultResolverTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return r.backend.resolve(ctx, rawurl, cfg)
 }
 
 func (r *Resolver) Close() error {

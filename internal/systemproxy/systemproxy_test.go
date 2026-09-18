@@ -1,8 +1,10 @@
 package systemproxy
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestParseManualProxyString(t *testing.T) {
@@ -31,7 +33,7 @@ type fakeResolverBackend struct {
 	err          error
 }
 
-func (f *fakeResolverBackend) resolve(rawurl string, cfg Config) (string, error) {
+func (f *fakeResolverBackend) resolve(ctx context.Context, rawurl string, cfg Config) (string, error) {
 	f.resolveCalls++
 	return f.result, f.err
 }
@@ -94,6 +96,33 @@ func TestTCWINPACREG003DiscoveryPreservesAvailableSources(t *testing.T) {
 	}
 	if cfg.Bypass != "<local>" {
 		t.Fatalf("Bypass = %q", cfg.Bypass)
+	}
+}
+
+type blockingResolverBackend struct{}
+
+func (blockingResolverBackend) resolve(ctx context.Context, rawurl string, cfg Config) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (blockingResolverBackend) close() error { return nil }
+
+func TestTCWINPACNEG013ResolverBoundsBackendCall(t *testing.T) {
+	resolver := newResolverWithBackendTimeout(blockingResolverBackend{}, 25*time.Millisecond)
+	defer resolver.Close()
+
+	start := time.Now()
+	got, err := resolver.ResolveProxyForURL("https://example.com", Config{AutoDetect: true})
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ResolveProxyForURL error = %v, want context deadline exceeded", err)
+	}
+	if got != "" {
+		t.Fatalf("ResolveProxyForURL result = %q, want empty on timeout", got)
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("ResolveProxyForURL elapsed = %v, want bounded completion", elapsed)
 	}
 }
 

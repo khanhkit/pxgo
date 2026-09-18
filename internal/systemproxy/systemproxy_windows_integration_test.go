@@ -3,6 +3,8 @@
 package systemproxy
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +90,39 @@ func TestTCWINPACNEG010NativePACFailureIsNotDirect(t *testing.T) {
 	}
 	if strings.EqualFold(strings.TrimSpace(got), "DIRECT") {
 		t.Fatalf("native PAC failure was rewritten to DIRECT")
+	}
+}
+
+func TestTCWINPACNEG014NativePACResolutionCancelsAtDeadline(t *testing.T) {
+	requireNativeWinHTTP(t)
+
+	release := make(chan struct{})
+	pacServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer func() {
+		close(release)
+		pacServer.Close()
+	}()
+
+	resolver, err := NewResolver()
+	if err != nil {
+		t.Fatalf("NewResolver() error = %v", err)
+	}
+	resolver.timeout = 150 * time.Millisecond
+	defer resolver.Close()
+
+	start := time.Now()
+	got, err := resolver.ResolveProxyForURL(
+		"https://example.com/",
+		Config{IsPAC: true, PACURL: pacServer.URL},
+	)
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ResolveProxyForURL() error = %v, result = %q; want context deadline exceeded", err, got)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("ResolveProxyForURL() elapsed = %v, want bounded cancellation", elapsed)
 	}
 }
 

@@ -3,7 +3,14 @@
 package systemproxy
 
 import (
+	"context"
 	"fmt"
+	"net"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -19,11 +26,19 @@ const (
 	winhttpAutoDetectTypeDHCP = 0x00000001
 	winhttpAutoDetectTypeDNSA = 0x00000002
 
-	winhttpAccessTypeNoProxy        = 1
-	winhttpAccessTypeNamedProxy     = 3
 	winhttpAccessTypeAutomaticProxy = 4
+	winhttpFlagAsync                = 0x10000000
+	winhttpTimeoutMS                = 15_000
 
-	winhttpTimeoutMS = 15_000
+	winhttpCallbackStatusRequestError           = 0x00200000
+	winhttpCallbackStatusGetProxyForURLComplete = 0x01000000
+	winhttpCallbackFlagsProxyResolver           = winhttpCallbackStatusRequestError | winhttpCallbackStatusGetProxyForURLComplete
+
+	errorIOPending = 997
+
+	internetSchemeHTTP  = 1
+	internetSchemeHTTPS = 2
+	internetSchemeSOCKS = 4
 )
 
 type winHTTPCurrentUserIEProxyConfig struct {
@@ -42,20 +57,44 @@ type winHTTPAutoProxyOptions struct {
 	AutoLogonIfChallenged int32
 }
 
-type winHTTPProxyInfo struct {
-	AccessType  uint32
-	Proxy       *uint16
-	ProxyBypass *uint16
+type winHTTPProxyResultEntry struct {
+	Proxy       int32
+	Bypass      int32
+	ProxyScheme int32
+	ProxyName   *uint16
+	ProxyPort   uint16
+}
+
+type winHTTPProxyResult struct {
+	EntriesCount uint32
+	Entries      *winHTTPProxyResultEntry
+}
+
+type winHTTPAsyncResult struct {
+	Result uintptr
+	Error  uint32
+}
+
+type winHTTPAsyncEvent struct {
+	err error
 }
 
 var (
+	winHTTPCallbackRegistry sync.Map
+	winHTTPCallbackID       atomic.Uint64
+	winHTTPStatusCallback   = windows.NewCallback(winHTTPProxyStatusCallback)
+
 	winhttpDLL = windows.NewLazySystemDLL("winhttp.dll")
 	kernelDLL  = windows.NewLazySystemDLL("kernel32.dll")
 
 	procWinHttpGetIEProxyConfigForCurrentUser = winhttpDLL.NewProc("WinHttpGetIEProxyConfigForCurrentUser")
 	procWinHttpOpen                           = winhttpDLL.NewProc("WinHttpOpen")
 	procWinHttpSetTimeouts                    = winhttpDLL.NewProc("WinHttpSetTimeouts")
-	procWinHttpGetProxyForURL                 = winhttpDLL.NewProc("WinHttpGetProxyForUrl")
+	procWinHttpSetStatusCallback              = winhttpDLL.NewProc("WinHttpSetStatusCallback")
+	procWinHttpCreateProxyResolver            = winhttpDLL.NewProc("WinHttpCreateProxyResolver")
+	procWinHttpGetProxyForURLEx               = winhttpDLL.NewProc("WinHttpGetProxyForUrlEx")
+	procWinHttpGetProxyResult                 = winhttpDLL.NewProc("WinHttpGetProxyResult")
+	procWinHttpFreeProxyResult                = winhttpDLL.NewProc("WinHttpFreeProxyResult")
 	procWinHttpCloseHandle                    = winhttpDLL.NewProc("WinHttpCloseHandle")
 	procGlobalFree                            = kernelDLL.NewProc("GlobalFree")
 )
@@ -74,7 +113,7 @@ func NewResolver() (*Resolver, error) {
 		winhttpAccessTypeAutomaticProxy,
 		0,
 		0,
-		0,
+		winhttpFlagAsync,
 	)
 	if session == 0 {
 		return nil, fmt.Errorf("WinHttpOpen: %w", callErr)
@@ -90,6 +129,17 @@ func NewResolver() (*Resolver, error) {
 	if ok == 0 {
 		procWinHttpCloseHandle.Call(session)
 		return nil, fmt.Errorf("WinHttpSetTimeouts: %w", timeoutErr)
+	}
+
+	callback, _, callbackErr := procWinHttpSetStatusCallback.Call(
+		session,
+		winHTTPStatusCallback,
+		winhttpCallbackFlagsProxyResolver,
+		0,
+	)
+	if callback == ^uintptr(0) {
+		procWinHttpCloseHandle.Call(session)
+		return nil, fmt.Errorf("WinHttpSetStatusCallback: %w", callbackErr)
 	}
 	return newResolverWithBackend(&winHTTPBackend{session: session}), nil
 }
@@ -156,51 +206,155 @@ func ResolveProxyForURL(rawurl string, cfg Config) (string, error) {
 	return result, nil
 }
 
-func (b *winHTTPBackend) resolve(rawurl string, cfg Config) (string, error) {
+func winHTTPProxyStatusCallback(_ uintptr, contextValue uintptr, status uint32, statusInfo uintptr, statusInfoLen uint32) uintptr {
+	value, ok := winHTTPCallbackRegistry.Load(contextValue)
+	if !ok {
+		return 0
+	}
+	completion := value.(chan winHTTPAsyncEvent)
+
+	var event winHTTPAsyncEvent
+	switch status {
+	case winhttpCallbackStatusGetProxyForURLComplete:
+		// Successful completion; the result is retrieved from the resolver handle.
+	case winhttpCallbackStatusRequestError:
+		if statusInfo == 0 || statusInfoLen < uint32(unsafe.Sizeof(winHTTPAsyncResult{})) {
+			event.err = fmt.Errorf("WinHTTP async proxy resolution failed without error details")
+		} else {
+			asyncResult := (*winHTTPAsyncResult)(unsafe.Pointer(statusInfo))
+			event.err = windows.Errno(asyncResult.Error)
+		}
+	default:
+		return 0
+	}
+
+	select {
+	case completion <- event:
+	default:
+	}
+	return 0
+}
+
+func nextWinHTTPCallbackID() uintptr {
+	for {
+		id := uintptr(winHTTPCallbackID.Add(1))
+		if id != 0 {
+			return id
+		}
+	}
+}
+
+func (b *winHTTPBackend) resolve(ctx context.Context, rawurl string, cfg Config) (string, error) {
+	var resolverHandle uintptr
+	status, _, _ := procWinHttpCreateProxyResolver.Call(
+		b.session,
+		uintptr(unsafe.Pointer(&resolverHandle)),
+	)
+	if status != 0 {
+		return "", fmt.Errorf("WinHttpCreateProxyResolver: %w", windows.Errno(status))
+	}
+	closed := false
+	closeResolver := func() {
+		if !closed && resolverHandle != 0 {
+			procWinHttpCloseHandle.Call(resolverHandle)
+			closed = true
+		}
+	}
+	defer closeResolver()
+
 	urlp, err := windows.UTF16PtrFromString(rawurl)
 	if err != nil {
 		return "", err
 	}
-
-	options := winHTTPAutoProxyOptions{AutoLogonIfChallenged: 1}
+	options := &winHTTPAutoProxyOptions{AutoLogonIfChallenged: 1}
+	var pacURL *uint16
 	if cfg.AutoDetect {
 		options.Flags |= winhttpAutoproxyAutoDetect
 		options.AutoDetectFlags = winhttpAutoDetectTypeDHCP | winhttpAutoDetectTypeDNSA
 	}
 	if cfg.IsPAC {
-		pacURL, err := windows.UTF16PtrFromString(cfg.PACURL)
+		pacURL, err = windows.UTF16PtrFromString(cfg.PACURL)
 		if err != nil {
 			return "", err
 		}
 		options.Flags |= winhttpAutoproxyConfigURL
 		options.AutoConfigURL = pacURL
 	}
+	defer runtime.KeepAlive(urlp)
+	defer runtime.KeepAlive(options)
+	defer runtime.KeepAlive(pacURL)
 
-	var proxyInfo winHTTPProxyInfo
-	ok, _, callErr := procWinHttpGetProxyForURL.Call(
-		b.session,
+	contextID := nextWinHTTPCallbackID()
+	completion := make(chan winHTTPAsyncEvent, 1)
+	winHTTPCallbackRegistry.Store(contextID, completion)
+	defer winHTTPCallbackRegistry.Delete(contextID)
+
+	status, _, _ = procWinHttpGetProxyForURLEx.Call(
+		resolverHandle,
 		uintptr(unsafe.Pointer(urlp)),
-		uintptr(unsafe.Pointer(&options)),
-		uintptr(unsafe.Pointer(&proxyInfo)),
+		uintptr(unsafe.Pointer(options)),
+		contextID,
 	)
-	if ok == 0 {
-		return "", fmt.Errorf("WinHttpGetProxyForUrl(%q): %w", rawurl, callErr)
+	if status != errorIOPending {
+		return "", fmt.Errorf("WinHttpGetProxyForUrlEx(%q): %w", rawurl, windows.Errno(status))
 	}
-	defer globalFreeUTF16(proxyInfo.Proxy)
-	defer globalFreeUTF16(proxyInfo.ProxyBypass)
 
-	switch proxyInfo.AccessType {
-	case winhttpAccessTypeNamedProxy:
-		proxy := windows.UTF16PtrToString(proxyInfo.Proxy)
-		if proxy == "" {
-			return "", fmt.Errorf("WinHttpGetProxyForUrl returned named proxy without a proxy name")
+	select {
+	case event := <-completion:
+		if event.err != nil {
+			return "", fmt.Errorf("WinHttpGetProxyForUrlEx(%q): %w", rawurl, event.err)
 		}
-		return ParseManualProxyString(proxy), nil
-	case winhttpAccessTypeNoProxy:
-		return "DIRECT", nil
-	default:
-		return "", fmt.Errorf("WinHttpGetProxyForUrl returned unsupported access type %d", proxyInfo.AccessType)
+	case <-ctx.Done():
+		closeResolver()
+		return "", ctx.Err()
 	}
+
+	var result winHTTPProxyResult
+	status, _, _ = procWinHttpGetProxyResult.Call(
+		resolverHandle,
+		uintptr(unsafe.Pointer(&result)),
+	)
+	if status != 0 {
+		return "", fmt.Errorf("WinHttpGetProxyResult(%q): %w", rawurl, windows.Errno(status))
+	}
+	defer procWinHttpFreeProxyResult.Call(uintptr(unsafe.Pointer(&result)))
+	return formatWinHTTPProxyResult(&result)
+}
+
+func formatWinHTTPProxyResult(result *winHTTPProxyResult) (string, error) {
+	if result == nil || result.EntriesCount == 0 || result.Entries == nil {
+		return "", fmt.Errorf("WinHttpGetProxyResult returned no entries")
+	}
+	entries := unsafe.Slice(result.Entries, int(result.EntriesCount))
+	proxies := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Proxy == 0 {
+			proxies = append(proxies, "DIRECT")
+			continue
+		}
+		host := windows.UTF16PtrToString(entry.ProxyName)
+		if host == "" {
+			return "", fmt.Errorf("WinHttpGetProxyResult returned proxy without a host")
+		}
+		endpoint := host
+		if entry.ProxyPort != 0 {
+			endpoint = net.JoinHostPort(host, strconv.Itoa(int(entry.ProxyPort)))
+		}
+		switch entry.ProxyScheme {
+		case internetSchemeHTTP:
+		case internetSchemeHTTPS:
+			endpoint = "https://" + endpoint
+		case internetSchemeSOCKS:
+			endpoint = "socks5://" + endpoint
+		default:
+			return "", fmt.Errorf("WinHttpGetProxyResult returned unsupported proxy scheme %d", entry.ProxyScheme)
+		}
+		proxies = append(proxies, endpoint)
+	}
+	if len(proxies) == 0 {
+		return "", fmt.Errorf("WinHttpGetProxyResult returned no usable entries")
+	}
+	return strings.Join(proxies, ","), nil
 }
 
 func (b *winHTTPBackend) close() error {
