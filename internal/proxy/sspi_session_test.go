@@ -171,6 +171,9 @@ func TestAPISS0002HTTPSSPIStartFailureIsExplicitAndCloses407(t *testing.T) {
 	s := &Server{cfg: config.Default()}
 
 	got, err := s.retryHTTPProxyAuth(&http.Transport{}, req, req.URL, nil, req.URL.String(), "", "proxy.corp.example", resp)
+	if got != nil && got.Body != nil {
+		defer got.Body.Close()
+	}
 	if got != nil {
 		t.Fatalf("response=%v want nil", got)
 	}
