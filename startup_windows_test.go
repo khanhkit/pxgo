@@ -52,17 +52,20 @@ func restoreRegistryString(t *testing.T, key registry.Key, name string, backup r
 }
 
 func TestAPISS0011RegistryInstallForceUninstallNative(t *testing.T) {
-	key, err := registry.OpenKey(registry.CURRENT_USER, runKeyPath, registry.QUERY_VALUE|registry.SET_VALUE)
+	key, existed, err := registry.CreateKey(registry.CURRENT_USER, runKeyPath, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = key.Close() })
 
 	pxGoBackup := readRegistryStringBackup(t, key, winstartup.RegistryValueName)
 	legacyBackup := readRegistryStringBackup(t, key, "Px")
 	t.Cleanup(func() {
 		restoreRegistryString(t, key, winstartup.RegistryValueName, pxGoBackup)
 		restoreRegistryString(t, key, "Px", legacyBackup)
+		_ = key.Close()
+		if !existed {
+			_ = registry.DeleteKey(registry.CURRENT_USER, runKeyPath)
+		}
 	})
 
 	if err := key.SetStringValue("Px", "legacy-px-entry"); err != nil {

@@ -12,7 +12,7 @@ import (
 const runKeyPath = `Software\Microsoft\Windows\CurrentVersion\Run`
 
 func installStartup(cmd string, force bool) error {
-	key, err := registry.OpenKey(registry.CURRENT_USER, runKeyPath, registry.QUERY_VALUE|registry.SET_VALUE)
+	key, _, err := registry.CreateKey(registry.CURRENT_USER, runKeyPath, registry.QUERY_VALUE|registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
@@ -29,6 +29,9 @@ func installStartup(cmd string, force bool) error {
 
 func uninstallStartup() error {
 	key, err := registry.OpenKey(registry.CURRENT_USER, runKeyPath, registry.QUERY_VALUE|registry.SET_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
