@@ -17,9 +17,10 @@ import (
 
 func requireNativeSSPIFixture(t *testing.T) {
 	t.Helper()
-	if os.Getenv("PXGO_SSPI_NATIVE") != "1" {
-		t.Skip("set PXGO_SSPI_NATIVE=1 on an authorized Windows runner to execute native SSPI integration")
+	if os.Getenv("PXGO_SSPI_NATIVE") == "1" || os.Getenv("GITHUB_ACTIONS") == "true" {
+		return
 	}
+	t.Skip("set PXGO_SSPI_NATIVE=1 locally or run on authorized GitHub Actions Windows to execute native SSPI integration")
 }
 
 func decodeProxyAuthToken(t *testing.T, header, wantScheme string) []byte {
