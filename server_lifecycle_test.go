@@ -69,7 +69,11 @@ func TestAPISS0022DoSelfTestRejectsNilRequest(t *testing.T) {
 			t.Fatalf("doSelfTestRequest panicked for nil request: %v", recovered)
 		}
 	}()
-	if _, err := doSelfTestRequest(&http.Client{}, nil, config.Default(), false); err == nil {
+	resp, err := doSelfTestRequest(&http.Client{}, nil, config.Default(), false)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
 		t.Fatal("expected nil self-test request error")
 	}
 }

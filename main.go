@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -30,9 +31,24 @@ var (
 )
 
 const (
-	authNone    = "NONE"
-	localhostIP = "127.0.0.1"
+	authNone               = "NONE"
+	localhostIP            = "127.0.0.1"
+	controlShutdownTimeout = 5 * time.Second
+	startExitWaitTimeout   = time.Second
 )
+
+type shutdowner interface {
+	Shutdown(context.Context) error
+}
+
+func shutdownWithTimeout(s shutdowner, timeout time.Duration) error {
+	if s == nil {
+		return errors.New("nil shutdown target")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return s.Shutdown(ctx)
+}
 
 func main() {
 	os.Exit(run())
@@ -183,9 +199,11 @@ func run() (exitCode int) {
 		}
 	case <-ctx.Done():
 		debug.Dprint("shutdown signal received")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Shutdown(shutdownCtx)
+		if err := shutdownWithTimeout(s, controlShutdownTimeout); err != nil {
+			debug.Dprint("shutdown error: " + err.Error())
+			fmt.Fprintln(os.Stderr, err)
+			return 5
+		}
 	}
 	if d := debug.Instance(); d != nil {
 		_ = d.Close()
@@ -320,13 +338,10 @@ func waitForClosed(addr string, timeout time.Duration) bool {
 }
 
 func isConnectionRefused(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "connection refused")
+	return err != nil && errors.Is(err, syscall.ECONNREFUSED)
 }
 
-func runSelfTest(cfg config.Config) error {
+func runSelfTest(cfg config.Config) (retErr error) {
 	testAuthCfg := cfg
 	if cfg.TestAuth {
 		cfg.Auth = authNone
@@ -337,17 +352,35 @@ func runSelfTest(cfg config.Config) error {
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- s.Start() }()
+	defer func() {
+		shutdownErr := shutdownWithTimeout(s, controlShutdownTimeout)
+		if shutdownErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("self-test shutdown: %w", shutdownErr))
+			return
+		}
+		select {
+		case startErr := <-errc:
+			if startErr != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("self-test proxy: %w", startErr))
+			}
+		case <-time.After(startExitWaitTimeout):
+			retErr = errors.Join(retErr, errors.New("self-test proxy did not stop after shutdown"))
+		}
+	}()
+
 	if err := waitPort(cfg.Listen, cfg.Port); err != nil {
 		return err
 	}
-	defer func() { _ = s.Shutdown(context.Background()) }()
 
 	urls := selfTestURLs(cfg.Test)
 	allMode := selfTestAllMode(cfg.Test)
 	if !allMode {
 		urls = []string{cfg.Test}
 	}
-	proxyURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", listenForClient(cfg.Listen), cfg.Port))
+	proxyURL, err := url.Parse(fmt.Sprintf("http://%s:%d", listenForClient(cfg.Listen), cfg.Port))
+	if err != nil {
+		return fmt.Errorf("self-test proxy URL: %w", err)
+	}
 	tr := &http.Transport{
 		Proxy:           http.ProxyURL(proxyURL),
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- self-test intentionally accepts arbitrary test endpoints.
@@ -372,7 +405,11 @@ func runSelfTest(cfg config.Config) error {
 				if allMode {
 					targetURL = strings.TrimRight(u, "/") + "/" + strings.ToLower(method)
 				}
-				req, _ := http.NewRequest(method, targetURL, body)
+				req, err := http.NewRequest(method, targetURL, body)
+				if err != nil {
+					errs <- fmt.Errorf("%s %s: %w", method, targetURL, err)
+					return
+				}
 				resp, err := doSelfTestRequest(client, req, testAuthCfg, cfg.TestAuth)
 				if err != nil {
 					errs <- err
@@ -393,15 +430,13 @@ func runSelfTest(cfg config.Config) error {
 			return err
 		}
 	}
-	select {
-	case err := <-errc:
-		return err
-	default:
-		return nil
-	}
+	return nil
 }
 
 func doSelfTestRequest(client *http.Client, req *http.Request, authCfg config.Config, testAuth bool) (*http.Response, error) {
+	if req == nil {
+		return nil, errors.New("nil self-test request")
+	}
 	var body []byte
 	if req.Body != nil {
 		body, _ = io.ReadAll(req.Body)
