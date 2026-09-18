@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pavelsimo/pxgo/internal/systemproxy"
 )
 
 func TestParseProxyCanonicalIPv6AndValidation(t *testing.T) {
@@ -149,6 +151,7 @@ func TestGetNetlocIPv6Authority(t *testing.T) {
 }
 
 func TestNewRejectsMalformedEnvNoProxy(t *testing.T) {
+	withSystemDiscovery(t, systemproxy.Config{Supported: false})
 	// Set alternate-case aliases first. Windows environment keys are
 	// case-insensitive, so setting the empty alias second would erase the
 	// malformed value this test is meant to exercise.
