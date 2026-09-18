@@ -78,4 +78,20 @@ grep -q 'verify-windows-native:' .github/workflows/release.yml || bad "release n
 grep -q 'windows-domain-sspi:' .github/workflows/release.yml || bad "release real AD SSPI gate missing"
 grep -q 'needs: \[verify-exact-sha, verify-windows-native, windows-domain-sspi\]' .github/workflows/release.yml || bad "GoReleaser is not gated on native Windows + real AD verification"
 
+# TC-CI-REG-010: the minimum Go toolchain must include all reachable stdlib
+# security fixes currently required by the project.
+required_go_major=1
+required_go_minor=25
+required_go_patch=13
+go_version="$(awk '$1 == "go" { print $2; exit }' go.mod)"
+IFS=. read -r go_major go_minor go_patch <<<"$go_version"
+go_patch="${go_patch:-0}"
+if (( go_major < required_go_major ||
+      (go_major == required_go_major && go_minor < required_go_minor) ||
+      (go_major == required_go_major && go_minor == required_go_minor && go_patch < required_go_patch) )); then
+  bad "Go toolchain minimum ${go_version} is below security floor 1.25.13"
+else
+  ok "Go toolchain minimum satisfies security floor 1.25.13"
+fi
+
 exit "$fail"
