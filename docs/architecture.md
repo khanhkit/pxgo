@@ -39,6 +39,11 @@ The proxy server runs one `http.Server` over one or more listeners.
 - per-connection client auth state lives in a `sync.Map` of `clientState`
   entries keyed by remote address, dropped when the connection closes
 - Kerberos check and renewal state is guarded by the Kerberos manager mutex
+- hijacked CONNECT tunnels use a server-owned lifecycle registry. A reservation is
+  taken before `Hijack`, converted to an active tunnel immediately after ownership
+  transfer, and released only when both relay directions terminate. `Shutdown`
+  prevents new reservations, closes registered tunnel sockets, and waits for both
+  pending handoffs and active tunnels to reach zero within its context.
 
 Time-based housekeeping (proxy reload, Kerberos ticket refresh) runs on a
 background one-second ticker owned by `Start`/`Shutdown`, not on the request
@@ -58,10 +63,12 @@ path. A failed reload is logged and the previous proxy config stays active.
   to a temp file with a 256 MiB per-request replay cap and a 512 MiB
   process-wide disk-spool budget. Replay capture follows request cancellation;
   terminal cleanup zeroes in-memory data and removes temp files.
-- CONNECT relays keep both ends as raw `*net.TCPConn` so `io.Copy` can use
-  `splice(2)` on Linux; idle detection uses read deadlines, and each direction
-  half-closes independently (`CloseWrite`) so early EOF on one side does not
-  truncate the other.
+- CONNECT relays preserve TCP half-close (`CloseWrite`) so early EOF on one side
+  does not truncate the other. With idle tracking disabled, raw `io.Copy` keeps
+  the platform zero-copy path. With idle tracking enabled, a lightweight reader
+  wrapper refreshes the read deadline and shared tunnel activity timestamp on
+  every successful read, preventing long one-way transfers from being mistaken
+  for idle tunnels.
 
 The test suite includes race-detector coverage for the proxy and Kerberos
 packages.
