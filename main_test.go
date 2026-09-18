@@ -22,6 +22,18 @@ import (
 	"github.com/pavelsimo/pxgo/internal/debug"
 )
 
+func TestMain(m *testing.M) {
+	previous, hadPrevious := os.LookupEnv("PXGO_PROXY")
+	_ = os.Setenv("PXGO_PROXY", "DIRECT")
+	code := m.Run()
+	if hadPrevious {
+		_ = os.Setenv("PXGO_PROXY", previous)
+	} else {
+		_ = os.Unsetenv("PXGO_PROXY")
+	}
+	os.Exit(code)
+}
+
 func TestSetupDebugCreatesCWDLog(t *testing.T) {
 	debug.ResetForTest()
 	tmp := t.TempDir()

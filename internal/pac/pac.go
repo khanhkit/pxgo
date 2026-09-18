@@ -137,6 +137,12 @@ func (p *Pac) ensureLoaded() (*pacRuntime, error) {
 	return rt, nil
 }
 
+const (
+	latin1Encoding = "latin1"
+	cp1252Encoding = "cp1252"
+	cp1251Encoding = "cp1251"
+)
+
 var windows1252High = [...]rune{
 	0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
 	0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f,
@@ -169,12 +175,12 @@ func decodePAC(data []byte, name string) (string, error) {
 			return "", errors.New("PAC source is not valid UTF-8")
 		}
 		return string(data), nil
-	case "latin-1", "latin1", "iso-8859-1", "iso8859-1":
-		return decodeSingleByte(data, "latin1"), nil
-	case "cp1252", "windows-1252", "windows1252":
-		return decodeSingleByte(data, "cp1252"), nil
-	case "cp1251", "windows-1251", "windows1251":
-		return decodeSingleByte(data, "cp1251"), nil
+	case "latin-1", latin1Encoding, "iso-8859-1", "iso8859-1":
+		return decodeSingleByte(data, latin1Encoding), nil
+	case cp1252Encoding, "windows-1252", "windows1252":
+		return decodeSingleByte(data, cp1252Encoding), nil
+	case cp1251Encoding, "windows-1251", "windows1251":
+		return decodeSingleByte(data, cp1251Encoding), nil
 	case "utf-16", "utf16":
 		return decodeUTF16(data, nil, true)
 	case "utf-16le", "utf16le":
@@ -190,7 +196,7 @@ func decodePAC(data []byte, name string) (string, error) {
 		case utf8.Valid(data):
 			return string(data), nil
 		default:
-			return decodeSingleByte(data, "cp1252"), nil
+			return decodeSingleByte(data, cp1252Encoding), nil
 		}
 	default:
 		return "", fmt.Errorf("unsupported PAC encoding %q", name)
@@ -201,15 +207,15 @@ func decodeSingleByte(data []byte, name string) string {
 	out := make([]rune, 0, len(data))
 	for _, b := range data {
 		switch name {
-		case "latin1":
+		case latin1Encoding:
 			out = append(out, rune(b))
-		case "cp1252":
+		case cp1252Encoding:
 			if b >= 0x80 && b <= 0x9f {
 				out = append(out, windows1252High[b-0x80])
 			} else {
 				out = append(out, rune(b))
 			}
-		case "cp1251":
+		case cp1251Encoding:
 			switch {
 			case b < 0x80:
 				out = append(out, rune(b))

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pavelsimo/pxgo/internal/systemproxy"
 )
 
 func TestParseProxy(t *testing.T) {
@@ -201,6 +203,7 @@ func TestWproxyNoProxyHostsStringCached(t *testing.T) {
 }
 
 func TestWproxyEnvProxyAndNoProxy(t *testing.T) {
+	withSystemDiscovery(t, systemproxy.Config{Supported: false})
 	t.Setenv("http_proxy", "")
 	t.Setenv("https_proxy", "")
 	t.Setenv("no_proxy", "")

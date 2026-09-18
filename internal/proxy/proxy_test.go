@@ -36,6 +36,9 @@ import (
 
 func startTestProxy(t *testing.T, cfg config.Config) *Server {
 	t.Helper()
+	if cfg.Server == "" && cfg.PAC == "" {
+		cfg.Server = "DIRECT"
+	}
 	if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1"
 	}
