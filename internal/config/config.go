@@ -266,7 +266,7 @@ func fileURLToLocalPathStrict(fileURL string) (string, error) {
 	var result string
 	switch {
 	case u.Host != "":
-		result = u.Host + path
+		result = "//" + u.Host + path
 	case len(path) >= 3 && path[0] == '/' && path[2] == ':':
 		result = path[1:]
 	default:

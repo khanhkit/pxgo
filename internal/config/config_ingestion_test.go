@@ -196,3 +196,14 @@ func TestAPISS0009HomeDirFailurePropagates(t *testing.T) {
 		t.Fatalf("expected home-dir error, got %v", err)
 	}
 }
+
+func TestAPISS0009FileURLPreservesUNCServerPrefix(t *testing.T) {
+	got, err := fileURLToLocalPathStrict("file://server/share/proxy.pac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.FromSlash("//server/share/proxy.pac")
+	if got != want {
+		t.Fatalf("UNC path=%q want=%q", got, want)
+	}
+}
