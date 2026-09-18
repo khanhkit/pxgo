@@ -53,7 +53,7 @@ docker build -t pxgo .
 Run with an upstream proxy:
 
 ```bash
-docker run --rm -p 3128:3128 pxgo --gateway --proxy=proxy.company.com:8080
+docker run --rm -p 3128:3128 pxgo --gateway --allow=192.168.1.0/24 --proxy=proxy.company.com:8080
 ```
 
 Mount a config file:
@@ -61,8 +61,10 @@ Mount a config file:
 ```bash
 docker run --rm -p 3128:3128 \
   -v "$PWD/pxgo.ini:/pxgo/pxgo.ini:ro" \
-  pxgo --config=/pxgo/pxgo.ini --gateway
+  pxgo --config=/pxgo/pxgo.ini --gateway --allow=192.168.1.0/24
 ```
+
+`--gateway` is fail-closed: choose a restrictive client `--allow` range or configure downstream authentication. Replace the example subnet with the client network visible to the container. Plaintext remote listeners do not permit `BASIC` or `ANY` because those modes advertise Basic credentials.
 
 The runtime image includes Kerberos command-line tools so `--kerberos` can use
 `kinit` and `klist` when a suitable realm configuration is provided.

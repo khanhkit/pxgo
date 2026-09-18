@@ -121,6 +121,8 @@ Allow remote clients:
 ./pxgo --gateway --allow=192.168.1.*
 ```
 
+Gateway mode is fail-closed. It starts only when at least one remote-admission policy is explicit: a restrictive `--allow` list, `--hostonly`, or downstream authentication. On plaintext remote listeners, `BASIC`, `ANY`, and explicit auth lists containing `BASIC` are rejected; use `ANYSAFE`, `DIGEST`, `NTLM`, or `NEGOTIATE` with `--client-username` and a stored/configured client password. The `/PxgoQuit` control request is accepted only as an exact origin-form request from an allowed loopback client, so a proxied absolute URL ending in `/PxgoQuit` is ordinary origin traffic.
+
 Allow only IP addresses assigned to local interfaces:
 
 ```bash
