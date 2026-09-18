@@ -25,12 +25,15 @@ const (
 )
 
 const (
-	directHost  = "DIRECT"
-	directKey   = "direct://DIRECT:80"
-	httpScheme  = "http"
-	httpsScheme = "https"
-	socksScheme = "socks"
-	pacScheme   = "pac"
+	directHost    = "DIRECT"
+	directKey     = "direct://DIRECT:80"
+	httpScheme    = "http"
+	httpsScheme   = "https"
+	socksScheme   = "socks"
+	socks4Scheme  = "socks4"
+	socks4aScheme = "socks4a"
+	socks5Scheme  = "socks5"
+	pacScheme     = "pac"
 )
 
 var Direct = Server{Host: directHost, Port: 80, Scheme: "direct"}
@@ -192,7 +195,7 @@ func parseProxyEndpoint(raw string) (Server, error) {
 
 func validProxyScheme(scheme string) bool {
 	switch scheme {
-	case httpScheme, httpsScheme, socksScheme, "socks4", "socks4a", "socks5":
+	case httpScheme, httpsScheme, socksScheme, socks4Scheme, socks4aScheme, socks5Scheme:
 		return true
 	default:
 		return false
@@ -203,7 +206,7 @@ func defaultProxyPort(scheme string) int {
 	switch scheme {
 	case httpsScheme:
 		return 443
-	case socksScheme, "socks4", "socks4a", "socks5":
+	case socksScheme, socks4Scheme, socks4aScheme, socks5Scheme:
 		return 1080
 	default:
 		return 80
