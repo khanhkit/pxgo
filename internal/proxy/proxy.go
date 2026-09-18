@@ -400,6 +400,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			err = tunnelErr
 		}
 		s.clearTransports()
+		s.wmu.Lock()
+		wp := s.w
+		s.w = nil
+		if wp != nil {
+			if closeErr := wp.Close(); closeErr != nil && err == nil {
+				err = fmt.Errorf("close proxy resolver: %w", closeErr)
+			}
+		}
+		s.wmu.Unlock()
 		if s.krb != nil {
 			s.krb.Cleanup()
 		}
@@ -555,13 +564,21 @@ func (s *Server) reloadProxyIfDue() error {
 		return err
 	}
 	s.wmu.Lock()
-	changed := s.w == nil || wp.Mode != s.w.Mode || !equalServers(wp.Servers, s.w.Servers)
+	old := s.w
+	changed := old == nil || wp.Mode != old.Mode || !equalServers(wp.Servers, old.Servers)
 	s.w = wp
 	s.lastReload = time.Now()
+	var closeErr error
+	if old != nil {
+		closeErr = old.Close()
+	}
 	s.wmu.Unlock()
 	if changed {
 		// Drop keep-alive pools only when the routing actually changed.
 		s.clearTransports()
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close previous proxy resolver: %w", closeErr)
 	}
 	return nil
 }
@@ -608,6 +625,15 @@ func (s *Server) currentWproxy() *wproxy.Wproxy {
 	return s.w
 }
 
+func (s *Server) findProxyForURL(rawurl string) ([]wproxy.Server, wproxy.Server, string, error) {
+	s.wmu.RLock()
+	defer s.wmu.RUnlock()
+	if s.w == nil {
+		return nil, wproxy.Server{}, "", errors.New("proxy resolver is not initialized")
+	}
+	return s.w.FindProxyForURL(rawurl)
+}
+
 func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 	req = withInformationalResponseForwarding(req, rw)
 	targetURL := req.URL.String()
@@ -616,7 +642,7 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 		targetURL = scheme + "://" + req.Host + req.URL.RequestURI()
 	}
 	debug.Dprint("HTTP target: " + targetURL)
-	proxies, _, _, err := s.currentWproxy().FindProxyForURL(targetURL)
+	proxies, _, _, err := s.findProxyForURL(targetURL)
 	if err != nil {
 		debug.Dprint("HTTP proxy lookup error: " + err.Error())
 		http.Error(rw, err.Error(), http.StatusBadGateway)
