@@ -76,6 +76,27 @@ human-edited config with explanations.
 | `auth` / `--auth` | empty | Upstream auth selector; empty + reusable credentials uses `ANYSAFE`, while explicit `ANY` includes Basic fallback |
 | `kerberos` / `--kerberos` | `0` | Enable Kerberos ticket management |
 
+## Automatic Upstream Proxy Discovery
+
+When neither `--proxy` nor `--pac` is configured, pxgo resolves one authoritative routing source in this order:
+
+1. On Windows, Internet Options / WinHTTP system proxy state.
+2. Environment proxy variables.
+3. Direct connection when neither source exists.
+
+The selected source is authoritative. If Windows system PAC/WPAD is configured but resolution fails, pxgo returns that error instead of silently falling through to environment variables or DIRECT.
+
+Environment discovery is per target scheme:
+
+- HTTP: `http_proxy` / `HTTP_PROXY`, then `all_proxy` / `ALL_PROXY`.
+- HTTPS: `https_proxy` / `HTTPS_PROXY`, then `all_proxy` / `ALL_PROXY`.
+- Other schemes: `all_proxy` / `ALL_PROXY`.
+- `no_proxy` / `NO_PROXY` supplies bypass rules while environment routing is active.
+
+On Windows, protocol-specific manual mappings such as `http=proxy-a:8080;https=proxy-b:8443` remain protocol-specific. AutoDetect and AutoConfigURL may coexist and are passed together to WinHTTP.
+
+Native system-proxy discovery is currently implemented only on Windows. On macOS/Linux, automatic discovery therefore starts with the environment family above; pxgo does not pretend to consume desktop/system proxy settings it cannot actually read.
+
 ## PAC Semantics
 
 PAC source decoding is explicit. The default remains `utf-8`; `latin1` is an

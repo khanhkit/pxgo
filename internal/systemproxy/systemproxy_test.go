@@ -77,7 +77,7 @@ func TestTCWINPACREG001ResolverReusesBackendUntilClose(t *testing.T) {
 	}
 }
 
-func TestTCRouteREG007ManualProxyMapPreservesPerSchemeSemantics(t *testing.T) {
+func TestTCRouteREG010ManualProxyMapPreservesPerSchemeSemantics(t *testing.T) {
 	got := ParseManualProxyMap("http=proxy-a.example:8080;https=proxy-b.example:8443;socks=socks.example:1080")
 	if got.Default != "" {
 		t.Fatalf("Default = %q, want empty", got.Default)
@@ -96,7 +96,7 @@ func TestTCRouteREG007ManualProxyMapPreservesPerSchemeSemantics(t *testing.T) {
 	}
 }
 
-func TestTCRouteREG008ManualProxyMapKeepsUnqualifiedDefault(t *testing.T) {
+func TestTCRouteREG011ManualProxyMapKeepsUnqualifiedDefault(t *testing.T) {
 	got := ParseManualProxyMap("proxy-default.example:3128")
 	if got.Default != "proxy-default.example:3128" {
 		t.Fatalf("Default = %q", got.Default)
