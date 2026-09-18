@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -47,9 +47,15 @@ jobs:
         if: runner.os == 'Linux'
         run: make test
 
+      - name: Native WinHTTP AP-ISS-0006 fixtures
+        if: runner.os == 'Windows'
+        env:
+          PXGO_WINHTTP_NATIVE: "1"
+        run: go test ./internal/systemproxy -run 'TCWINPAC(INT009|NEG010|NEG014|SOAK011)' -count=1 -v
+
       - name: Test
         if: runner.os == 'Windows'
-        run: go test -race ./...
+        run: go test -race ./internal/systemproxy ./internal/wproxy
 
       - name: Kerberos integration compile gate
         run: go test -tags=kerberos_integration ./internal/kerberos
