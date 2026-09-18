@@ -1,6 +1,7 @@
 package kerberos
 
 import (
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -146,4 +147,49 @@ func managerState(mgr *Manager) (time.Time, time.Time, time.Duration) {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 	return mgr.TicketExpiry, mgr.NextCheck, mgr.Backoff
+}
+
+func TestCleanupRemovesCCacheAfterInFlightRefresh(t *testing.T) {
+	mgr := makeManager()
+	path := t.TempDir() + "/krb5cc_test"
+	mgr.CCacheName = "FILE:" + path
+	started := make(chan struct{})
+	release := make(chan struct{})
+	mgr.KinitWithPasswordFunc = func() bool {
+		close(started)
+		<-release
+		if err := os.WriteFile(path, []byte("ticket"), 0o600); err != nil {
+			t.Errorf("write fake ccache: %v", err)
+		}
+		return true
+	}
+
+	mgr.Check(true)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not start")
+	}
+	mgr.Cleanup()
+	close(release)
+	waitForRefresh(t, mgr, time.Second)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("ccache exists after cleanup + refresh completion: %v", err)
+	}
+}
+
+func TestCheckAfterCleanupDoesNotStartRefresh(t *testing.T) {
+	mgr := makeManager()
+	started := make(chan struct{}, 1)
+	mgr.KinitWithPasswordFunc = func() bool {
+		started <- struct{}{}
+		return true
+	}
+	mgr.Cleanup()
+	mgr.Check(true)
+	select {
+	case <-started:
+		t.Fatal("refresh started after manager cleanup")
+	case <-time.After(50 * time.Millisecond):
+	}
 }
