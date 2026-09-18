@@ -19,6 +19,15 @@ import (
 // unbounded set of distinct proxies over time.
 const maxCachedTransports = 64
 
+type socksDestinationError struct {
+	version int
+	code    byte
+}
+
+func (e *socksDestinationError) Error() string {
+	return fmt.Sprintf("SOCKS%d connect failed with code %d", e.version, e.code)
+}
+
 func (s *Server) httpTransportForProxy(p wproxy.Server) *http.Transport {
 	key := "direct"
 	if p != wproxy.Direct {
@@ -172,7 +181,7 @@ func dialSOCKS5(ctx context.Context, proxyAddr, target string, timeout time.Dura
 		return nil, err
 	}
 	if header[0] != 0x05 || header[1] != 0x00 {
-		return nil, fmt.Errorf("SOCKS5 connect failed with code %d", header[1])
+		return nil, &socksDestinationError{version: 5, code: header[1]}
 	}
 	var skip int
 	switch header[3] {
@@ -253,7 +262,7 @@ func dialSOCKS4(ctx context.Context, proxyAddr, target string, timeout time.Dura
 		return nil, err
 	}
 	if reply[1] != 0x5a {
-		return nil, fmt.Errorf("SOCKS4 connect failed with code %d", reply[1])
+		return nil, &socksDestinationError{version: 4, code: reply[1]}
 	}
 	stopCancel()
 	if err := ctx.Err(); err != nil {

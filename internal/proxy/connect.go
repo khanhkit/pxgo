@@ -15,11 +15,21 @@ import (
 
 	"github.com/pavelsimo/pxgo/internal/config"
 	"github.com/pavelsimo/pxgo/internal/debug"
+	"github.com/pavelsimo/pxgo/internal/supervisor"
 	"github.com/pavelsimo/pxgo/internal/wproxy"
 )
 
 // connectTarget defaults the port to 443 when the CONNECT host has none,
 // including bracketed IPv6 literals like "[::1]".
+type upstreamConnectStatusError struct {
+	StatusCode int
+	Status     string
+}
+
+func (e *upstreamConnectStatusError) Error() string {
+	return "upstream CONNECT failed: " + e.Status
+}
+
 func connectTarget(host string) string {
 	if _, _, err := net.SplitHostPort(host); err != nil {
 		return net.JoinHostPort(strings.Trim(host, "[]"), "443")
@@ -32,6 +42,7 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 	debug.Dprint("CONNECT target: " + target)
 	proxies, err := s.findProxyForURL("https://" + target)
 	if err != nil {
+		s.recoverRuntimeOutcome(supervisor.OutcomeRouteFailure, wproxy.Server{})
 		debug.Dprint("CONNECT proxy lookup error: " + err.Error())
 		http.Error(rw, err.Error(), http.StatusBadGateway)
 		return
@@ -96,7 +107,7 @@ func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingP
 	timeout := time.Duration(s.cfg.SockTimeout * float64(time.Second))
 	dialer := &net.Dialer{Timeout: timeout}
 	var lastErr error
-	for _, p := range proxyCandidates(proxies) {
+	for _, p := range s.orderedProxyCandidates(proxyCandidates(proxies)) {
 		var upstream net.Conn
 		var leftover []byte
 		var err error
@@ -136,12 +147,25 @@ func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingP
 			err = ctx.Err()
 		}
 		if err == nil {
+			s.recordRuntimeOutcome(supervisor.OutcomeSuccess, p)
 			debug.Dprint("CONNECT: upstream connected to " + target)
 			return upstream, leftover, nil
+		}
+
+		kind := classifyProxyTransportOutcome(ctx, p, err)
+		if kind == supervisor.OutcomeAuthExhausted {
+			// Existing CONNECT auth handling already asks the Kerberos owner to
+			// refresh. Record the classification without scheduling a duplicate.
+			s.recordRuntimeOutcome(kind, p)
+		} else {
+			s.recoverRuntimeOutcome(kind, p)
 		}
 		debug.Dprint("CONNECT: attempt failed: " + err.Error())
 		if upstream != nil {
 			_ = upstream.Close()
+		}
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
 		}
 		lastErr = err
 	}
@@ -237,7 +261,7 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target stri
 			onAuthFailure(resp)
 		}
 		_ = resp.Body.Close()
-		return fmt.Errorf("upstream CONNECT failed: %s", resp.Status)
+		return &upstreamConnectStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 	return nil
 }

@@ -84,31 +84,17 @@ func (s *Supervisor) Close() {
 	s.wg.Wait()
 }
 
+// Record updates only Supervisor-owned transient state. It never invokes owner
+// recovery actions, so callers can safely record outcomes that an owner has
+// already handled without duplicating recovery work.
 func (s *Supervisor) Record(outcome Outcome) {
-	now := s.now()
-	var (
-		triggerIdle  bool
-		networkEpoch bool
-	)
+	s.record(outcome)
+}
 
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return
-	}
-
-	switch {
-	case outcome.Kind == OutcomeSuccess:
-		if outcome.Proxy != "" {
-			delete(s.health, outcome.Proxy)
-		}
-	case outcome.Kind.PenalizesCandidate():
-		triggerIdle = s.recordLocalFailureLocked(now, outcome.Proxy)
-		networkEpoch = s.observeCorrelatedFailureLocked(now, outcome.Proxy)
-	case outcome.Kind == OutcomeInternalFailure:
-		s.recordInternalFailureLocked(now)
-	}
-	s.mu.Unlock()
+// Recover records an outcome and schedules the smallest owner-scoped recovery
+// action for failures that have not already been handled by their owner.
+func (s *Supervisor) Recover(outcome Outcome) {
+	triggerIdle, networkEpoch := s.record(outcome)
 
 	switch outcome.Kind {
 	case OutcomeRouteFailure:
@@ -122,6 +108,29 @@ func (s *Supervisor) Record(outcome Outcome) {
 	if networkEpoch {
 		s.triggerNetworkRecovery()
 	}
+}
+
+func (s *Supervisor) record(outcome Outcome) (triggerIdle bool, networkEpoch bool) {
+	now := s.now()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false, false
+	}
+
+	switch {
+	case outcome.Kind == OutcomeSuccess:
+		if outcome.Proxy != "" {
+			delete(s.health, outcome.Proxy)
+		}
+	case outcome.Kind.PenalizesCandidate():
+		triggerIdle = s.recordLocalFailureLocked(now, outcome.Proxy)
+		networkEpoch = s.observeCorrelatedFailureLocked(now, outcome.Proxy)
+	case outcome.Kind == OutcomeInternalFailure:
+		s.recordInternalFailureLocked(now)
+	}
+	return triggerIdle, networkEpoch
 }
 
 func (s *Supervisor) recordInternalFailureLocked(now time.Time) {

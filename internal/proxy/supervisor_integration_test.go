@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
+	"net/http"
 	"reflect"
 	"testing"
 
@@ -51,6 +52,9 @@ func TestTCSUPHTTP016TypedTransportClassification(t *testing.T) {
 	}{
 		{"client cancellation", cancelled, proxyCandidate, errors.New("transport stopped"), supervisor.OutcomeClientCancelled},
 		{"direct destination dns", context.Background(), wproxy.Direct, &net.DNSError{Err: "no such host", Name: "origin.example"}, supervisor.OutcomeDestinationFailure},
+		{"connect policy rejection", context.Background(), proxyCandidate, &upstreamConnectStatusError{StatusCode: http.StatusForbidden, Status: "403 Forbidden"}, supervisor.OutcomeDestinationFailure},
+		{"connect auth exhausted", context.Background(), proxyCandidate, &upstreamConnectStatusError{StatusCode: http.StatusProxyAuthRequired, Status: "407 Proxy Authentication Required"}, supervisor.OutcomeAuthExhausted},
+		{"socks target rejection", context.Background(), proxyCandidate, &socksDestinationError{version: 5, code: 5}, supervisor.OutcomeDestinationFailure},
 		{"proxy dns", context.Background(), proxyCandidate, &net.DNSError{Err: "no such host", Name: "proxy.example"}, supervisor.OutcomeProxyDNSFailure},
 		{"proxy dial", context.Background(), proxyCandidate, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}, supervisor.OutcomeProxyDialFailure},
 		{"proxy cert", context.Background(), proxyCandidate, x509.UnknownAuthorityError{}, supervisor.OutcomeProxyTLSFailure},

@@ -6,11 +6,68 @@ import (
 	"crypto/x509"
 	"errors"
 	"net"
+	"net/http"
 	"strconv"
 
+	"github.com/pavelsimo/pxgo/internal/dnscache"
 	"github.com/pavelsimo/pxgo/internal/supervisor"
 	"github.com/pavelsimo/pxgo/internal/wproxy"
 )
+
+func newRuntimeSupervisor(s *Server) *supervisor.Supervisor {
+	return supervisor.New(supervisor.Owners{
+		RefreshRoute: func(ctx context.Context) error {
+			return s.refreshProxy(ctx)
+		},
+		RefreshAuth: func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			s.reloadKerberos(true)
+			return nil
+		},
+		CloseIdleTransports: func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			s.clearTransports()
+			return nil
+		},
+		ClearNetworkDNS: func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			dnscache.ClearNetworkState()
+			return nil
+		},
+	})
+}
+
+func runtimeOutcome(kind supervisor.OutcomeKind, candidate wproxy.Server) supervisor.Outcome {
+	outcome := supervisor.Outcome{Kind: kind}
+	if candidate.Host != "" || candidate == wproxy.Direct {
+		outcome.Proxy = proxyKeyForSupervisor(candidate)
+	}
+	return outcome
+}
+
+func (s *Server) recordRuntimeOutcome(kind supervisor.OutcomeKind, candidate wproxy.Server) {
+	if s.sup == nil {
+		return
+	}
+	s.sup.Record(runtimeOutcome(kind, candidate))
+}
+
+func (s *Server) recoverRuntimeOutcome(kind supervisor.OutcomeKind, candidate wproxy.Server) {
+	if s.sup == nil {
+		return
+	}
+	s.sup.Recover(runtimeOutcome(kind, candidate))
+}
+
+func (s *Server) orderedProxyCandidates(authoritative []wproxy.Server) []wproxy.Server {
+	return orderProxyCandidates(s.sup, authoritative)
+}
 
 func proxyKeyForSupervisor(server wproxy.Server) supervisor.ProxyKey {
 	if server == wproxy.Direct {
@@ -65,6 +122,17 @@ func classifyProxyTransportOutcome(ctx context.Context, candidate wproxy.Server,
 		return supervisor.OutcomeDestinationFailure
 	}
 
+	var connectStatus *upstreamConnectStatusError
+	if errors.As(err, &connectStatus) {
+		if connectStatus.StatusCode == http.StatusProxyAuthRequired {
+			return supervisor.OutcomeAuthExhausted
+		}
+		return supervisor.OutcomeDestinationFailure
+	}
+	var socksTarget *socksDestinationError
+	if errors.As(err, &socksTarget) {
+		return supervisor.OutcomeDestinationFailure
+	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		return supervisor.OutcomeProxyDNSFailure

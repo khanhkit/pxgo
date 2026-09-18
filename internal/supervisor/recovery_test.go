@@ -77,7 +77,7 @@ func TestTCSUPHOT009RecordDoesNotWaitForRecoveryIO(t *testing.T) {
 			}
 		},
 	})
-	s.Record(Outcome{Kind: OutcomeRouteFailure})
+	s.Recover(Outcome{Kind: OutcomeRouteFailure})
 	start := time.Now()
 	for i := 0; i < 1000; i++ {
 		s.Record(Outcome{Kind: OutcomeDestinationFailure})
@@ -96,10 +96,10 @@ func TestTCSUPOWNER010OutcomesRequestOnlyScopedOwnerActions(t *testing.T) {
 		RefreshAuth:         func(context.Context) error { auth.Add(1); return nil },
 		CloseIdleTransports: func(context.Context) error { idle.Add(1); return nil },
 	})
-	s.Record(Outcome{Kind: OutcomeRouteFailure})
-	s.Record(Outcome{Kind: OutcomeAuthExhausted})
-	s.Record(Outcome{Kind: OutcomeProxyDialFailure, Proxy: "proxy-a"})
-	s.Record(Outcome{Kind: OutcomeProxyDialFailure, Proxy: "proxy-a"})
+	s.Recover(Outcome{Kind: OutcomeRouteFailure})
+	s.Recover(Outcome{Kind: OutcomeAuthExhausted})
+	s.Recover(Outcome{Kind: OutcomeProxyDialFailure, Proxy: "proxy-a"})
+	s.Recover(Outcome{Kind: OutcomeProxyDialFailure, Proxy: "proxy-a"})
 	waitUntil(t, func() bool {
 		return route.Load() == 1 && auth.Load() == 1 && idle.Load() == 1
 	})

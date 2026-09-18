@@ -17,6 +17,7 @@ import (
 	"github.com/pavelsimo/pxgo/internal/config"
 	"github.com/pavelsimo/pxgo/internal/debug"
 	"github.com/pavelsimo/pxgo/internal/kerberos"
+	"github.com/pavelsimo/pxgo/internal/supervisor"
 	"github.com/pavelsimo/pxgo/internal/wproxy"
 )
 
@@ -50,6 +51,7 @@ type Server struct {
 	stateMu    sync.RWMutex
 	clients    sync.Map // remoteAddr string -> *clientState
 	krb        *kerberos.Manager
+	sup        *supervisor.Supervisor
 	closed     chan struct{}
 	once       sync.Once
 	active     int64
@@ -115,6 +117,7 @@ func New(cfg config.Config) (*Server, error) {
 		tunnels:    make(map[*managedTunnel]struct{}),
 		tunnelZero: closedSignal(),
 	}
+	s.sup = newRuntimeSupervisor(s)
 	s.clientAuthList = clientAuthMethods(cfg.ClientAuth)
 	if cfg.Allow != "" {
 		// Already validated by validateAllow above.
@@ -399,6 +402,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if tunnelErr := waitTunnelDrain(ctx, tunnelsDone); tunnelErr != nil && err == nil {
 			err = tunnelErr
 		}
+		if s.sup != nil {
+			s.sup.Close()
+		}
 		s.clearTransports()
 		s.wmu.Lock()
 		wp := s.w
@@ -535,11 +541,14 @@ func (s *Server) maintenanceLoop() {
 	defer t.Stop()
 	for {
 		select {
-		case <-t.C:
+		case now := <-t.C:
 			if err := s.reloadProxyIfDue(); err != nil {
 				debug.Dprintf("proxy reload failed, keeping previous: %v", err)
 			}
 			s.reloadKerberos(false)
+			if s.sup != nil {
+				s.sup.Tick(now)
+			}
 		case <-s.closed:
 			return
 		}
@@ -547,20 +556,35 @@ func (s *Server) maintenanceLoop() {
 }
 
 func (s *Server) reloadProxyIfDue() error {
+	return s.reloadProxy(context.Background(), false)
+}
+
+func (s *Server) refreshProxy(ctx context.Context) error {
+	return s.reloadProxy(ctx, true)
+}
+
+func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 	if s.cfg.ProxyReload <= 0 {
 		return nil
 	}
 	s.wmu.RLock()
 	reloadable := s.proxyReloadableLocked()
-	due := time.Since(s.lastReload) >= time.Duration(s.cfg.ProxyReload)*time.Second
+	due := force || time.Since(s.lastReload) >= time.Duration(s.cfg.ProxyReload)*time.Second
 	s.wmu.RUnlock()
 	if !reloadable || !due {
 		return nil
 	}
-	// buildWproxy may do network I/O (PAC download); keep it out of the lock
-	// so in-flight requests are never stalled by a slow reload.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// buildWproxy may do bounded network I/O (PAC/system discovery); keep it
+	// outside the lock so request-path routing is never stalled by recovery.
 	wp, err := buildWproxy(s.cfg)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = wp.Close()
 		return err
 	}
 	s.wmu.Lock()
@@ -574,7 +598,7 @@ func (s *Server) reloadProxyIfDue() error {
 	}
 	s.wmu.Unlock()
 	if changed {
-		// Drop keep-alive pools only when the routing actually changed.
+		// Drop keep-alive pools only when routing endpoints actually changed.
 		s.clearTransports()
 	}
 	if closeErr != nil {
@@ -645,6 +669,7 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 	debug.Dprint("HTTP target: " + targetURL)
 	proxies, err := s.findProxyForURL(targetURL)
 	if err != nil {
+		s.recoverRuntimeOutcome(supervisor.OutcomeRouteFailure, wproxy.Server{})
 		debug.Dprint("HTTP proxy lookup error: " + err.Error())
 		http.Error(rw, err.Error(), http.StatusBadGateway)
 		return
@@ -728,7 +753,7 @@ func (s *Server) needsReplayableBody(req *http.Request, proxies []wproxy.Server)
 }
 
 func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, body *replayableBody, targetURL, incomingProxyAuth string, proxies []wproxy.Server) (*http.Response, error) {
-	candidates := proxyCandidates(proxies)
+	candidates := s.orderedProxyCandidates(proxyCandidates(proxies))
 	var lastErr error
 	for _, candidate := range candidates {
 		if candidate == wproxy.Direct {
@@ -740,6 +765,10 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 		usesUpstreamProxy := candidate != wproxy.Direct
 		outReq, err := s.newOutboundRequest(req, u, body, "")
 		if err != nil {
+			if req.Context().Err() != nil {
+				s.recordRuntimeOutcome(supervisor.OutcomeClientCancelled, candidate)
+				return nil, req.Context().Err()
+			}
 			lastErr = err
 			continue
 		}
@@ -750,6 +779,8 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 		}
 		resp, err := transport.RoundTrip(outReq)
 		if err != nil {
+			kind := classifyProxyTransportOutcome(req.Context(), candidate, err)
+			s.recoverRuntimeOutcome(kind, candidate)
 			if req.Context().Err() != nil {
 				return nil, req.Context().Err()
 			}
@@ -757,10 +788,21 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 			lastErr = err
 			continue
 		}
+
+		// Any syntactically valid HTTP response proves the transport path itself
+		// is usable, including origin 4xx/5xx and upstream 407 responses.
+		s.recordRuntimeOutcome(supervisor.OutcomeSuccess, candidate)
+
 		if usesUpstreamProxy && resp.StatusCode == http.StatusProxyAuthRequired {
 			resp, err = s.retryHTTPProxyAuth(transport, req, u, body, targetURL, incomingProxyAuth, resp)
 			if err != nil {
+				s.recoverRuntimeOutcome(classifyProxyTransportOutcome(req.Context(), candidate, err), candidate)
 				return nil, err
+			}
+			if resp != nil && resp.StatusCode == http.StatusProxyAuthRequired {
+				s.recordRuntimeOutcome(supervisor.OutcomeAuthExhausted, candidate)
+			} else {
+				s.recordRuntimeOutcome(supervisor.OutcomeSuccess, candidate)
 			}
 		}
 		return resp, nil
