@@ -7,37 +7,173 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
+  verify-exact-sha:
+    name: Verify exact tagged SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact event SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify tag points to event SHA
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-list -n 1 "$TAG_NAME")" = "$EXPECTED_SHA"
+
+      - name: Verify module metadata is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Install deterministic verification tools
+        run: |
+          go install mvdan.cc/gofumpt@v0.7.0
+          go install golang.org/x/tools/cmd/goimports@v0.29.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+
+      - name: Check formatting
+        run: make fmt-check
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
+        with:
+          version: v2.12.2
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+      - name: Fuzz routing parsers
+        run: |
+          go test ./internal/wproxy -run '^$' -fuzz '^FuzzParseProxyCanonical$' -fuzztime=1000x
+          go test ./internal/wproxy -run '^$' -fuzz '^FuzzParseNoProxyCanonical$' -fuzztime=1000x
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Vulnerability scan
+        run: govulncheck ./...
+
+      - name: Build
+        run: make build
+
+      - name: Verify release contract
+        run: ./scripts/verify-release-contract.sh
+
+  verify-windows-native:
+    name: Verify native Windows SSPI exact tagged SHA
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run native Windows SSPI integration
+        shell: pwsh
+        env:
+          PXGO_SSPI_NATIVE: "1"
+        run: |
+          $listed = go test ./internal/proxy -list 'TCSSPIWIN(INT008|SOAK009)'
+          if ($listed -notmatch 'TestTCSSPIWININT008' -or $listed -notmatch 'TestTCSSPIWINSOAK009') {
+            throw 'exact tagged SHA is missing required native SSPI fixtures'
+          }
+          go test ./internal/proxy -run 'TCSSPIWIN(INT008|SOAK009)' -count=1 -v
+
+  windows-domain-sspi:
+    name: Protected Windows AD/SSPI exact tagged SHA
+    runs-on: [self-hosted, windows, x64, pxgo-ad]
+    environment: pxgo-ad
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run protected real-AD Kerberos verification
+        shell: pwsh
+        env:
+          PXGO_SSPI_AD: "1"
+          PXGO_SSPI_AD_PROXY_HOST: ${{ vars.PXGO_SSPI_AD_PROXY_HOST }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PXGO_SSPI_AD_PROXY_HOST)) {
+            throw 'pxgo-ad environment must define PXGO_SSPI_AD_PROXY_HOST'
+          }
+          $listed = go test ./internal/proxy -list 'TCSSPIWINAD010'
+          if ($listed -notmatch 'TestTCSSPIWINAD010') {
+            throw 'exact tagged SHA is missing required real-AD Kerberos testcase TCSSPIWINAD010'
+          }
+          go test ./internal/proxy -run 'TCSSPIWINAD010' -count=1 -v
+
   goreleaser:
     name: GoReleaser
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: [verify-exact-sha, verify-windows-native, windows-domain-sspi]
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          syft-version: v1.33.0
 
       - name: Get tag
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
-          version: latest
+          version: v2.18.2
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+
+      - name: Attest released artifacts
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: dist/checksums.txt
 
   update-homebrew-tap:
     name: Update Homebrew Tap
@@ -53,7 +189,7 @@ jobs:
           VERSION="${TAG#v}"
           BASE_URL="https://github.com/pavelsimo/pxgo/releases/download/${TAG}"
 
-          curl -sL "${BASE_URL}/checksums.txt" -o /tmp/checksums.txt
+          curl --fail --silent --show-error --location "${BASE_URL}/checksums.txt" -o /tmp/checksums.txt
 
           SHA_DARWIN_ARM64=$(grep "pxgo_darwin_arm64.tar.gz" /tmp/checksums.txt | awk '{print $1}')
           SHA_DARWIN_AMD64=$(grep "pxgo_darwin_amd64.tar.gz" /tmp/checksums.txt | awk '{print $1}')
