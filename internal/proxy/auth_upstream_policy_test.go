@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bufio"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -154,4 +156,85 @@ func upstreamPolicyConfig(auth string) config.Config {
 	cfg.Username = "reusable-user"
 	cfg.Password = "reusable-secret"
 	return cfg
+}
+
+func TestDefaultAuthConnectNeverSendsBasicCredentials(t *testing.T) {
+	var mu sync.Mutex
+	var authHeaders []string
+	parent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			t.Fatalf("method=%s want CONNECT", r.Method)
+		}
+		mu.Lock()
+		authHeaders = append(authHeaders, r.Header.Get("Proxy-Authorization"))
+		mu.Unlock()
+		w.Header().Set("Proxy-Authenticate", `Basic realm="parent"`)
+		http.Error(w, "auth required", http.StatusProxyAuthRequired)
+	}))
+	defer parent.Close()
+	parentURL, err := url.Parse(parent.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.Server = parentURL.Host
+	cfg.Username = "reusable-user"
+	cfg.Password = "reusable-secret"
+	child := startTestProxy(t, cfg)
+
+	conn, err := net.Dial("tcp", child.ListenAddr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprint(conn, "CONNECT origin.example.test:443 HTTP/1.1\r\nHost: origin.example.test:443\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status=%s want 502 after parent Basic-only 407", resp.Status)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for i, auth := range authHeaders {
+		if auth != "" {
+			t.Fatalf("CONNECT attempt %d leaked default reusable credentials: %q", i+1, auth)
+		}
+	}
+}
+
+func FuzzUpstreamChallengePolicy(f *testing.F) {
+	for _, seed := range []string{
+		`Basic realm="parent"`,
+		`Digest realm="parent", nonce="abc", qop="auth", algorithm=MD5`,
+		`Digest realm="a,b", nonce="abc", qop="auth", Basic realm="fallback"`,
+		`Digest realm="unterminated, Basic realm="fallback"`,
+		`digest realm="parent", nonce="abc", qop="auth"`,
+		`Negotiate, NTLM, Basic realm="parent"`,
+		`Digest realm="parent", nonce="abc", qop="auth-int", algorithm=SHA-256`,
+	} {
+		f.Add(seed)
+	}
+	cfg := upstreamPolicyConfig("")
+	f.Fuzz(func(t *testing.T, challenge string) {
+		if len(challenge) > 64<<10 {
+			t.Skip()
+		}
+		parts := splitProxyAuthenticateValues(challenge)
+		for _, part := range parts {
+			if strings.TrimSpace(part) == "" {
+				t.Fatal("parser returned empty challenge part")
+			}
+		}
+		got := UpstreamProxyAuthHeader(cfg, http.MethodGet, "http://origin.example.test/resource", []string{challenge})
+		if strings.HasPrefix(strings.ToLower(got), "basic ") {
+			t.Fatalf("default reusable credentials downgraded to Basic for challenge %q", challenge)
+		}
+	})
 }
