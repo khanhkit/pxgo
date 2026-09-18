@@ -612,7 +612,11 @@ func (w *Wproxy) FindProxyForURL(rawurl string) ([]Server, Server, string, error
 		if err != nil {
 			return nil, netloc, path, fmt.Errorf("evaluate configured PAC: %w", err)
 		}
-		return parseProxyOrDirect(out), netloc, path, nil
+		servers, err := ParseProxy(out)
+		if err != nil {
+			return nil, netloc, path, fmt.Errorf("parse configured PAC result: %w", err)
+		}
+		return servers, netloc, path, nil
 	}
 	if w.Mode == ModeAuto || w.Mode == ModePAC {
 		cfg := systemproxy.Config{AutoDetect: w.Mode == ModeAuto, IsPAC: w.Mode == ModePAC}
@@ -629,17 +633,16 @@ func (w *Wproxy) FindProxyForURL(rawurl string) ([]Server, Server, string, error
 		if strings.TrimSpace(out) == "" {
 			return nil, netloc, path, errors.New("system proxy resolver returned empty result")
 		}
-		return parseProxyOrDirect(out), netloc, path, nil
+		if err := pac.ValidateCanonicalResult(out); err != nil {
+			return nil, netloc, path, fmt.Errorf("validate system PAC result: %w", err)
+		}
+		servers, err := ParseProxy(out)
+		if err != nil {
+			return nil, netloc, path, fmt.Errorf("parse system PAC result: %w", err)
+		}
+		return servers, netloc, path, nil
 	}
 	return w.Servers, netloc, path, nil
-}
-
-func parseProxyOrDirect(proxy string) []Server {
-	servers, err := ParseProxy(proxy)
-	if err != nil {
-		return []Server{Direct}
-	}
-	return servers
 }
 
 func (w *Wproxy) isNoProxy(netloc Server) bool {

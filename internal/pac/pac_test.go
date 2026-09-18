@@ -92,14 +92,17 @@ func TestPacReloadAfterCloseUsesUpdatedFile(t *testing.T) {
 	}
 }
 
-func TestPacMalformedReturnPreservedForCallerParsing(t *testing.T) {
+func TestPacMalformedReturnFailsExplicitAPIAndLegacyFallsBackDirect(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "malformed.pac")
 	if err := os.WriteFile(path, []byte(`function FindProxyForURL(url, host) { return "NOT A PROXY"; }`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	p := New(path, "utf-8")
-	if got := p.FindProxyForURL("http://example.com", "example.com"); got != "NOT A PROXY" {
-		t.Fatalf("PAC layer should preserve malformed return for caller parsing, got %q", got)
+	if _, err := p.FindProxyForURLWithError("http://example.com", "example.com"); err == nil {
+		t.Fatal("explicit PAC API should reject malformed routing output")
+	}
+	if got := p.FindProxyForURL("http://example.com", "example.com"); got != "DIRECT" {
+		t.Fatalf("legacy fail-open API should fall back DIRECT, got %q", got)
 	}
 }
 

@@ -171,7 +171,7 @@ func TestWproxyNoProxyStarBypassesAllHosts(t *testing.T) {
 	}
 }
 
-func TestWproxyConfigPACMalformedReturnFallsBackDirect(t *testing.T) {
+func TestWproxyConfigPACMalformedReturnFailsExplicitly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad-return.pac")
 	if err := os.WriteFile(path, []byte(`function FindProxyForURL(url, host) { return "NOT A PROXY"; }`), 0o644); err != nil {
 		t.Fatal(err)
@@ -180,12 +180,8 @@ func TestWproxyConfigPACMalformedReturnFallsBackDirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	servers, _, _, err := w.FindProxyForURL("http://example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(servers, []Server{Direct}) {
-		t.Fatalf("malformed PAC return should fall back direct, got %#v", servers)
+	if _, _, _, err := w.FindProxyForURL("http://example.com"); err == nil {
+		t.Fatal("malformed configured PAC result should fail explicitly")
 	}
 }
 
