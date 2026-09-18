@@ -298,3 +298,29 @@ func TestGetNetlocDefaultPorts(t *testing.T) {
 		}
 	}
 }
+
+// TC-PAC-REG-001
+func TestWproxyConfigPACIsPreloadedBeforeReturn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preload.pac")
+	if err := os.WriteFile(path, []byte(`function FindProxyForURL(url, host) { return "PROXY preloaded.proxy:8080"; }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := New(ModeConfigPAC, []Server{{Host: path, Scheme: "pac"}}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.PAC == nil || !w.PAC.Loaded() {
+		t.Fatal("config PAC must be fetched/compiled before Wproxy becomes active")
+	}
+}
+
+// TC-PAC-REG-002
+func TestWproxyConfigPACRejectsBrokenGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "broken.pac")
+	if err := os.WriteFile(path, []byte(`this is not javascript {{{`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(ModeConfigPAC, []Server{{Host: path, Scheme: "pac"}}, "", ""); err == nil {
+		t.Fatal("broken configured PAC must prevent activation")
+	}
+}

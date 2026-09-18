@@ -160,7 +160,7 @@ func buildKerberosManager(cfg config.Config) (*kerberos.Manager, error) {
 
 func (s *Server) ListenAddr() string {
 	hosts := s.listenHosts()
-	return fmt.Sprintf("%s:%d", hosts[0], s.Port())
+	return net.JoinHostPort(hosts[0], fmt.Sprintf("%d", s.Port()))
 }
 
 func (s *Server) ListenAddrs() []string {
@@ -168,7 +168,7 @@ func (s *Server) ListenAddrs() []string {
 	addrs := make([]string, 0, len(hosts))
 	port := s.Port()
 	for _, host := range hosts {
-		addrs = append(addrs, fmt.Sprintf("%s:%d", host, port))
+		addrs = append(addrs, net.JoinHostPort(host, fmt.Sprintf("%d", port)))
 	}
 	return addrs
 }
@@ -199,7 +199,7 @@ func (s *Server) Start() error {
 	port := s.cfg.Port
 	var listeners []net.Listener
 	for _, host := range s.listenHosts() {
-		addr := fmt.Sprintf("%s:%d", host, port)
+		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			for _, opened := range listeners {

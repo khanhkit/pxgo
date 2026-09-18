@@ -2,6 +2,7 @@ package pac
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -346,5 +347,110 @@ func TestPacFailedLoadIsNotRetriedOnEveryRequest(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&requests); got != 2 {
 		t.Fatalf("fetch count after Close=%d, want 2", got)
+	}
+}
+
+// TC-PAC-SEC-003
+func TestPacRemoteRedirectIsRejected(t *testing.T) {
+	var redirected atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirected.Add(1)
+		_, _ = fmt.Fprint(w, simplePAC)
+	}))
+	defer target.Close()
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	p := New(source.URL, "utf-8")
+	if _, err := p.readPACData(); err == nil {
+		t.Fatal("redirected PAC fetch should fail")
+	}
+	if got := redirected.Load(); got != 0 {
+		t.Fatalf("PAC fetch followed redirect %d time(s), want 0", got)
+	}
+}
+
+// TC-PAC-SEC-004
+func TestPacRemoteBodyHasHardLimit(t *testing.T) {
+	const oversized = (4 << 20) + 1
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(oversized))
+		chunk := strings.Repeat("x", 64<<10)
+		remaining := oversized
+		for remaining > 0 {
+			n := len(chunk)
+			if n > remaining {
+				n = remaining
+			}
+			_, _ = io.WriteString(w, chunk[:n])
+			remaining -= n
+		}
+	}))
+	defer srv.Close()
+
+	p := New(srv.URL, "utf-8")
+	data, err := p.readPACData()
+	if err == nil {
+		t.Fatalf("oversized PAC body accepted (%d bytes)", len(data))
+	}
+}
+
+// TC-PAC-SEC-005
+func TestPacFetchDoesNotUseEnvironmentProxy(t *testing.T) {
+	var proxyHits atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHits.Add(1)
+		_, _ = fmt.Fprint(w, simplePAC)
+	}))
+	defer proxy.Close()
+
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("http_proxy", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+
+	p := New("http://pac.invalid/proxy.pac", "utf-8")
+	_, _ = p.readPACData()
+	if got := proxyHits.Load(); got != 0 {
+		t.Fatalf("PAC bootstrap fetch used environment proxy %d time(s), want direct bootstrap transport", got)
+	}
+}
+
+// TC-PAC-REL-006
+func TestPacFindProxyExecutionIsBounded(t *testing.T) {
+	oldTimeout := pacExecTimeout
+	pacExecTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { pacExecTimeout = oldTimeout })
+
+	path := filepath.Join(t.TempDir(), "loop.pac")
+	if err := os.WriteFile(path, []byte(`function FindProxyForURL(url, host) { while (true) {} }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := New(path, "utf-8")
+	start := time.Now()
+	_ = p.FindProxyForURL("http://example.com", "example.com")
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("PAC execution took %s, want bounded execution", elapsed)
+	}
+}
+
+// TC-PAC-REL-007
+func TestPacTopLevelExecutionIsBounded(t *testing.T) {
+	oldTimeout := pacExecTimeout
+	pacExecTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { pacExecTimeout = oldTimeout })
+
+	path := filepath.Join(t.TempDir(), "top-level-loop.pac")
+	if err := os.WriteFile(path, []byte(`while (true) {}; function FindProxyForURL(url, host) { return "DIRECT"; }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := New(path, "utf-8")
+	start := time.Now()
+	_ = p.FindProxyForURL("http://example.com", "example.com")
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("PAC top-level execution took %s, want bounded execution", elapsed)
 	}
 }
