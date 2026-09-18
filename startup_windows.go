@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 
+	"github.com/pavelsimo/pxgo/internal/winstartup"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -17,13 +18,13 @@ func installStartup(cmd string, force bool) error {
 	}
 	defer key.Close()
 	if !force {
-		if _, _, err := key.GetStringValue("Px"); err == nil {
+		if _, _, err := key.GetStringValue(winstartup.RegistryValueName); err == nil {
 			return nil
 		} else if !errors.Is(err, registry.ErrNotExist) {
 			return err
 		}
 	}
-	return key.SetExpandStringValue("Px", cmd)
+	return key.SetStringValue(winstartup.RegistryValueName, cmd)
 }
 
 func uninstallStartup() error {
@@ -32,10 +33,10 @@ func uninstallStartup() error {
 		return err
 	}
 	defer key.Close()
-	if _, _, err := key.GetStringValue("Px"); errors.Is(err, registry.ErrNotExist) {
+	if _, _, err := key.GetStringValue(winstartup.RegistryValueName); errors.Is(err, registry.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return err
 	}
-	return key.DeleteValue("Px")
+	return key.DeleteValue(winstartup.RegistryValueName)
 }

@@ -5,33 +5,73 @@ import (
 	"strings"
 )
 
+const RegistryValueName = "PxGo"
+
 type FileExistsFunc func(path string) bool
 
-func BuildRunCommand(scriptCmd, pxini string, exists FileExistsFunc) (string, error) {
-	cmd := scriptCmd
-	dir, base, sep := splitExecutablePath(cmd)
-	if strings.EqualFold(base, "pxgo") || strings.EqualFold(base, "pxgo.exe") {
-		candidate := dir + sep + "pxgow.exe"
-		if exists != nil && !exists(candidate) {
-			return "", fmt.Errorf("cannot find %s", candidate)
-		}
-		cmd = candidate
+func BuildRunCommand(executable, pxini string, exists FileExistsFunc) (string, error) {
+	if exists == nil {
+		return "", fmt.Errorf("startup path validation is required")
 	}
-	if strings.Contains(cmd, " ") {
-		cmd = `"` + cmd + `"`
+	if err := validateStartupPath("executable", executable); err != nil {
+		return "", err
 	}
-	if strings.Contains(pxini, " ") {
-		cmd += ` "--config=` + pxini + `"`
-	} else {
-		cmd += ` --config=` + pxini
+	if err := validateStartupPath("config", pxini); err != nil {
+		return "", err
 	}
-	return cmd, nil
+	if !exists(executable) {
+		return "", fmt.Errorf("cannot find startup executable %s", executable)
+	}
+	if !exists(pxini) {
+		return "", fmt.Errorf("cannot find startup config %s", pxini)
+	}
+	return quoteWindowsArg(executable) + " " + quoteWindowsArg("--config="+pxini), nil
 }
 
-func splitExecutablePath(path string) (dir, base, sep string) {
-	idx := strings.LastIndexAny(path, `\/`)
-	if idx < 0 {
-		return "", path, ""
+func validateStartupPath(kind, value string) error {
+	switch {
+	case value == "":
+		return fmt.Errorf("empty startup %s path", kind)
+	case strings.ContainsRune(value, '\x00'):
+		return fmt.Errorf("startup %s path contains NUL", kind)
+	default:
+		return nil
 	}
-	return path[:idx], path[idx+1:], path[idx : idx+1]
+}
+
+// quoteWindowsArg encodes one Windows command-line argument using the quoting
+// rules consumed by CommandLineToArgvW/Go's os/exec: backslashes before quotes
+// and trailing backslashes inside quotes are doubled. Always quoting keeps the
+// registry value deterministic and prevents whitespace/metacharacters from
+// changing argument boundaries.
+func quoteWindowsArg(arg string) string {
+	var b strings.Builder
+	b.Grow(len(arg) + 2)
+	b.WriteByte('"')
+
+	backslashes := 0
+	flushBackslashes := func(n int) {
+		for range n {
+			b.WriteByte('\\')
+		}
+	}
+
+	for _, r := range arg {
+		if r == '\\' {
+			backslashes++
+			continue
+		}
+		if r == '"' {
+			flushBackslashes(backslashes*2 + 1)
+			b.WriteByte('"')
+			backslashes = 0
+			continue
+		}
+		flushBackslashes(backslashes)
+		backslashes = 0
+		b.WriteRune(r)
+	}
+	flushBackslashes(backslashes * 2)
+	b.WriteByte('"')
+	return b.String()
 }
