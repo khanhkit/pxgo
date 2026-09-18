@@ -543,7 +543,7 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 			continue
 		}
 		if usesUpstreamProxy && resp.StatusCode == http.StatusProxyAuthRequired {
-			resp, err = s.retryHTTPProxyAuth(transport, req, u, body, targetURL, incomingProxyAuth, resp)
+			resp, err = s.retryHTTPProxyAuth(transport, req, u, body, targetURL, incomingProxyAuth, candidate.Host, resp)
 			if err != nil {
 				return nil, err
 			}

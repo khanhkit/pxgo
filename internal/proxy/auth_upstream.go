@@ -14,7 +14,7 @@ import (
 	"github.com/pavelsimo/pxgo/internal/debug"
 )
 
-func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth string, resp *http.Response) (*http.Response, error) {
+func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, resp *http.Response) (retResp *http.Response, retErr error) {
 	if body == nil && req.Body != nil && req.Body != http.NoBody {
 		// The body was streamed and cannot be replayed; pass the 407 through.
 		s.forceKerberosReloadForUpstreamAuth(resp)
@@ -22,6 +22,22 @@ func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request
 	}
 	var session authSession
 	var pinned *http.Transport
+	defer func() {
+		if session == nil {
+			return
+		}
+		if err := session.Close(); err != nil && retErr == nil {
+			if retResp != nil && retResp.Body != nil {
+				_ = retResp.Body.Close()
+				retResp = nil
+			}
+			if pinned != nil {
+				pinned.CloseIdleConnections()
+			}
+			retErr = fmt.Errorf("close SSPI session: %w", err)
+		}
+	}()
+
 	// finish releases the pinned connection once the caller is done with the
 	// final response body; closing it earlier would break the response.
 	finish := func(r *http.Response) *http.Response {
@@ -30,6 +46,16 @@ func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request
 		}
 		return r
 	}
+	failSSPI := func(err error) (*http.Response, error) {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		if pinned != nil {
+			pinned.CloseIdleConnections()
+		}
+		return nil, err
+	}
+
 	for attempts := 0; attempts < 3 && resp.StatusCode == http.StatusProxyAuthRequired; attempts++ {
 		debug.Dprintf("HTTP proxy auth challenge (attempt %d): %s", attempts+1, targetURL)
 		challenge := selectProxyAuthenticateChallenge(s.cfg.Auth, resp.Header.Values("Proxy-Authenticate"))
@@ -41,13 +67,21 @@ func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request
 			transport = pinned
 		}
 		var auth string
+		var err error
 		switch {
 		case session != nil:
-			auth, _ = sspiSessionAuth(session, challenge)
-		case isWindowsSSPICandidate(s.cfg, challenge):
-			if sess, err := newSSPISession(); err == nil {
-				session = sess
-				auth, _ = session.Negotiate()
+			auth, err = sspiSessionAuth(session, challenge)
+			if err != nil {
+				return failSSPI(fmt.Errorf("continue SSPI proxy authentication: %w", err))
+			}
+		case sspiSessionCandidate(s.cfg, challenge):
+			session, err = sspiSessionFactory(challenge, proxyHost)
+			if err != nil {
+				return failSSPI(fmt.Errorf("start SSPI proxy authentication: %w", err))
+			}
+			auth, err = session.Negotiate()
+			if err != nil {
+				return failSSPI(fmt.Errorf("start SSPI proxy negotiation: %w", err))
 			}
 		default:
 			auth = upstreamProxyAuthHeader(s.cfg, req.Method, targetURL, challenge, passthroughAuth)
