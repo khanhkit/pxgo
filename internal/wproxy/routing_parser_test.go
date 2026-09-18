@@ -149,10 +149,13 @@ func TestGetNetlocIPv6Authority(t *testing.T) {
 }
 
 func TestNewRejectsMalformedEnvNoProxy(t *testing.T) {
-	t.Setenv("http_proxy", "proxy.example.com:8080")
+	// Set alternate-case aliases first. Windows environment keys are
+	// case-insensitive, so setting the empty alias second would erase the
+	// malformed value this test is meant to exercise.
 	t.Setenv("HTTP_PROXY", "")
-	t.Setenv("no_proxy", "10.0.0.0/999")
+	t.Setenv("http_proxy", "proxy.example.com:8080")
 	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "10.0.0.0/999")
 	if _, err := New(ModeNone, nil, "", ""); err == nil {
 		t.Fatal("expected malformed environment no_proxy to fail")
 	}
