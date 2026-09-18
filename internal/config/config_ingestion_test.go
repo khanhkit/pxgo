@@ -105,6 +105,20 @@ func TestAPISS0009RecordsEffectiveSourceProvenance(t *testing.T) {
 	}
 }
 
+func TestAPISS0009ReadINIAcceptsSemicolonComments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pxgo.ini")
+	if err := os.WriteFile(path, []byte("[proxy]\n; documented comment\nport = 4141\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ReadINI(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Port != 4141 {
+		t.Fatalf("port=%d", cfg.Port)
+	}
+}
+
 func TestAPISS0009ReadINIAcceptsBoundedLongLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pxgo.ini")
 	value := strings.Repeat("x", 70<<10)

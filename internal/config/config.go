@@ -1070,7 +1070,7 @@ func ReadINI(path string) (Config, error) {
 	for scanner.Scan() {
 		lineNo++
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "[") {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "[") {
 			continue
 		}
 		k, v, ok := strings.Cut(line, "=")
