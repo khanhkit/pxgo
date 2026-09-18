@@ -1794,6 +1794,47 @@ func TestProxyReloadRefreshesHTTPPACURL(t *testing.T) {
 	}
 }
 
+// TC-PAC-REG-008
+func TestProxyReloadKeepsLastGoodPACOnRefreshFailure(t *testing.T) {
+	for _, key := range []string{"http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"} {
+		t.Setenv(key, "")
+	}
+	var pacBody atomic.Value
+	pacBody.Store(`function FindProxyForURL(url, host) { return "PROXY stable.proxy:8080"; }`)
+	pacSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, pacBody.Load().(string))
+	}))
+	defer pacSrv.Close()
+
+	cfg := config.Default()
+	cfg.PAC = pacSrv.URL
+	cfg.ProxyReload = 1
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _, _, err := s.currentWproxy().FindProxyForURL("http://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 || before[0].Host != "stable.proxy" {
+		t.Fatalf("initial PAC route=%#v", before)
+	}
+
+	pacBody.Store(`this is not javascript {{{`)
+	s.lastReload = time.Now().Add(-2 * time.Second)
+	if err := s.reloadProxyIfDue(); err == nil {
+		t.Fatal("broken PAC refresh must report an error")
+	}
+	after, _, _, err := s.currentWproxy().FindProxyForURL("http://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0].Host != "stable.proxy" {
+		t.Fatalf("failed refresh replaced last-good PAC: %#v", after)
+	}
+}
+
 func TestAllowRestrictsClientAddress(t *testing.T) {
 	cfg := config.Default()
 	cfg.Allow = "127.0.*.*"

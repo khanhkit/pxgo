@@ -251,6 +251,9 @@ func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, erro
 	w := &Wproxy{Mode: mode, Servers: servers, NoProxy: np, NoProxyHosts: hosts}
 	if mode == ModeConfigPAC && len(servers) > 0 {
 		w.PAC = pac.New(servers[0].Host, pacEncoding)
+		if err := w.PAC.Load(); err != nil {
+			return nil, fmt.Errorf("load configured PAC: %w", err)
+		}
 	}
 	if mode == ModeNone {
 		if env := firstEnv("http_proxy", "HTTP_PROXY"); env != "" {
@@ -378,7 +381,10 @@ func (w *Wproxy) FindProxyForURL(rawurl string) ([]Server, Server, string, error
 		return []Server{Direct}, netloc, path, nil
 	}
 	if w.Mode == ModeConfigPAC && w.PAC != nil {
-		out := w.PAC.FindProxyForURL(rawurl, netloc.Host)
+		out, err := w.PAC.FindProxyForURLWithError(rawurl, netloc.Host)
+		if err != nil {
+			return nil, netloc, path, fmt.Errorf("evaluate configured PAC: %w", err)
+		}
 		return parseProxyOrDirect(out), netloc, path, nil
 	}
 	if w.Mode == ModeAuto || w.Mode == ModePAC {
