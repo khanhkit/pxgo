@@ -625,13 +625,14 @@ func (s *Server) currentWproxy() *wproxy.Wproxy {
 	return s.w
 }
 
-func (s *Server) findProxyForURL(rawurl string) ([]wproxy.Server, wproxy.Server, string, error) {
+func (s *Server) findProxyForURL(rawurl string) ([]wproxy.Server, error) {
 	s.wmu.RLock()
 	defer s.wmu.RUnlock()
 	if s.w == nil {
-		return nil, wproxy.Server{}, "", errors.New("proxy resolver is not initialized")
+		return nil, errors.New("proxy resolver is not initialized")
 	}
-	return s.w.FindProxyForURL(rawurl)
+	proxies, _, _, err := s.w.FindProxyForURL(rawurl)
+	return proxies, err
 }
 
 func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
@@ -642,7 +643,7 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 		targetURL = scheme + "://" + req.Host + req.URL.RequestURI()
 	}
 	debug.Dprint("HTTP target: " + targetURL)
-	proxies, _, _, err := s.findProxyForURL(targetURL)
+	proxies, err := s.findProxyForURL(targetURL)
 	if err != nil {
 		debug.Dprint("HTTP proxy lookup error: " + err.Error())
 		http.Error(rw, err.Error(), http.StatusBadGateway)

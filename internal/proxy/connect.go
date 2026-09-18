@@ -30,7 +30,7 @@ func connectTarget(host string) string {
 func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 	target := connectTarget(req.Host)
 	debug.Dprint("CONNECT target: " + target)
-	proxies, _, _, err := s.findProxyForURL("https://" + target)
+	proxies, err := s.findProxyForURL("https://" + target)
 	if err != nil {
 		debug.Dprint("CONNECT proxy lookup error: " + err.Error())
 		http.Error(rw, err.Error(), http.StatusBadGateway)
