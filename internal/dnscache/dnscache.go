@@ -23,53 +23,119 @@ type entry struct {
 	expires time.Time
 }
 
+type lookupCall struct {
+	done chan struct{}
+	ips  []net.IP
+}
+
 var (
-	mu    sync.RWMutex
-	cache = map[string]entry{}
+	mu       sync.RWMutex
+	cache    = map[string]entry{}
+	inflight = map[string]*lookupCall{}
 )
 
-// Lookup resolves host, serving repeated lookups from a TTL cache. It returns
-// nil when resolution fails; failures are cached briefly so a broken resolver
-// is not hammered.
+// Lookup resolves host, serving repeated lookups from a TTL cache. Concurrent
+// misses for the same host share one resolver generation. Returned IP values
+// are defensive copies so callers cannot mutate cache-owned bytes. Resolution
+// failures are cached briefly so a broken resolver is not hammered.
 func Lookup(host string) []net.IP {
 	now := time.Now()
 	mu.RLock()
 	e, ok := cache[host]
-	mu.RUnlock()
 	if ok && now.Before(e.expires) {
-		return e.ips
+		ips := cloneIPs(e.ips)
+		mu.RUnlock()
+		return ips
 	}
+	mu.RUnlock()
+
+	// Re-check under the write lock before creating an inflight generation.
+	// This closes the miss TOCTOU window and makes one generation authoritative.
+	mu.Lock()
+	now = time.Now()
+	if e, ok := cache[host]; ok && now.Before(e.expires) {
+		ips := cloneIPs(e.ips)
+		mu.Unlock()
+		return ips
+	}
+	if call, ok := inflight[host]; ok {
+		done := call.done
+		mu.Unlock()
+		<-done
+		return cloneIPs(call.ips)
+	}
+	call := &lookupCall{done: make(chan struct{})}
+	inflight[host] = call
+	mu.Unlock()
+
 	ips, err := lookupIP(host)
 	ttl := positiveTTL
 	if err != nil {
 		ips = nil
 		ttl = negativeTTL
 	}
+	completedAt := time.Now()
+	stored := cloneIPs(ips)
+
 	mu.Lock()
 	if len(cache) >= maxEntries {
-		evictLocked(now)
+		evictLocked(completedAt)
 	}
-	cache[host] = entry{ips: ips, expires: now.Add(ttl)}
+	cache[host] = entry{
+		ips:     stored,
+		expires: completedAt.Add(ttl),
+	}
+	call.ips = stored
+	delete(inflight, host)
+	close(call.done)
 	mu.Unlock()
-	return ips
+
+	return cloneIPs(stored)
 }
 
-// evictLocked drops expired entries; if nothing has expired the whole cache is
-// reset, which is cheap and keeps the map bounded without extra bookkeeping.
+func cloneIPs(ips []net.IP) []net.IP {
+	if ips == nil {
+		return nil
+	}
+	cloned := make([]net.IP, len(ips))
+	for i, ip := range ips {
+		if ip != nil {
+			cloned[i] = append(net.IP(nil), ip...)
+		}
+	}
+	return cloned
+}
+
+// evictLocked removes expired entries first. If the cache is still full, it
+// evicts only the live entry with the earliest expiration time. A hostname
+// lexical tie-break keeps the choice deterministic when expirations are equal.
 func evictLocked(now time.Time) {
 	for host, e := range cache {
-		if now.After(e.expires) {
+		if !now.Before(e.expires) {
 			delete(cache, host)
 		}
 	}
-	if len(cache) >= maxEntries {
-		cache = map[string]entry{}
+	for len(cache) >= maxEntries {
+		var victim string
+		var oldest time.Time
+		for host, e := range cache {
+			if victim == "" || e.expires.Before(oldest) || (e.expires.Equal(oldest) && host < victim) {
+				victim = host
+				oldest = e.expires
+			}
+		}
+		if victim == "" {
+			return
+		}
+		delete(cache, victim)
 	}
 }
 
-// ResetForTest clears the cache.
+// ResetForTest clears the cache and inflight registry. Tests call this only
+// after their resolver generations have completed.
 func ResetForTest() {
 	mu.Lock()
 	cache = map[string]entry{}
+	inflight = map[string]*lookupCall{}
 	mu.Unlock()
 }
