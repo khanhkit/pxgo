@@ -78,6 +78,35 @@ func TestNoProxyCanonicalRules(t *testing.T) {
 	assertDirect(t, local, "http://[::1]", true)
 }
 
+func TestWindowsProxyOverrideFixture(t *testing.T) {
+	proxy := []Server{{Host: "proxy.example.com", Port: 8080, Scheme: "http"}}
+	w, err := New(ModeConfig, proxy, "<local>;*.corp.example.com;repo.corp.example:8443", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		url        string
+		wantDirect bool
+	}{
+		{url: "http://printer", wantDirect: true},
+		{url: "http://api.corp.example.com", wantDirect: true},
+		{url: "http://corp.example.com", wantDirect: false},
+		{url: "https://repo.corp.example:8443", wantDirect: true},
+		{url: "https://repo.corp.example:443", wantDirect: false},
+	}
+	for _, tt := range cases {
+		servers, _, _, err := w.FindProxyForURL(tt.url)
+		if err != nil {
+			t.Fatalf("FindProxyForURL(%q): %v", tt.url, err)
+		}
+		gotDirect := reflect.DeepEqual(servers, []Server{Direct})
+		if gotDirect != tt.wantDirect {
+			t.Fatalf("FindProxyForURL(%q) direct=%v, want %v; servers=%#v", tt.url, gotDirect, tt.wantDirect, servers)
+		}
+	}
+}
+
 func TestParseNoProxyRejectsMalformedNetworkTokens(t *testing.T) {
 	for _, input := range []string{
 		"10.0.0.0/999",
