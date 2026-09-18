@@ -207,7 +207,7 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target stri
 	}
 	if resp.StatusCode == http.StatusProxyAuthRequired && attempts < 3 {
 		nextChallenge := resp.Header.Get("Proxy-Authenticate")
-		if selected := selectProxyAuthenticateChallenge(cfg.Auth, resp.Header.Values("Proxy-Authenticate")); selected != "" {
+		if selected := selectProxyAuthenticateChallenge(effectiveUpstreamAuth(cfg), resp.Header.Values("Proxy-Authenticate")); selected != "" {
 			nextChallenge = selected
 		}
 		if err := drainUpstream407Body(resp.Body); err != nil {
