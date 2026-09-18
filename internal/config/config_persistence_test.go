@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -169,5 +170,45 @@ func TestPlaintextKeyringProcessWriter(t *testing.T) {
 	}
 	if err := StorePassword(Realm, user, pass); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAtomicWriteReplaceFailurePreservesLastGood(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pxgo.ini")
+	const lastGood = "last-good\n"
+	if err := os.WriteFile(path, []byte(lastGood), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("injected replace failure")
+	err := atomicWriteFileWithReplace(path, []byte("new-partial\n"), 0o600, func(_, _ string) error { return boom })
+	if !errors.Is(err, boom) {
+		t.Fatalf("error=%v want injected replace failure", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != lastGood {
+		t.Fatalf("last-good file changed after failed replace: %q", got)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".pxgo.ini.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary persistence files leaked after failed replace: %v", matches)
+	}
+}
+
+func TestParseArgsReportsCorruptPlaintextKeyring(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keyring.json")
+	if err := os.WriteFile(path, []byte(`{"pxgo":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PXGO_KEYRING_PLAINTEXT", "1")
+	t.Setenv("PXGO_KEYRING_FILE", path)
+	if _, err := ParseArgs([]string{"--username=test"}); err == nil {
+		t.Fatal("ParseArgs silently ignored corrupt plaintext keyring")
 	}
 }
