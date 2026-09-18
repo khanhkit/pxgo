@@ -8,7 +8,7 @@ import (
 
 type fakeClock struct{ now time.Time }
 
-func (c *fakeClock) Now() time.Time { return c.now }
+func (c *fakeClock) Now() time.Time          { return c.now }
 func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
 func testSupervisor(t *testing.T, clock *fakeClock, owners Owners) *Supervisor {
@@ -19,7 +19,7 @@ func testSupervisor(t *testing.T, clock *fakeClock, owners Owners) *Supervisor {
 }
 
 func candidate(key string) Candidate { return Candidate{Key: ProxyKey(key)} }
-func directCandidate() Candidate { return Candidate{Key: ProxyKey("direct://DIRECT:80"), Direct: true} }
+func directCandidate() Candidate     { return Candidate{Key: ProxyKey("direct://DIRECT:80"), Direct: true} }
 
 func TestTCSUPHEALTH002FirstLocalFailurePreservesOrder(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}

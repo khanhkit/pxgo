@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-func waitUntil(t *testing.T, timeout time.Duration, fn func() bool) {
+func waitUntil(t *testing.T, fn func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if fn() {
 			return
@@ -28,7 +28,10 @@ func TestTCSUPREC008RecoveryActionSingleflightAndRetry(t *testing.T) {
 	s := testSupervisor(t, clock, Owners{
 		RefreshRoute: func(ctx context.Context) error {
 			calls.Add(1)
-			select { case started <- struct{}{}: default: }
+			select {
+			case started <- struct{}{}:
+			default:
+			}
 			select {
 			case <-release:
 				return nil
@@ -56,9 +59,9 @@ func TestTCSUPREC008RecoveryActionSingleflightAndRetry(t *testing.T) {
 		t.Fatalf("calls while blocked = %d, want 1", got)
 	}
 	close(release)
-	waitUntil(t, time.Second, func() bool { return s.Status().InflightActions == 0 })
+	waitUntil(t, func() bool { return s.Status().InflightActions == 0 })
 	s.Trigger(ActionRefreshRoute)
-	waitUntil(t, time.Second, func() bool { return calls.Load() == 2 })
+	waitUntil(t, func() bool { return calls.Load() == 2 })
 }
 
 func TestTCSUPHOT009RecordDoesNotWaitForRecoveryIO(t *testing.T) {
@@ -89,15 +92,15 @@ func TestTCSUPOWNER010OutcomesRequestOnlyScopedOwnerActions(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	var route, auth, idle atomic.Int32
 	s := testSupervisor(t, clock, Owners{
-		RefreshRoute: func(context.Context) error { route.Add(1); return nil },
-		RefreshAuth: func(context.Context) error { auth.Add(1); return nil },
+		RefreshRoute:        func(context.Context) error { route.Add(1); return nil },
+		RefreshAuth:         func(context.Context) error { auth.Add(1); return nil },
 		CloseIdleTransports: func(context.Context) error { idle.Add(1); return nil },
 	})
 	s.Record(Outcome{Kind: OutcomeRouteFailure})
 	s.Record(Outcome{Kind: OutcomeAuthExhausted})
 	s.Record(Outcome{Kind: OutcomeProxyDialFailure, Proxy: "proxy-a"})
 	s.Record(Outcome{Kind: OutcomeProxyDialFailure, Proxy: "proxy-a"})
-	waitUntil(t, time.Second, func() bool {
+	waitUntil(t, func() bool {
 		return route.Load() == 1 && auth.Load() == 1 && idle.Load() == 1
 	})
 	if got := s.Status().HealthEntries; got != 1 {
@@ -109,10 +112,10 @@ func TestTCSUPNET011SchedulingGapStartsOneNetworkEpoch(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	var route, auth, idle, dns atomic.Int32
 	s := testSupervisor(t, clock, Owners{
-		RefreshRoute: func(context.Context) error { route.Add(1); return nil },
-		RefreshAuth: func(context.Context) error { auth.Add(1); return nil },
+		RefreshRoute:        func(context.Context) error { route.Add(1); return nil },
+		RefreshAuth:         func(context.Context) error { auth.Add(1); return nil },
 		CloseIdleTransports: func(context.Context) error { idle.Add(1); return nil },
-		ClearNetworkDNS: func(context.Context) error { dns.Add(1); return nil },
+		ClearNetworkDNS:     func(context.Context) error { dns.Add(1); return nil },
 	})
 	s.Record(Outcome{Kind: OutcomeProxyDialFailure, Proxy: "proxy-a"})
 	s.Record(Outcome{Kind: OutcomeProxyDialFailure, Proxy: "proxy-a"})
@@ -124,7 +127,7 @@ func TestTCSUPNET011SchedulingGapStartsOneNetworkEpoch(t *testing.T) {
 	}
 	clock.Advance(networkGapThreshold + time.Second)
 	s.Tick(clock.Now())
-	waitUntil(t, time.Second, func() bool {
+	waitUntil(t, func() bool {
 		return route.Load() == 1 && auth.Load() == 1 && idle.Load() == 1 && dns.Load() == 1
 	})
 	status := s.Status()
@@ -147,7 +150,9 @@ func TestTCSUPNET012CorrelatedFailureEpochIsBounded(t *testing.T) {
 	}
 	for i := 0; i < correlatedFailureThreshold; i++ {
 		key := ProxyKey("proxy-a")
-		if i%2 == 1 { key = "proxy-b" }
+		if i%2 == 1 {
+			key = "proxy-b"
+		}
 		s.Record(Outcome{Kind: OutcomeProxyDialFailure, Proxy: key})
 	}
 	if got := s.Status().NetworkEpoch; got != 1 {
