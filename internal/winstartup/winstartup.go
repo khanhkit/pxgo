@@ -7,8 +7,10 @@ import (
 
 const RegistryValueName = "PxGo"
 
-type FileExistsFunc func(path string) bool
-type SaveConfigFunc func(path string) error
+type (
+	FileExistsFunc func(path string) bool
+	SaveConfigFunc func(path string) error
+)
 
 func PrepareRunCommand(executable, pxini string, exists FileExistsFunc, save SaveConfigFunc) (string, error) {
 	if save == nil {
