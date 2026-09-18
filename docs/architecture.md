@@ -53,6 +53,11 @@ path. A failed reload is logged and the previous proxy config stays active.
   a `sync.Pool`, so lookups run in parallel without a shared-VM lock.
 - DNS lookups for noproxy matching and PAC `dnsResolve()` go through
   `internal/dnscache`.
+- Request bodies stay streaming when only one forwarding attempt is possible.
+  Requests that need auth/fallback replay keep up to 1 MiB in memory, then spool
+  to a temp file with a 256 MiB per-request replay cap and a 512 MiB
+  process-wide disk-spool budget. Replay capture follows request cancellation;
+  terminal cleanup zeroes in-memory data and removes temp files.
 - CONNECT relays keep both ends as raw `*net.TCPConn` so `io.Copy` can use
   `splice(2)` on Linux; idle detection uses read deadlines, and each direction
   half-closes independently (`CloseWrite`) so early EOF on one side does not

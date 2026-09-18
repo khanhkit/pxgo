@@ -463,12 +463,26 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 	// auth retry); otherwise stream it straight through.
 	var body *replayableBody
 	if s.needsReplayableBody(req, proxies) {
-		body, err = newReplayableBody(req.Body)
+		body, err = newReplayableBodyForRequest(req.Context(), req.Body, req.ContentLength)
 		if err != nil {
-			http.Error(rw, err.Error(), http.StatusBadRequest)
+			switch {
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				debug.Dprint("HTTP replay capture canceled: " + err.Error())
+				return
+			case errors.Is(err, errReplayBodyTooLarge):
+				http.Error(rw, err.Error(), http.StatusRequestEntityTooLarge)
+			case errors.Is(err, errReplaySpoolQuota):
+				http.Error(rw, err.Error(), http.StatusInsufficientStorage)
+			default:
+				http.Error(rw, err.Error(), http.StatusBadRequest)
+			}
 			return
 		}
-		defer body.Close()
+		defer func() {
+			if err := body.Close(); err != nil {
+				debug.Dprint("HTTP replay body cleanup failed: " + err.Error())
+			}
+		}()
 	}
 	incomingProxyAuth := req.Header.Get("Proxy-Authorization")
 	resp, err := s.roundTripHTTPWithProxyFallback(req, u, body, targetURL, incomingProxyAuth, proxies)
