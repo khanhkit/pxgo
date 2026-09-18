@@ -115,7 +115,7 @@ to choose where it lives — see [docs/configuration.md](docs/configuration.md).
 | `--noproxy=LIST` | Hosts or IP ranges that bypass the upstream proxy |
 | `--auth=TYPE` | Upstream auth mode: `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `NONE` |
 | `--username=USER` | Upstream proxy username or Kerberos principal |
-| `--client-auth=TYPE` | Require local client auth: `NONE`, `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC` |
+| `--client-auth=TYPE` | Require local client auth: `NONE`, `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`; downstream `NEGOTIATE` means NTLMSSP/NTLM-over-SPNEGO, not Kerberos/GSSAPI |
 | `--log=N` | Debug log destination: `1`=script dir (`--debug`), `2`=cwd, `3`=unique file (`--uniqlog`), `4`=stdout (`--verbose`) |
 
 Use `pxgo --help` for the current CLI help.

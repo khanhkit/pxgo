@@ -538,9 +538,9 @@ func TestClientAuthPersistsOnConnection(t *testing.T) {
 	}
 }
 
-func TestClientAuthZeroLengthBodyMethodRequiresHeader(t *testing.T) {
+func TestClientAuthZeroLengthBodyMethodReusesConnectionAuth(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "should not reach")
+		fmt.Fprint(w, "body auth ok")
 	}))
 	defer upstream.Close()
 	upstreamURL, _ := url.Parse(upstream.URL)
@@ -568,9 +568,10 @@ func TestClientAuthZeroLengthBodyMethodRequiresHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	data, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusProxyAuthRequired {
-		t.Fatalf("expected 407, got %s", resp.Status)
+	if resp.StatusCode != http.StatusOK || string(data) != "body auth ok" {
+		t.Fatalf("expected authenticated POST to pass, status=%s body=%q", resp.Status, data)
 	}
 }
 
@@ -1794,6 +1795,47 @@ func TestProxyReloadRefreshesHTTPPACURL(t *testing.T) {
 	}
 }
 
+// TC-PAC-REG-008
+func TestProxyReloadKeepsLastGoodPACOnRefreshFailure(t *testing.T) {
+	for _, key := range []string{"http_proxy", "HTTP_PROXY", "no_proxy", "NO_PROXY"} {
+		t.Setenv(key, "")
+	}
+	var pacBody atomic.Value
+	pacBody.Store(`function FindProxyForURL(url, host) { return "PROXY stable.proxy:8080"; }`)
+	pacSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, pacBody.Load().(string))
+	}))
+	defer pacSrv.Close()
+
+	cfg := config.Default()
+	cfg.PAC = pacSrv.URL
+	cfg.ProxyReload = 1
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _, _, err := s.currentWproxy().FindProxyForURL("http://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 || before[0].Host != "stable.proxy" {
+		t.Fatalf("initial PAC route=%#v", before)
+	}
+
+	pacBody.Store(`this is not javascript {{{`)
+	s.lastReload = time.Now().Add(-2 * time.Second)
+	if err := s.reloadProxyIfDue(); err == nil {
+		t.Fatal("broken PAC refresh must report an error")
+	}
+	after, _, _, err := s.currentWproxy().FindProxyForURL("http://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0].Host != "stable.proxy" {
+		t.Fatalf("failed refresh replaced last-good PAC: %#v", after)
+	}
+}
+
 func TestAllowRestrictsClientAddress(t *testing.T) {
 	cfg := config.Default()
 	cfg.Allow = "127.0.*.*"
@@ -1969,6 +2011,10 @@ func TestReplayableBodySpillsLargeBodiesToTempFile(t *testing.T) {
 }
 
 func digestAuthHeader(uri, nonce string) string {
+	if parsed, err := url.Parse(uri); err == nil && parsed.IsAbs() && parsed.Path == "" {
+		parsed.Path = "/"
+		uri = parsed.String()
+	}
 	username := "test"
 	password := "12345"
 	method := http.MethodGet
