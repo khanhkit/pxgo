@@ -432,6 +432,11 @@ func addGlob(set *IPSet, glob string) error {
 	return set.AddRange(strings.Join(start, "."), strings.Join(end, "."))
 }
 
+type systemProxyResolver interface {
+	ResolveProxyForURL(rawurl string, cfg systemproxy.Config) (string, error)
+	Close() error
+}
+
 type Wproxy struct {
 	Mode            int
 	Servers         []Server
@@ -440,6 +445,7 @@ type Wproxy struct {
 	NoProxyHostsStr string
 	PAC             *pac.Pac
 	noProxyMatchers []noProxyMatcher
+	systemResolver  systemProxyResolver
 }
 
 func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, error) {
@@ -495,12 +501,29 @@ func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, erro
 			}
 		}
 	}
+	if w.Mode == ModeAuto || w.Mode == ModePAC {
+		resolver, err := systemproxy.NewResolver()
+		if err != nil {
+			return nil, fmt.Errorf("initialize system proxy resolver: %w", err)
+		}
+		w.systemResolver = resolver
+	}
+
 	var hostList []string
 	for h := range w.NoProxyHosts {
 		hostList = append(hostList, h)
 	}
 	w.NoProxyHostsStr = strings.Join(hostList, ",")
 	return w, nil
+}
+
+func (w *Wproxy) Close() error {
+	if w == nil || w.systemResolver == nil {
+		return nil
+	}
+	resolver := w.systemResolver
+	w.systemResolver = nil
+	return resolver.Close()
 }
 
 func mergeNoProxy(w *Wproxy, noproxy string) error {
@@ -596,9 +619,15 @@ func (w *Wproxy) FindProxyForURL(rawurl string) ([]Server, Server, string, error
 		if w.Mode == ModePAC && len(w.Servers) > 0 {
 			cfg.PACURL = w.Servers[0].Host
 		}
-		out, _ := systemproxy.ResolveProxyForURL(rawurl, cfg)
+		if w.systemResolver == nil {
+			return nil, netloc, path, errors.New("system proxy resolver is not initialized")
+		}
+		out, err := w.systemResolver.ResolveProxyForURL(rawurl, cfg)
+		if err != nil {
+			return nil, netloc, path, fmt.Errorf("resolve system proxy: %w", err)
+		}
 		if strings.TrimSpace(out) == "" {
-			return []Server{Direct}, netloc, path, nil
+			return nil, netloc, path, errors.New("system proxy resolver returned empty result")
 		}
 		return parseProxyOrDirect(out), netloc, path, nil
 	}
