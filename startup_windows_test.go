@@ -56,7 +56,7 @@ func TestAPISS0011RegistryInstallForceUninstallNative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer key.Close()
+	t.Cleanup(func() { _ = key.Close() })
 
 	pxGoBackup := readRegistryStringBackup(t, key, winstartup.RegistryValueName)
 	legacyBackup := readRegistryStringBackup(t, key, "Px")
