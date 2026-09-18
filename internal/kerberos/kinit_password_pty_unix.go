@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/term"
 )
 
 func defaultKinitPasswordRunner(timeout time.Duration, principal string, env map[string]string, password string) (commandResult, error) {
@@ -26,19 +27,49 @@ func defaultKinitPasswordRunner(timeout time.Duration, principal string, env map
 		return commandResult{}, err
 	}
 
-	var output bytes.Buffer
-	done := make(chan struct{})
+	// The PTY starts with terminal echo enabled on common Unix systems. Disable
+	// it before the password is ever written so the secret cannot be reflected
+	// back into the output capture. MakeRaw also preserves the required TTY
+	// contract while avoiding echo/canonical buffering surprises.
+	oldState, err := term.MakeRaw(int(ptmx.Fd()))
+	if err != nil {
+		_ = ptmx.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return commandResult{}, err
+	}
+	defer func() { _ = term.Restore(int(ptmx.Fd()), oldState) }()
+
+	done := make(chan string, 1)
 	go func() {
+		var output bytes.Buffer
 		_, _ = io.Copy(&output, ptmx)
-		close(done)
+		done <- output.String()
 	}()
 
-	_, _ = io.WriteString(ptmx, password+"\n")
-	err = cmd.Wait()
-	_ = ptmx.Close()
-	<-done
+	if _, err := io.WriteString(ptmx, password+"\n"); err != nil {
+		_ = ptmx.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		select {
+		case output := <-done:
+			return commandResult{Stdout: output, Stderr: output}, err
+		case <-time.After(time.Second):
+			return commandResult{}, errors.New("timed out draining kinit PTY after password write failure")
+		}
+	}
 
-	result := commandResult{Stdout: output.String(), Stderr: output.String()}
+	err = cmd.Wait()
+	_ = term.Restore(int(ptmx.Fd()), oldState)
+	_ = ptmx.Close()
+	var output string
+	select {
+	case output = <-done:
+	case <-time.After(time.Second):
+		return commandResult{}, errors.New("timed out draining kinit PTY")
+	}
+
+	result := commandResult{Stdout: output, Stderr: output}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return result, context.DeadlineExceeded
 	}

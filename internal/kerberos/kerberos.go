@@ -42,7 +42,8 @@ type Manager struct {
 	NextCheck    time.Time
 	Backoff      time.Duration
 
-	mu sync.Mutex
+	mu         sync.Mutex
+	refreshing bool
 
 	KinitWithPasswordFunc func() bool
 	KinitRenewFunc        func() bool
@@ -51,7 +52,6 @@ type Manager struct {
 
 func New(principal string, passwordFunc func() *string, isHeimdal bool) *Manager {
 	ccache := "FILE:" + filepath.Join(os.TempDir(), "krb5cc_px_"+itoa(os.Getpid()))
-	_ = os.Setenv("KRB5CCNAME", ccache)
 	env := map[string]string{}
 	for _, item := range os.Environ() {
 		k, v, ok := strings.Cut(item, "=")
@@ -126,50 +126,109 @@ func itoa(i int) string {
 }
 
 func (m *Manager) Check(force bool) *bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	now := time.Now()
+	m.mu.Lock()
 	if !force && !m.NextCheck.IsZero() && now.Before(m.NextCheck) {
+		m.mu.Unlock()
 		return nil
 	}
-	if !m.TicketExpiry.IsZero() && now.Before(m.TicketExpiry.Add(-RenewalMargin)) {
-		if m.KlistValidFunc() {
-			next := now.Add(CheckInterval)
-			renewAt := m.TicketExpiry.Add(-RenewalMargin)
-			if next.After(renewAt) {
-				next = renewAt
-			}
-			m.NextCheck = next
-			return nil
-		}
-	}
-	if m.Backoff > 0 && !force {
-		m.NextCheck = now.Add(m.Backoff)
-		m.Backoff = 0
+	if m.refreshing {
+		m.mu.Unlock()
 		return nil
 	}
-	if !m.TicketExpiry.IsZero() && now.Before(m.TicketExpiry) && m.KinitRenewFunc() {
-		ok := true
-		return &ok
-	}
-	ok := m.KinitWithPasswordFunc()
-	return &ok
+	m.refreshing = true
+	m.mu.Unlock()
+
+	go m.refresh(force)
+	return nil
 }
 
-func (m *Manager) ParseAndSetExpiry(klistOutput string) {
-	expiry, ok := ParseExpiry(klistOutput, m.IsHeimdal)
-	if !ok {
-		m.TicketExpiry = time.Time{}
-		m.NextCheck = time.Now().Add(RetryInterval)
+func (m *Manager) refresh(force bool) {
+	defer func() {
+		m.mu.Lock()
+		m.refreshing = false
+		m.mu.Unlock()
+	}()
+
+	now := time.Now()
+	expiry := m.expirySnapshot()
+
+	if !expiry.IsZero() && now.Before(expiry.Add(-RenewalMargin)) {
+		if m.KlistValidFunc() {
+			m.setNextCheck(nextCheckFor(now, expiry))
+			return
+		}
+	}
+
+	// A still-valid ticket inside the renewal margin must get a renewal attempt
+	// even if a previous acquisition failure left a backoff pending. Delaying it
+	// until the backoff expires can let the current generation expire needlessly.
+	if !expiry.IsZero() && now.Before(expiry) {
+		if m.KinitRenewFunc() {
+			return
+		}
+	}
+
+	if !force && m.consumeBackoff(now) {
 		return
 	}
-	m.TicketExpiry = expiry
-	next := time.Now().Add(CheckInterval)
+
+	_ = m.KinitWithPasswordFunc()
+}
+
+func (m *Manager) expirySnapshot() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.TicketExpiry
+}
+
+func (m *Manager) setNextCheck(next time.Time) {
+	m.mu.Lock()
+	m.NextCheck = next
+	m.mu.Unlock()
+}
+
+func (m *Manager) setBackoff(backoff time.Duration) {
+	m.mu.Lock()
+	m.Backoff = backoff
+	m.mu.Unlock()
+}
+
+func (m *Manager) consumeBackoff(now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.Backoff <= 0 {
+		return false
+	}
+	m.NextCheck = now.Add(m.Backoff)
+	m.Backoff = 0
+	return true
+}
+
+func nextCheckFor(now, expiry time.Time) time.Time {
+	next := now.Add(CheckInterval)
 	renewAt := expiry.Add(-RenewalMargin)
 	if next.After(renewAt) {
 		next = renewAt
 	}
-	m.NextCheck = next
+	return next
+}
+
+func (m *Manager) ParseAndSetExpiry(klistOutput string) {
+	expiry, ok := ParseExpiry(klistOutput, m.IsHeimdal)
+	m.commitExpiry(expiry, ok, time.Now())
+}
+
+func (m *Manager) commitExpiry(expiry time.Time, ok bool, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !ok {
+		m.TicketExpiry = time.Time{}
+		m.NextCheck = now.Add(RetryInterval)
+		return
+	}
+	m.TicketExpiry = expiry
+	m.NextCheck = nextCheckFor(now, expiry)
 }
 
 func DetectHeimdal() bool {
@@ -189,11 +248,11 @@ func (m *Manager) KinitWithPassword() bool {
 	if err != nil {
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):
-			m.Backoff = RetryInterval
+			m.setBackoff(RetryInterval)
 		case errors.Is(err, exec.ErrNotFound) || os.IsNotExist(err):
-			m.Backoff = CheckInterval
+			m.setBackoff(CheckInterval)
 		default:
-			m.Backoff = RetryInterval
+			m.setBackoff(RetryInterval)
 		}
 		return false
 	}
@@ -207,13 +266,13 @@ func (m *Manager) KinitWithPassword() bool {
 			strings.Contains(errText, "not found"),
 			strings.Contains(errText, "unknown"),
 			strings.Contains(errText, "skew"):
-			m.Backoff = CheckInterval
+			m.setBackoff(CheckInterval)
 		default:
-			m.Backoff = RetryInterval
+			m.setBackoff(RetryInterval)
 		}
 		return false
 	}
-	m.Backoff = 0
+	m.setBackoff(0)
 	m.UpdateExpiry()
 	return true
 }
@@ -259,8 +318,7 @@ func (m *Manager) KlistParseValid() bool {
 func (m *Manager) UpdateExpiry() {
 	output, ok := m.RunKlist()
 	if !ok {
-		m.TicketExpiry = time.Time{}
-		m.NextCheck = time.Now().Add(RetryInterval)
+		m.commitExpiry(time.Time{}, false, time.Now())
 		return
 	}
 	m.ParseAndSetExpiry(output)
