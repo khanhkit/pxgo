@@ -62,6 +62,7 @@ const (
 	keyTest           = "test"
 	keyDotenv         = "dotenv"
 	keySave           = "save"
+	keyInstall        = "install"
 	localhostIP       = "127.0.0.1"
 )
 
@@ -335,6 +336,7 @@ func ParseArgs(args []string) (Config, error) {
 		isSave = true
 	}
 	cfg.Save = isSave
+	allowMissingConfig := isSave || hasBareArg(args, keyInstall)
 
 	configPath := preScanConfigPath(args)
 	configPathSource := ""
@@ -369,7 +371,7 @@ func ParseArgs(args []string) (Config, error) {
 			if configPathSource != "" {
 				markSource(&cfg, keyConfig, configPathSource)
 			}
-		case configPath != "" && !isSave:
+		case configPath != "" && !allowMissingConfig:
 			return cfg, fmt.Errorf("could not open config file %s: %w", loadPath, statErr)
 		case configPath == "" && !errors.Is(statErr, os.ErrNotExist):
 			return cfg, fmt.Errorf("could not inspect config file %s: %w", loadPath, statErr)
@@ -441,7 +443,7 @@ func ParseArgs(args []string) (Config, error) {
 			cfg.Version = true
 			continue
 		}
-		if arg == "--install" {
+		if arg == "--"+keyInstall {
 			cfg.Install = true
 			continue
 		}

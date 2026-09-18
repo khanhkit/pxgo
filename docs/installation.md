@@ -71,12 +71,24 @@ The runtime image includes Kerberos command-line tools so `--kerberos` can use
 
 ## Windows Startup
 
-The Go port includes the Windows startup command builder and CLI flags:
+The Go port can install the released `pxgo.exe` directly into the current
+user's Windows Run registry key:
 
 ```powershell
 pxgo.exe --install --config C:\path\to\pxgo.ini
 pxgo.exe --uninstall
 ```
+
+`--install` first persists the effective configuration atomically to the
+selected config path, verifies both the running executable and saved config
+exist, then writes a `PxGo` Run value. It does not depend on a separate
+`pxgow.exe` artifact. Executable and `--config` arguments are encoded as
+Windows command-line arguments, and the registry value is stored as a
+non-expanding string so percent signs in paths remain literal.
+
+A non-forced install preserves an existing `PxGo` entry; add `--force` to
+replace it. `--uninstall` removes only the `PxGo` value and leaves legacy
+`Px` entries untouched.
 
 Startup registry operations are Windows-only. On non-Windows platforms the
 commands return an unsupported-platform error.

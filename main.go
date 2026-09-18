@@ -24,7 +24,10 @@ import (
 	"golang.org/x/term"
 )
 
-var version = "dev"
+var (
+	version            = "dev"
+	installStartupFunc = installStartup
+)
 
 const (
 	authNone    = "NONE"
@@ -68,15 +71,28 @@ func run() (exitCode int) {
 		return 0
 	}
 	if cfg.Install {
-		cmd, err := winstartup.BuildRunCommand(os.Args[0], config.ConfigPathForSave(cfg.ConfigPath), func(path string) bool {
-			_, err := os.Stat(path)
-			return err == nil
-		})
+		configPath := config.ConfigPathForSave(cfg.ConfigPath)
+		executable, err := os.Executable()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 6
 		}
-		if err := installStartup(cmd, cfg.Force); err != nil {
+		cmd, err := winstartup.PrepareRunCommand(
+			executable,
+			configPath,
+			func(path string) bool {
+				_, err := os.Stat(path)
+				return err == nil
+			},
+			func(path string) error {
+				return config.SaveINI(path, cfg)
+			},
+		)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 6
+		}
+		if err := installStartupFunc(cmd, cfg.Force); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 6
 		}
