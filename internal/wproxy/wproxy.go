@@ -108,6 +108,13 @@ func compareIP(a, b net.IP) int {
 	return 0
 }
 
+type noProxyMatcher struct {
+	host           string
+	port           int
+	subdomainsOnly bool
+	local          bool
+}
+
 func ParseProxy(proxystrs string) ([]Server, error) {
 	var servers []Server
 	seen := map[string]bool{}
@@ -126,54 +133,145 @@ func ParseProxy(proxystrs string) ([]Server, error) {
 			}
 			continue
 		}
-		host := proxystr
-		scheme := httpScheme
-		port := 80
-		if strings.Contains(proxystr, "://") {
-			u, err := url.Parse(proxystr)
-			if err != nil {
-				return nil, err
-			}
-			if u.Scheme != "" {
-				scheme = strings.ToLower(u.Scheme)
-			}
-			host = u.Hostname()
-			switch {
-			case u.Port() != "":
-				port, err = strconv.Atoi(u.Port())
-				if err != nil {
-					return nil, fmt.Errorf("bad proxy server port: %s", u.Port())
-				}
-			case scheme == httpsScheme:
-				port = 443
-			case strings.HasPrefix(scheme, "socks"):
-				port = 1080
-			}
-		} else if h, p, ok := strings.Cut(proxystr, ":"); ok {
-			var err error
-			host = strings.TrimSpace(h)
-			port, err = strconv.Atoi(strings.TrimSpace(p))
-			if err != nil {
-				return nil, fmt.Errorf("bad proxy server port: %s", p)
-			}
+		server, err := parseProxyEndpoint(proxystr)
+		if err != nil {
+			return nil, err
 		}
-		if strings.ContainsAny(host, " \t\r\n") {
-			return nil, fmt.Errorf("bad proxy server host: %s", host)
-		}
-		key := fmt.Sprintf("%s://%s:%d", scheme, host, port)
+		key := server.Scheme + "://" + net.JoinHostPort(strings.ToLower(server.Host), strconv.Itoa(server.Port))
 		if !seen[key] {
-			servers = append(servers, Server{Host: host, Port: port, Scheme: scheme})
+			servers = append(servers, server)
 			seen[key] = true
 		}
 	}
 	return servers, nil
 }
 
+func parseProxyEndpoint(raw string) (Server, error) {
+	proxystr := strings.TrimSpace(raw)
+	if proxystr == "" {
+		return Server{}, errors.New("empty proxy server")
+	}
+
+	scheme := httpScheme
+	host := ""
+	var port int
+	if strings.Contains(proxystr, "://") {
+		u, err := url.Parse(proxystr)
+		if err != nil {
+			return Server{}, fmt.Errorf("bad proxy server: %w", err)
+		}
+		scheme = strings.ToLower(u.Scheme)
+		if !validProxyScheme(scheme) {
+			return Server{}, fmt.Errorf("unsupported proxy scheme: %s", scheme)
+		}
+		if u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return Server{}, fmt.Errorf("proxy server must be an authority, got %q", proxystr)
+		}
+		host = u.Hostname()
+		port = defaultProxyPort(scheme)
+		if u.Port() != "" {
+			port, err = parsePort(u.Port())
+			if err != nil {
+				return Server{}, fmt.Errorf("bad proxy server port: %w", err)
+			}
+		}
+	} else {
+		var err error
+		host, port, err = parseAuthority(proxystr, 80)
+		if err != nil {
+			return Server{}, fmt.Errorf("bad proxy server: %w", err)
+		}
+	}
+	if err := validateHost(host); err != nil {
+		return Server{}, fmt.Errorf("bad proxy server host: %w", err)
+	}
+	return Server{Host: host, Port: port, Scheme: scheme}, nil
+}
+
+func validProxyScheme(scheme string) bool {
+	switch scheme {
+	case httpScheme, httpsScheme, "socks", "socks4", "socks4a", "socks5":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultProxyPort(scheme string) int {
+	switch scheme {
+	case httpsScheme:
+		return 443
+	case "socks", "socks4", "socks4a", "socks5":
+		return 1080
+	default:
+		return 80
+	}
+}
+
+func parsePort(raw string) (int, error) {
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, fmt.Errorf("invalid port %q", raw)
+	}
+	return port, nil
+}
+
+func parseAuthority(raw string, defaultPort int) (string, int, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", 0, errors.New("empty authority")
+	}
+	if ip := net.ParseIP(value); ip != nil {
+		return ip.String(), defaultPort, nil
+	}
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		ip := net.ParseIP(strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"))
+		if ip == nil {
+			return "", 0, fmt.Errorf("invalid bracketed IP %q", value)
+		}
+		return ip.String(), defaultPort, nil
+	}
+	if strings.Contains(value, ":") {
+		host, portText, err := net.SplitHostPort(value)
+		if err != nil {
+			return "", 0, err
+		}
+		port, err := parsePort(portText)
+		if err != nil {
+			return "", 0, err
+		}
+		if err := validateHost(host); err != nil {
+			return "", 0, err
+		}
+		return host, port, nil
+	}
+	if err := validateHost(value); err != nil {
+		return "", 0, err
+	}
+	return value, defaultPort, nil
+}
+
+func validateHost(host string) error {
+	if strings.TrimSpace(host) == "" {
+		return errors.New("empty host")
+	}
+	if strings.ContainsAny(host, " \t\r\n/?#[]") {
+		return fmt.Errorf("invalid host %q", host)
+	}
+	return nil
+}
+
 func ParseNoProxy(noproxystr string, iponly bool) (IPSet, map[string]bool, error) {
+	set, hosts, _, err := parseNoProxy(noproxystr, iponly)
+	return set, hosts, err
+}
+
+func parseNoProxy(noproxystr string, iponly bool) (IPSet, map[string]bool, []noProxyMatcher, error) {
 	set := IPSet{}
 	hosts := map[string]bool{}
+	var matchers []noProxyMatcher
 	if strings.TrimSpace(noproxystr) == "" {
-		return set, hosts, nil
+		return set, hosts, matchers, nil
 	}
 	repl := strings.NewReplacer(";", ",", " ", ",")
 	for _, raw := range strings.Split(repl.Replace(strings.ToLower(noproxystr)), ",") {
@@ -183,34 +281,134 @@ func ParseNoProxy(noproxystr string, iponly bool) (IPSet, map[string]bool, error
 		}
 		if bypass == "<local>" {
 			hosts["localhost"] = true
-			_ = set.AddCIDR("127.0.0.0/8")
+			if err := set.AddCIDR("127.0.0.0/8"); err != nil {
+				return set, hosts, matchers, err
+			}
+			if err := set.AddCIDR("::1/128"); err != nil {
+				return set, hosts, matchers, err
+			}
+			if !iponly {
+				matchers = append(matchers, noProxyMatcher{local: true})
+			}
 			continue
 		}
 		if bypass == "*" && !iponly {
 			hosts[bypass] = true
+			matchers = append(matchers, noProxyMatcher{host: "*"})
 			continue
 		}
-		var err error
-		switch {
-		case strings.Contains(bypass, "-"):
+		if ip := parseIPToken(bypass); ip != nil {
+			if err := set.AddCIDR(ip.String()); err != nil {
+				return set, hosts, matchers, err
+			}
+			continue
+		}
+		if strings.Contains(bypass, "/") {
+			if err := set.AddCIDR(bypass); err != nil {
+				return set, hosts, matchers, fmt.Errorf("bad no-proxy network %q: %w", bypass, err)
+			}
+			continue
+		}
+		if looksLikeIPRange(bypass) {
 			a, b, _ := strings.Cut(bypass, "-")
-			err = set.AddRange(a, b)
-		case strings.Contains(bypass, "*"):
-			err = addGlob(&set, bypass)
-		default:
-			err = set.AddCIDR(bypass)
-		}
-		if err == nil {
+			if err := set.AddRange(a, b); err != nil {
+				return set, hosts, matchers, fmt.Errorf("bad no-proxy range %q: %w", bypass, err)
+			}
 			continue
+		}
+		if strings.Contains(bypass, "*") {
+			if isIPv4GlobCandidate(bypass) {
+				if err := addGlob(&set, bypass); err != nil {
+					return set, hosts, matchers, fmt.Errorf("bad no-proxy glob %q: %w", bypass, err)
+				}
+				continue
+			}
+			if !iponly && strings.HasPrefix(bypass, "*.") {
+				host := normalizeHostRule(strings.TrimPrefix(bypass, "*."))
+				if err := validateHost(host); err != nil {
+					return set, hosts, matchers, fmt.Errorf("bad no-proxy host wildcard %q: %w", bypass, err)
+				}
+				hosts["*."+host] = true
+				matchers = append(matchers, noProxyMatcher{host: host, subdomainsOnly: true})
+				continue
+			}
+			return set, hosts, matchers, fmt.Errorf("unsupported no-proxy wildcard %q", bypass)
 		}
 		if iponly {
-			return set, hosts, err
+			return set, hosts, matchers, fmt.Errorf("bad ip: %s", bypass)
 		}
-		if !strings.Contains(bypass, "*") {
-			hosts[bypass] = true
+		if strings.Contains(bypass, ":") {
+			host, port, err := parseNoProxyHostPort(bypass)
+			if err != nil {
+				return set, hosts, matchers, err
+			}
+			key := net.JoinHostPort(host, strconv.Itoa(port))
+			hosts[key] = true
+			matchers = append(matchers, noProxyMatcher{host: normalizeHostRule(host), port: port})
+			continue
+		}
+		host := normalizeHostRule(bypass)
+		if err := validateHost(host); err != nil {
+			return set, hosts, matchers, fmt.Errorf("bad no-proxy host %q: %w", bypass, err)
+		}
+		hosts[bypass] = true
+		matchers = append(matchers, noProxyMatcher{host: host})
+	}
+	return set, hosts, matchers, nil
+}
+
+func parseIPToken(token string) net.IP {
+	if strings.HasPrefix(token, "[") && strings.HasSuffix(token, "]") {
+		token = strings.TrimSuffix(strings.TrimPrefix(token, "["), "]")
+	}
+	return net.ParseIP(token)
+}
+
+func looksLikeIPRange(token string) bool {
+	if strings.Count(token, "-") != 1 {
+		return false
+	}
+	a, b, _ := strings.Cut(token, "-")
+	return looksLikeIP(a) && looksLikeIP(b)
+}
+
+func looksLikeIP(token string) bool {
+	return net.ParseIP(token) != nil || strings.Count(token, ".") == 3 || strings.Contains(token, ":")
+}
+
+func isIPv4GlobCandidate(token string) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "*" {
+			continue
+		}
+		if _, err := strconv.Atoi(part); err != nil {
+			return false
 		}
 	}
-	return set, hosts, nil
+	return true
+}
+
+func parseNoProxyHostPort(token string) (string, int, error) {
+	host, portText, err := net.SplitHostPort(token)
+	if err != nil {
+		return "", 0, fmt.Errorf("bad no-proxy host:port %q: %w", token, err)
+	}
+	if err := validateHost(host); err != nil {
+		return "", 0, fmt.Errorf("bad no-proxy host:port %q: %w", token, err)
+	}
+	port, err := parsePort(portText)
+	if err != nil {
+		return "", 0, fmt.Errorf("bad no-proxy host:port %q: %w", token, err)
+	}
+	return host, port, nil
+}
+
+func normalizeHostRule(host string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(strings.ToLower(host), "."), ".")
 }
 
 func addGlob(set *IPSet, glob string) error {
@@ -241,14 +439,15 @@ type Wproxy struct {
 	NoProxyHosts    map[string]bool
 	NoProxyHostsStr string
 	PAC             *pac.Pac
+	noProxyMatchers []noProxyMatcher
 }
 
 func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, error) {
-	np, hosts, err := ParseNoProxy(noproxy, false)
+	np, hosts, matchers, err := parseNoProxy(noproxy, false)
 	if err != nil {
 		return nil, err
 	}
-	w := &Wproxy{Mode: mode, Servers: servers, NoProxy: np, NoProxyHosts: hosts}
+	w := &Wproxy{Mode: mode, Servers: servers, NoProxy: np, NoProxyHosts: hosts, noProxyMatchers: matchers}
 	if mode == ModeConfigPAC && len(servers) > 0 {
 		w.PAC = pac.New(servers[0].Host, pacEncoding)
 		if err := w.PAC.Load(); err != nil {
@@ -264,11 +463,8 @@ func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, erro
 			w.Mode = ModeEnv
 			w.Servers = parsed
 			if no := firstEnv("no_proxy", "NO_PROXY"); no != "" {
-				np2, hosts2, _ := ParseNoProxy(no, false)
-				w.NoProxy.nets = append(w.NoProxy.nets, np2.nets...)
-				w.NoProxy.ranges = append(w.NoProxy.ranges, np2.ranges...)
-				for h := range hosts2 {
-					w.NoProxyHosts[h] = true
+				if err := mergeNoProxy(w, no); err != nil {
+					return nil, fmt.Errorf("parse no_proxy: %w", err)
 				}
 			}
 		}
@@ -277,11 +473,15 @@ func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, erro
 			switch {
 			case sysproxy.Found && sysproxy.AutoDetect:
 				w.Mode = ModeAuto
-				mergeNoProxy(w, sysproxy.Bypass)
+				if err := mergeNoProxy(w, sysproxy.Bypass); err != nil {
+					return nil, fmt.Errorf("parse system proxy bypass: %w", err)
+				}
 			case sysproxy.Found && sysproxy.IsPAC:
 				w.Mode = ModePAC
 				w.Servers = []Server{{Host: sysproxy.PACURL, Scheme: "pac"}}
-				mergeNoProxy(w, sysproxy.Bypass)
+				if err := mergeNoProxy(w, sysproxy.Bypass); err != nil {
+					return nil, fmt.Errorf("parse system proxy bypass: %w", err)
+				}
 			case sysproxy.Found:
 				parsed, err := ParseProxy(sysproxy.ManualProxy)
 				if err != nil {
@@ -289,7 +489,9 @@ func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, erro
 				}
 				w.Mode = ModeManual
 				w.Servers = parsed
-				mergeNoProxy(w, sysproxy.Bypass)
+				if err := mergeNoProxy(w, sysproxy.Bypass); err != nil {
+					return nil, fmt.Errorf("parse system proxy bypass: %w", err)
+				}
 			}
 		}
 	}
@@ -301,16 +503,21 @@ func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, erro
 	return w, nil
 }
 
-func mergeNoProxy(w *Wproxy, noproxy string) {
+func mergeNoProxy(w *Wproxy, noproxy string) error {
 	if noproxy == "" {
-		return
+		return nil
 	}
-	np2, hosts2, _ := ParseNoProxy(noproxy, false)
+	np2, hosts2, matchers2, err := parseNoProxy(noproxy, false)
+	if err != nil {
+		return err
+	}
 	w.NoProxy.nets = append(w.NoProxy.nets, np2.nets...)
 	w.NoProxy.ranges = append(w.NoProxy.ranges, np2.ranges...)
+	w.noProxyMatchers = append(w.noProxyMatchers, matchers2...)
 	for h := range hosts2 {
 		w.NoProxyHosts[h] = true
 	}
+	return nil
 }
 
 func firstEnv(keys ...string) string {
@@ -324,15 +531,9 @@ func firstEnv(keys ...string) string {
 
 func (w *Wproxy) GetNetloc(rawurl string) (Server, string, error) {
 	if !strings.Contains(rawurl, "://") {
-		host := rawurl
-		port := 80
-		if h, p, ok := strings.Cut(rawurl, ":"); ok {
-			parsed, err := strconv.Atoi(p)
-			if err != nil {
-				return Server{}, "", fmt.Errorf("bad target port: %s", p)
-			}
-			host = h
-			port = parsed
+		host, port, err := parseAuthority(rawurl, 80)
+		if err != nil {
+			return Server{}, "", fmt.Errorf("bad target authority: %w", err)
 		}
 		return Server{Host: host, Port: port}, "/", nil
 	}
@@ -341,14 +542,17 @@ func (w *Wproxy) GetNetloc(rawurl string) (Server, string, error) {
 		return Server{}, "", err
 	}
 	host := u.Hostname()
-	if host == "" {
-		host = rawurl
+	if err := validateHost(host); err != nil {
+		return Server{}, "", fmt.Errorf("bad target host: %w", err)
 	}
 	port := 0
 	if u.Port() != "" {
-		port, _ = strconv.Atoi(u.Port())
+		port, err = parsePort(u.Port())
+		if err != nil {
+			return Server{}, "", fmt.Errorf("bad target port: %w", err)
+		}
 	} else {
-		switch u.Scheme {
+		switch strings.ToLower(u.Scheme) {
 		case httpsScheme:
 			port = 443
 		case "ftp":
@@ -364,7 +568,7 @@ func (w *Wproxy) GetNetloc(rawurl string) (Server, string, error) {
 	if u.RawQuery != "" {
 		path += "?" + u.RawQuery
 	}
-	return Server{Host: host, Port: port, Scheme: u.Scheme}, path, nil
+	return Server{Host: host, Port: port, Scheme: strings.ToLower(u.Scheme)}, path, nil
 }
 
 // FindProxyForURL resolves the proxy candidates for rawurl. The returned
@@ -410,8 +614,8 @@ func parseProxyOrDirect(proxy string) []Server {
 }
 
 func (w *Wproxy) isNoProxy(netloc Server) bool {
-	host := strings.ToLower(netloc.Host)
-	if w.hostMatchesNoProxy(host) {
+	host := normalizeHostRule(netloc.Host)
+	if w.hostMatchesNoProxy(netloc) {
 		return true
 	}
 	if w.NoProxy.Size() == 0 {
@@ -428,13 +632,28 @@ func (w *Wproxy) isNoProxy(netloc Server) bool {
 	return false
 }
 
-func (w *Wproxy) hostMatchesNoProxy(host string) bool {
-	for bypass := range w.NoProxyHosts {
-		bypass = strings.TrimPrefix(strings.ToLower(bypass), ".")
-		if bypass == "*" {
+func (w *Wproxy) hostMatchesNoProxy(netloc Server) bool {
+	host := normalizeHostRule(netloc.Host)
+	for _, matcher := range w.noProxyMatchers {
+		if matcher.local {
+			if net.ParseIP(host) == nil && !strings.Contains(host, ".") {
+				return true
+			}
+			continue
+		}
+		if matcher.port != 0 && matcher.port != netloc.Port {
+			continue
+		}
+		if matcher.host == "*" {
 			return true
 		}
-		if host == bypass || strings.HasSuffix(host, "."+bypass) {
+		if matcher.subdomainsOnly {
+			if strings.HasSuffix(host, "."+matcher.host) {
+				return true
+			}
+			continue
+		}
+		if host == matcher.host || strings.HasSuffix(host, "."+matcher.host) {
 			return true
 		}
 	}
