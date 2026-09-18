@@ -192,7 +192,10 @@ func validDigestNC(nc string) bool {
 		return false
 	}
 	for _, c := range nc {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		isDigit := c >= '0' && c <= '9'
+		isLowerHex := c >= 'a' && c <= 'f'
+		isUpperHex := c >= 'A' && c <= 'F'
+		if !isDigit && !isLowerHex && !isUpperHex {
 			return false
 		}
 	}
@@ -389,22 +392,22 @@ func readDERTLV(data []byte) (byte, []byte, []byte, bool) {
 	tag := data[0]
 	lengthByte := data[1]
 	offset := 2
-	length := uint64(lengthByte)
+	length := int(lengthByte)
 	if lengthByte&0x80 != 0 {
 		count := int(lengthByte & 0x7f)
-		if count == 0 || count > 4 || len(data) < offset+count {
+		if count == 0 || count > 2 || len(data) < offset+count {
 			return 0, nil, nil, false
 		}
 		length = 0
 		for i := 0; i < count; i++ {
-			length = (length << 8) | uint64(data[offset+i])
+			length = (length << 8) | int(data[offset+i])
 		}
 		offset += count
 	}
-	if offset > len(data) || length > uint64(len(data)-offset) {
+	if offset > len(data) || length > len(data)-offset {
 		return 0, nil, nil, false
 	}
-	end := offset + int(length)
+	end := offset + length
 	return tag, data[offset:end], data[end:], true
 }
 
@@ -477,12 +480,14 @@ func parseNTLMAuthenticateMessage(msg []byte) (ntlmAuthenticateMessage, error) {
 			return nil, errors.New("invalid NTLM field")
 		}
 		length := int(binary.LittleEndian.Uint16(msg[offset : offset+2]))
-		start := uint64(binary.LittleEndian.Uint32(msg[offset+4 : offset+8]))
-		if start > uint64(len(msg)) || uint64(length) > uint64(len(msg))-start {
+		if msg[offset+6] != 0 || msg[offset+7] != 0 {
+			return nil, errors.New("NTLM field offset exceeds resource limit")
+		}
+		start := int(binary.LittleEndian.Uint16(msg[offset+4 : offset+6]))
+		if start > len(msg) || length > len(msg)-start {
 			return nil, errors.New("NTLM field out of range")
 		}
-		begin := int(start)
-		return msg[begin : begin+length], nil
+		return msg[start : start+length], nil
 	}
 	decode := func(data []byte) (string, error) {
 		if unicode {
@@ -749,12 +754,6 @@ func digestNonceMarkIfNew(nonce, nc string) bool {
 	_, loaded := seenClientNonces.LoadOrStore(nonce+"|"+nc, time.Now().Add(digestNonceLifetime))
 	pruneDigestMaps()
 	return !loaded
-}
-
-// digestNonceReplayed is retained for focused replay tests and reports whether
-// the pair was already marked by a verified request.
-func digestNonceReplayed(nonce, nc string) bool {
-	return !digestNonceMarkIfNew(nonce, nc)
 }
 
 // pruneDigestMaps drops expired entries from both digest maps, at most once
