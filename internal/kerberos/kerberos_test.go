@@ -139,7 +139,7 @@ func TestCheckNearExpiryRenewalAndFallback(t *testing.T) {
 	if got := mgr.Check(false); got != nil {
 		t.Fatalf("non-blocking Check returned %v", *got)
 	}
-	waitForRefresh(t, mgr, time.Second)
+	waitForRefresh(t, mgr)
 	if !renewed || !kinit {
 		t.Fatalf("renewed=%v kinit=%v", renewed, kinit)
 	}
@@ -160,7 +160,7 @@ func TestCheckHealthyTicketUsesKlistFastValidation(t *testing.T) {
 	if got := mgr.Check(false); got != nil {
 		t.Fatalf("non-blocking Check returned %v", *got)
 	}
-	waitForRefresh(t, mgr, time.Second)
+	waitForRefresh(t, mgr)
 	_, next, _ := managerState(mgr)
 	if !validated || !next.After(time.Now()) {
 		t.Fatalf("validated=%v next=%v", validated, next)
@@ -178,7 +178,7 @@ func TestBackoffPreventsKinitOnce(t *testing.T) {
 	if got := mgr.Check(false); got != nil {
 		t.Fatalf("non-blocking Check returned %v", *got)
 	}
-	waitForRefresh(t, mgr, time.Second)
+	waitForRefresh(t, mgr)
 	_, next, backoff := managerState(mgr)
 	if calls != 0 || backoff != 0 || !next.After(time.Now()) {
 		t.Fatalf("calls=%d backoff=%s next=%v", calls, backoff, next)
@@ -189,7 +189,7 @@ func TestBackoffPreventsKinitOnce(t *testing.T) {
 	if got := mgr.Check(false); got != nil {
 		t.Fatalf("non-blocking Check returned %v", *got)
 	}
-	waitForRefresh(t, mgr, time.Second)
+	waitForRefresh(t, mgr)
 	if calls != 1 {
 		t.Fatalf("calls=%d want 1", calls)
 	}
@@ -206,7 +206,7 @@ func TestForceBypassesBackoff(t *testing.T) {
 	if got := mgr.Check(true); got != nil {
 		t.Fatalf("non-blocking Check returned %v", *got)
 	}
-	waitForRefresh(t, mgr, time.Second)
+	waitForRefresh(t, mgr)
 	if calls != 1 {
 		t.Fatalf("calls=%d want 1", calls)
 	}
@@ -255,7 +255,7 @@ func TestConcurrentThreadsDoNotWaitForRenewal(t *testing.T) {
 		t.Fatalf("results=%v calls=%d", results, calls)
 	}
 	close(release)
-	waitForRefresh(t, mgr, time.Second)
+	waitForRefresh(t, mgr)
 }
 
 func TestDetectHeimdal(t *testing.T) {

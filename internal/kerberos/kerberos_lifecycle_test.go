@@ -126,9 +126,9 @@ func TestConcurrentExpiryStateUpdatesAreSynchronized(t *testing.T) {
 	}
 }
 
-func waitForRefresh(t *testing.T, mgr *Manager, timeout time.Duration) {
+func waitForRefresh(t *testing.T, mgr *Manager) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(time.Second)
 	for {
 		mgr.mu.Lock()
 		refreshing := mgr.refreshing
@@ -172,7 +172,7 @@ func TestCleanupRemovesCCacheAfterInFlightRefresh(t *testing.T) {
 	}
 	mgr.Cleanup()
 	close(release)
-	waitForRefresh(t, mgr, time.Second)
+	waitForRefresh(t, mgr)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("ccache exists after cleanup + refresh completion: %v", err)
 	}
