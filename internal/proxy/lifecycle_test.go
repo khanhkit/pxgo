@@ -133,6 +133,9 @@ func TestAPISS0001RetryBuildFailureCloses407Body(t *testing.T) {
 	}
 
 	got, err := s.retryHTTPProxyAuth(&http.Transport{}, req, req.URL, body, req.URL.String(), "", resp)
+	if got != nil && got.Body != nil {
+		defer got.Body.Close()
+	}
 	if err == nil {
 		t.Fatal("expected replay body open failure")
 	}
