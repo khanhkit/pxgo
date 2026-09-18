@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/pavelsimo/pxgo/internal/config"
@@ -50,9 +49,19 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, "hijacking unsupported", http.StatusInternalServerError)
 		return
 	}
+	if !s.reserveTunnel() {
+		_ = upstream.Close()
+		http.Error(rw, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	client, brw, err := hijacker.Hijack()
 	if err != nil {
+		s.cancelTunnelReservation()
 		_ = upstream.Close()
+		return
+	}
+	tunnel, ok := s.activateTunnel(client, upstream)
+	if !ok {
 		return
 	}
 	_, _ = brw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -62,8 +71,7 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 		_, _ = brw.Write(leftover)
 	}
 	if err := brw.Flush(); err != nil {
-		_ = upstream.Close()
-		_ = client.Close()
+		s.closeAndFinishTunnel(tunnel)
 		return
 	}
 	// Bytes the client pipelined behind the CONNECT request (e.g. an eager
@@ -72,16 +80,14 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 	if n := brw.Reader.Buffered(); n > 0 {
 		pipelined, _ := brw.Peek(n)
 		if _, err := upstream.Write(pipelined); err != nil {
-			_ = upstream.Close()
-			_ = client.Close()
+			s.closeAndFinishTunnel(tunnel)
 			return
 		}
 		_, _ = brw.Discard(n)
 	}
 	debug.Dprint("CONNECT tunnel established: " + target)
-	atomic.AddInt64(&s.active, 1)
 	go func() {
-		defer atomic.AddInt64(&s.active, -1)
+		defer s.finishTunnel(tunnel)
 		relay(client, upstream, time.Duration(s.cfg.Idle)*time.Second)
 	}()
 }

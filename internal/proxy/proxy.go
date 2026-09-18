@@ -56,6 +56,12 @@ type Server struct {
 	active     int64
 	transports sync.Map // proxy key -> *http.Transport, reused across requests
 
+	tunnelMu           sync.Mutex
+	tunnels            map[*managedTunnel]struct{}
+	tunnelPending      int
+	tunnelZero         chan struct{}
+	tunnelShuttingDown bool
+
 	// Derived from immutable config once in New so request handlers do not
 	// re-parse it on every call.
 	clientAuthList []string
@@ -100,7 +106,16 @@ func New(cfg config.Config) (*Server, error) {
 	if krb != nil {
 		krb.Check(true)
 	}
-	s := &Server{cfg: cfg, w: wp, lastReload: time.Now(), port: cfg.Port, krb: krb, closed: make(chan struct{})}
+	s := &Server{
+		cfg:        cfg,
+		w:          wp,
+		lastReload: time.Now(),
+		port:       cfg.Port,
+		krb:        krb,
+		closed:     make(chan struct{}),
+		tunnels:    make(map[*managedTunnel]struct{}),
+		tunnelZero: closedSignal(),
+	}
 	s.clientAuthList = clientAuthMethods(cfg.ClientAuth)
 	if cfg.Allow != "" {
 		// Already validated by validateAllow above.
@@ -375,11 +390,15 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	var err error
 	s.once.Do(func() {
+		tunnelsDone := s.beginTunnelShutdown()
 		s.stateMu.RLock()
 		srv := s.srv
 		s.stateMu.RUnlock()
 		if srv != nil {
 			err = srv.Shutdown(ctx)
+		}
+		if tunnelErr := waitTunnelDrain(ctx, tunnelsDone); tunnelErr != nil && err == nil {
+			err = tunnelErr
 		}
 		s.clearTransports()
 		if s.krb != nil {
