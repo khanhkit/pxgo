@@ -24,14 +24,16 @@ type entry struct {
 }
 
 type lookupCall struct {
-	done chan struct{}
-	ips  []net.IP
+	done       chan struct{}
+	ips        []net.IP
+	generation uint64
 }
 
 var (
-	mu       sync.RWMutex
-	cache    = map[string]entry{}
-	inflight = map[string]*lookupCall{}
+	mu         sync.RWMutex
+	cache      = map[string]entry{}
+	inflight   = map[string]*lookupCall{}
+	generation uint64
 )
 
 // Lookup resolves host, serving repeated lookups from a TTL cache. Concurrent
@@ -64,7 +66,7 @@ func Lookup(host string) []net.IP {
 		<-done
 		return cloneIPs(call.ips)
 	}
-	call := &lookupCall{done: make(chan struct{})}
+	call := &lookupCall{done: make(chan struct{}), generation: generation}
 	inflight[host] = call
 	mu.Unlock()
 
@@ -78,15 +80,19 @@ func Lookup(host string) []net.IP {
 	stored := cloneIPs(ips)
 
 	mu.Lock()
-	if len(cache) >= maxEntries {
-		evictLocked(completedAt)
-	}
-	cache[host] = entry{
-		ips:     stored,
-		expires: completedAt.Add(ttl),
+	if call.generation == generation {
+		if len(cache) >= maxEntries {
+			evictLocked(completedAt)
+		}
+		cache[host] = entry{
+			ips:     stored,
+			expires: completedAt.Add(ttl),
+		}
 	}
 	call.ips = stored
-	delete(inflight, host)
+	if inflight[host] == call {
+		delete(inflight, host)
+	}
 	close(call.done)
 	mu.Unlock()
 
@@ -131,11 +137,19 @@ func evictLocked(now time.Time) {
 	}
 }
 
-// ResetForTest clears the cache and inflight registry. Tests call this only
-// after their resolver generations have completed.
-func ResetForTest() {
+// ClearNetworkState invalidates cache entries and detaches in-flight resolver
+// generations after a network epoch. Calls already waiting on an older
+// generation may still receive that result, but stale generations cannot
+// repopulate the new cache or delete a newer in-flight lookup.
+func ClearNetworkState() {
 	mu.Lock()
+	generation++
 	cache = map[string]entry{}
 	inflight = map[string]*lookupCall{}
 	mu.Unlock()
+}
+
+// ResetForTest clears all transient resolver state.
+func ResetForTest() {
+	ClearNetworkState()
 }
