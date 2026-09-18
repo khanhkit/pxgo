@@ -29,6 +29,8 @@ const (
 	directKey   = "direct://DIRECT:80"
 	httpScheme  = "http"
 	httpsScheme = "https"
+	socksScheme = "socks"
+	pacScheme   = "pac"
 )
 
 var Direct = Server{Host: directHost, Port: 80, Scheme: "direct"}
@@ -190,7 +192,7 @@ func parseProxyEndpoint(raw string) (Server, error) {
 
 func validProxyScheme(scheme string) bool {
 	switch scheme {
-	case httpScheme, httpsScheme, "socks", "socks4", "socks4a", "socks5":
+	case httpScheme, httpsScheme, socksScheme, "socks4", "socks4a", "socks5":
 		return true
 	default:
 		return false
@@ -201,7 +203,7 @@ func defaultProxyPort(scheme string) int {
 	switch scheme {
 	case httpsScheme:
 		return 443
-	case "socks", "socks4", "socks4a", "socks5":
+	case socksScheme, "socks4", "socks4a", "socks5":
 		return 1080
 	default:
 		return 80
@@ -484,7 +486,7 @@ func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, erro
 				}
 			case sysproxy.Found && sysproxy.IsPAC:
 				w.Mode = ModePAC
-				w.Servers = []Server{{Host: sysproxy.PACURL, Scheme: "pac"}}
+				w.Servers = []Server{{Host: sysproxy.PACURL, Scheme: pacScheme}}
 				if err := mergeNoProxy(w, sysproxy.Bypass); err != nil {
 					return nil, fmt.Errorf("parse system proxy bypass: %w", err)
 				}
