@@ -538,9 +538,9 @@ func TestClientAuthPersistsOnConnection(t *testing.T) {
 	}
 }
 
-func TestClientAuthZeroLengthBodyMethodRequiresHeader(t *testing.T) {
+func TestClientAuthZeroLengthBodyMethodReusesConnectionAuth(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "should not reach")
+		fmt.Fprint(w, "body auth ok")
 	}))
 	defer upstream.Close()
 	upstreamURL, _ := url.Parse(upstream.URL)
@@ -568,9 +568,10 @@ func TestClientAuthZeroLengthBodyMethodRequiresHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	data, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusProxyAuthRequired {
-		t.Fatalf("expected 407, got %s", resp.Status)
+	if resp.StatusCode != http.StatusOK || string(data) != "body auth ok" {
+		t.Fatalf("expected authenticated POST to pass, status=%s body=%q", resp.Status, data)
 	}
 }
 
@@ -2010,6 +2011,10 @@ func TestReplayableBodySpillsLargeBodiesToTempFile(t *testing.T) {
 }
 
 func digestAuthHeader(uri, nonce string) string {
+	if parsed, err := url.Parse(uri); err == nil && parsed.IsAbs() && parsed.Path == "" {
+		parsed.Path = "/"
+		uri = parsed.String()
+	}
 	username := "test"
 	password := "12345"
 	method := http.MethodGet
