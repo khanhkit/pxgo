@@ -67,7 +67,7 @@ human-edited config with explanations.
 | `pac_encoding` / `--pac-encoding` | `utf-8` | PAC file encoding |
 | `port` / `--port` | `3128` | Local listen port |
 | `listen` / `--listen` | `127.0.0.1` | Local listen address list |
-| `gateway` / `--gateway` | `0` | Bind all interfaces |
+| `gateway` / `--gateway` | `0` | Bind all interfaces; requires restrictive `allow`, `hostonly`, or strong downstream auth |
 | `hostonly` / `--hostonly` | `0` | Bind all interfaces but allow local host IPs |
 | `allow` / `--allow` | `*.*.*.*` | Client allow list |
 | `noproxy` / `--noproxy` | empty | Direct-connect bypass list |
@@ -80,7 +80,7 @@ human-edited config with explanations.
 
 | Key / Flag | Default | Description |
 | --- | --- | --- |
-| `client_auth` / `--client-auth` | `NONE` | Local client auth selector |
+| `client_auth` / `--client-auth` | `NONE` | Client auth selector; enabled modes require username/password, and Basic-capable modes are loopback-only on plaintext listeners |
 | `client_username` / `--client-username` | empty | Local client auth username |
 | `client_nosspi` / `--client-nosspi` | `0` | Compatibility flag retained from Python Px |
 
@@ -88,10 +88,10 @@ human-edited config with explanations.
 
 | Key / Flag | Default | Description |
 | --- | --- | --- |
-| `workers` / `--workers` | `1` | Compatibility setting retained for config parity |
-| `threads` / `--threads` | `32` | Compatibility setting retained for config parity |
-| `idle` / `--idle` | `30` | CONNECT tunnel idle timeout in seconds |
-| `socktimeout` / `--socktimeout` | `20.0` | Upstream socket timeout in seconds |
+| `workers` / `--workers` | `1` | Connection-admission multiplier; `workers × threads` is the global accepted-connection cap |
+| `threads` / `--threads` | `32` | Connection-admission multiplier; must be positive |
+| `idle` / `--idle` | `30` | CONNECT tunnel and downstream HTTP keep-alive idle timeout in seconds |
+| `socktimeout` / `--socktimeout` | `20.0` | Upstream socket plus downstream header/read timeout in seconds; downstream write window is bounded to 2× this value |
 | `proxyreload` / `--proxyreload` | `60` | PAC/system proxy refresh interval |
 | `foreground` / `--foreground` | `0` | Compatibility flag |
 | `log` / `--log` | `0` | Debug log destination: `1`=script dir, `2`=cwd, `3`=unique file, `4`=stdout |

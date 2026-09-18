@@ -209,7 +209,7 @@ Options:
   --pac-encoding=ENCODING         PAC file encoding
   --port=PORT                     Listen port
   --listen=IP                     Listen address
-  --gateway                       Listen on all interfaces
+  --gateway                       Listen on all interfaces; requires restrictive allow or strong client auth
   --hostonly                      Allow local host interfaces only
   --allow=IPGLOB                  Client allow list
   --noproxy=LIST                  Direct-connect bypass list
@@ -217,7 +217,7 @@ Options:
   --auth=TYPE                     Upstream auth: ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC, NONE
   --username=USER                 Upstream auth username
   --kerberos                      Enable Kerberos ticket management
-  --client-auth=TYPE              Client auth: NONE, ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC
+  --client-auth=TYPE              Client auth: NONE, ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC (Basic-capable modes are loopback-only)
   --client-username=USER          Downstream auth username
   --client-nosspi=0|1             Disable SSPI for downstream auth compatibility
   --config=PATH                   Read or save pxgo.ini at PATH

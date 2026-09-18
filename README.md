@@ -109,13 +109,13 @@ to choose where it lives — see [docs/configuration.md](docs/configuration.md).
 | `--pac=URL_OR_PATH` | PAC file URL or local file |
 | `--port=NUM` | Local listen port, default `3128` |
 | `--listen=IP[,IP]` | Local listen address list, default `127.0.0.1` |
-| `--gateway` | Bind all interfaces for remote clients |
+| `--gateway` | Bind all interfaces; requires a restrictive `--allow` policy or non-Basic downstream auth |
 | `--hostonly` | Bind all interfaces but allow only local host interface IPs |
 | `--allow=LIST` | Client allow list for `--gateway` mode |
 | `--noproxy=LIST` | Hosts or IP ranges that bypass the upstream proxy |
 | `--auth=TYPE` | Upstream auth mode: `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `NONE` |
 | `--username=USER` | Upstream proxy username or Kerberos principal |
-| `--client-auth=TYPE` | Require local client auth: `NONE`, `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`; downstream `NEGOTIATE` means NTLMSSP/NTLM-over-SPNEGO, not Kerberos/GSSAPI |
+| `--client-auth=TYPE` | Require client auth: `NONE`, `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`; `BASIC`/`ANY` are loopback-only on plaintext listeners; downstream `NEGOTIATE` means NTLMSSP/NTLM-over-SPNEGO, not Kerberos/GSSAPI |
 | `--log=N` | Debug log destination: `1`=script dir (`--debug`), `2`=cwd, `3`=unique file (`--uniqlog`), `4`=stdout (`--verbose`) |
 
 Use `pxgo --help` for the current CLI help.
@@ -141,7 +141,7 @@ docker build -t pxgo .
 Run pxgo in Docker:
 
 ```bash
-docker run --rm -p 3128:3128 pxgo --gateway --proxy=proxy.company.com:8080
+docker run --rm -p 3128:3128 pxgo --gateway --allow=192.168.1.0/24 --proxy=proxy.company.com:8080
 ```
 
 See [docs/installation.md](docs/installation.md) and [docker/](docker/) for
