@@ -62,6 +62,7 @@ const (
 	keyTest           = "test"
 	keyDotenv         = "dotenv"
 	keySave           = "save"
+	keyInstall        = "install"
 	localhostIP       = "127.0.0.1"
 )
 
@@ -335,7 +336,7 @@ func ParseArgs(args []string) (Config, error) {
 		isSave = true
 	}
 	cfg.Save = isSave
-	allowMissingConfig := isSave || hasBareArg(args, "install")
+	allowMissingConfig := isSave || hasBareArg(args, keyInstall)
 
 	configPath := preScanConfigPath(args)
 	configPathSource := ""
@@ -442,7 +443,7 @@ func ParseArgs(args []string) (Config, error) {
 			cfg.Version = true
 			continue
 		}
-		if arg == "--install" {
+		if arg == "--"+keyInstall {
 			cfg.Install = true
 			continue
 		}
