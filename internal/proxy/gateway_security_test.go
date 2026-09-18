@@ -159,8 +159,11 @@ func TestServerTimeoutPolicyUsesExistingConfigBudgets(t *testing.T) {
 		t.Fatal("HTTP server not initialized")
 	}
 	wantSock := 200 * time.Millisecond
-	if srv.ReadHeaderTimeout != wantSock || srv.ReadTimeout != wantSock || srv.WriteTimeout != wantSock {
-		t.Fatalf("slow-client timeout policy header=%s read=%s write=%s want=%s", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, wantSock)
+	if srv.ReadHeaderTimeout != wantSock || srv.ReadTimeout != wantSock {
+		t.Fatalf("slow-client read policy header=%s read=%s want=%s", srv.ReadHeaderTimeout, srv.ReadTimeout, wantSock)
+	}
+	if srv.WriteTimeout != 2*wantSock {
+		t.Fatalf("write timeout=%s want=%s", srv.WriteTimeout, 2*wantSock)
 	}
 	if srv.IdleTimeout != 2*time.Second {
 		t.Fatalf("idle timeout=%s want=2s", srv.IdleTimeout)

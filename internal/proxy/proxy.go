@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -79,6 +80,15 @@ func New(cfg config.Config) (*Server, error) {
 	if err := validateAllow(cfg.Allow); err != nil {
 		return nil, err
 	}
+	if err := validateDownstreamCredentials(cfg); err != nil {
+		return nil, err
+	}
+	if err := validateGatewaySecurity(cfg); err != nil {
+		return nil, err
+	}
+	if err := validateServerBudgets(cfg); err != nil {
+		return nil, err
+	}
 	wp, err := buildWproxy(cfg)
 	if err != nil {
 		return nil, err
@@ -107,6 +117,115 @@ func validateAllow(allow string) error {
 		return fmt.Errorf("unsupported allow value: %w", err)
 	}
 	return nil
+}
+
+func validateDownstreamCredentials(cfg config.Config) error {
+	if len(clientAuthMethods(cfg.ClientAuth)) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(cfg.ClientUsername) == "" {
+		return errors.New("client authentication requires --client-username")
+	}
+	if cfg.ClientPassword == "" {
+		return errors.New("client authentication requires a non-empty client password")
+	}
+	return nil
+}
+
+func validateGatewaySecurity(cfg config.Config) error {
+	methods := clientAuthMethods(cfg.ClientAuth)
+	if isRemotePlaintextExposure(cfg) && containsClientAuthMethod(methods, authBasic) {
+		return errors.New("plaintext remote exposure cannot advertise BASIC client authentication; use ANYSAFE/DIGEST/NTLM/NEGOTIATE or a loopback listener")
+	}
+	if !cfg.Gateway {
+		return nil
+	}
+	if cfg.Hostonly || hasRestrictiveAllow(cfg.Allow) || len(methods) != 0 {
+		return nil
+	}
+	return errors.New("gateway requires an explicit restrictive --allow policy or downstream client authentication")
+}
+
+func containsClientAuthMethod(methods []string, want string) bool {
+	for _, method := range methods {
+		if method == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRestrictiveAllow(allow string) bool {
+	allow = strings.TrimSpace(allow)
+	if allow == "" {
+		return false
+	}
+	for _, raw := range strings.Split(allow, ",") {
+		token := strings.ToLower(strings.TrimSpace(raw))
+		switch token {
+		case "", "*", "*.*.*.*", "0.0.0.0/0", "::/0":
+			return false
+		}
+	}
+	return true
+}
+
+func isRemotePlaintextExposure(cfg config.Config) bool {
+	if cfg.Gateway {
+		return true
+	}
+	if cfg.Hostonly {
+		return false
+	}
+	for _, raw := range strings.Split(cfg.Listen, ",") {
+		host := strings.Trim(strings.TrimSpace(raw), "[]")
+		if host == "" {
+			continue
+		}
+		if strings.EqualFold(host, "localhost") {
+			continue
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return true
+		}
+	}
+	return false
+}
+
+func validateServerBudgets(cfg config.Config) error {
+	if cfg.Workers <= 0 || cfg.Threads <= 0 {
+		return errors.New("workers and threads must both be greater than zero")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if cfg.Workers > maxInt/cfg.Threads {
+		return errors.New("workers*threads connection budget overflows int")
+	}
+	if cfg.Idle <= 0 {
+		return errors.New("idle timeout must be greater than zero")
+	}
+	if cfg.SockTimeout <= 0 || math.IsNaN(cfg.SockTimeout) || math.IsInf(cfg.SockTimeout, 0) {
+		return errors.New("socktimeout must be a finite value greater than zero")
+	}
+	if cfg.SockTimeout > float64((1<<63-1)/(2*int64(time.Second))) {
+		return errors.New("socktimeout is too large")
+	}
+	if int64(cfg.Idle) > (1<<63-1)/int64(time.Second) {
+		return errors.New("idle timeout is too large")
+	}
+	return nil
+}
+
+func connectionBudget(cfg config.Config) int {
+	return cfg.Workers * cfg.Threads
+}
+
+func configuredSockTimeout(cfg config.Config) time.Duration {
+	return time.Duration(cfg.SockTimeout * float64(time.Second))
+}
+
+func configuredWriteTimeout(cfg config.Config) time.Duration {
+	return 2 * configuredSockTimeout(cfg)
 }
 
 func buildWproxy(cfg config.Config) (*wproxy.Wproxy, error) {
@@ -198,23 +317,29 @@ func (s *Server) listenHosts() []string {
 func (s *Server) Start() error {
 	port := s.cfg.Port
 	var listeners []net.Listener
+	admissionSlots := make(chan struct{}, connectionBudget(s.cfg))
 	for _, host := range s.listenHosts() {
 		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-		ln, err := net.Listen("tcp", addr)
+		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
 			for _, opened := range listeners {
 				_ = opened.Close()
 			}
 			return err
 		}
+		ln := newAdmissionListener(rawListener, admissionSlots)
 		listeners = append(listeners, ln)
 		if port == 0 {
-			port = ln.Addr().(*net.TCPAddr).Port
+			port = rawListener.Addr().(*net.TCPAddr).Port
 		}
 	}
+	sockTimeout := configuredSockTimeout(s.cfg)
 	srv := &http.Server{
 		Handler:           s,
-		ReadHeaderTimeout: 30 * time.Second,
+		ReadHeaderTimeout: sockTimeout,
+		ReadTimeout:       sockTimeout,
+		WriteTimeout:      configuredWriteTimeout(s.cfg),
+		IdleTimeout:       time.Duration(s.cfg.Idle) * time.Second,
 		ConnState: func(conn net.Conn, state http.ConnState) {
 			if state == http.StateClosed || state == http.StateHijacked {
 				s.clearClientState(conn.RemoteAddr().String())
@@ -283,17 +408,23 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 	}()
 	debug.Dprint(req.Method + " " + req.RequestURI)
-	if !s.isClientAllowed(req.RemoteAddr) {
-		debug.Dprint("client not allowed: " + req.RemoteAddr)
-		http.Error(rw, "forbidden", http.StatusForbidden)
-		return
-	}
-	if req.URL.Path == "/PxgoQuit" && req.Method == http.MethodGet {
+	if isQuitControlRequest(req) {
+		if !isLoopbackRemote(req.RemoteAddr) || !s.isClientAllowed(req.RemoteAddr) {
+			http.Error(rw, "forbidden", http.StatusForbidden)
+			return
+		}
 		rw.WriteHeader(http.StatusOK)
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = s.Shutdown(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = s.Shutdown(ctx)
 		}()
+		return
+	}
+	if !s.isClientAllowed(req.RemoteAddr) {
+		debug.Dprint("client not allowed: " + req.RemoteAddr)
+		http.Error(rw, "forbidden", http.StatusForbidden)
 		return
 	}
 	if s.clientAuthEnabled() && !s.authenticateClient(req) {
@@ -310,6 +441,19 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	s.handleHTTP(rw, req)
+}
+
+func isQuitControlRequest(req *http.Request) bool {
+	return req != nil && req.Method == http.MethodGet && req.URL != nil && !req.URL.IsAbs() && req.RequestURI == "/PxgoQuit"
+}
+
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 func (s *Server) isClientAllowed(remoteAddr string) bool {
