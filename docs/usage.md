@@ -106,7 +106,10 @@ PXGO_CLIENT_PASSWORD='client-secret' ./pxgo \
 ```
 
 Supported client auth modes are `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `ANY`,
-`ANYSAFE`, and `NONE`.
+`ANYSAFE`, and `NONE`. For **downstream client authentication**, `NEGOTIATE` is
+a compatibility mode for NTLMSSP carried directly under the Negotiate scheme or
+wrapped in SPNEGO. It does **not** accept Kerberos/GSSAPI tokens. Use the
+separate Kerberos support described above for upstream proxy authentication.
 
 ## Remote Clients
 
