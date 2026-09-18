@@ -38,16 +38,17 @@ const (
 )
 
 const (
-	directHost    = "DIRECT"
-	directKey     = "direct://DIRECT:80"
-	httpScheme    = "http"
-	httpsScheme   = "https"
-	socksScheme   = "socks"
-	socks4Scheme  = "socks4"
-	socks4aScheme = "socks4a"
-	socks5Scheme  = "socks5"
-	pacScheme     = "pac"
-	httpProxyEnv  = "HTTP_PROXY"
+	directHost        = "DIRECT"
+	directKey         = "direct://DIRECT:80"
+	httpScheme        = "http"
+	httpsScheme       = "https"
+	socksScheme       = "socks"
+	socks4Scheme      = "socks4"
+	socks4aScheme     = "socks4a"
+	socks5Scheme      = "socks5"
+	pacScheme         = "pac"
+	httpProxyEnvLower = "http_proxy"
+	httpProxyEnv      = "HTTP_PROXY"
 )
 
 var Direct = Server{Host: directHost, Port: 80, Scheme: "direct"}
@@ -482,7 +483,7 @@ func discoverEnvironmentProxies() (environmentProxySet, bool, error) {
 		scheme string
 		keys   []string
 	}{
-		{httpScheme, []string{"http_proxy", httpProxyEnv}},
+		{httpScheme, []string{httpProxyEnvLower, httpProxyEnv}},
 		{httpsScheme, []string{"https_proxy", "HTTPS_PROXY"}},
 	} {
 		raw := firstEnv(item.keys...)
