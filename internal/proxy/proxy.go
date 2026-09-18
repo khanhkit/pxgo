@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net"
 	"net/http"
@@ -604,6 +603,7 @@ func (s *Server) currentWproxy() *wproxy.Wproxy {
 }
 
 func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
+	req = withInformationalResponseForwarding(req, rw)
 	targetURL := req.URL.String()
 	if !req.URL.IsAbs() {
 		scheme := httpScheme
@@ -654,11 +654,13 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
 	debug.Dprintf("HTTP response: %d %s", resp.StatusCode, targetURL)
-	copyHeader(rw.Header(), resp.Header)
-	rw.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(rw, resp.Body)
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		s.handleHTTPUpgrade(rw, req, resp)
+		return
+	}
+	defer resp.Body.Close()
+	s.writeHTTPResponse(rw, resp)
 }
 
 // needsReplayableBody reports whether the request body must be buffered so it
@@ -744,6 +746,7 @@ func proxyCandidates(proxies []wproxy.Server) []wproxy.Server {
 func (s *Server) newOutboundRequest(req *http.Request, u *url.URL, body *replayableBody, proxyAuth string) (*http.Request, error) {
 	outReq := req.Clone(req.Context())
 	outReq.URL = u
+	outReq.Host = u.Host
 	outReq.RequestURI = ""
 	if body != nil {
 		rc, err := body.Open()
@@ -754,7 +757,13 @@ func (s *Server) newOutboundRequest(req *http.Request, u *url.URL, body *replaya
 		outReq.ContentLength = body.Size()
 	} // else: stream req.Body as-is (single attempt, no replay needed)
 	outReq.Header = cloneHeader(req.Header)
-	stripProxyHeaders(outReq.Header)
+	upgrade := requestedUpgrade(req)
+	stripIntermediaryHeaders(outReq.Header, true)
+	if upgrade != "" {
+		outReq.Header.Set("Connection", "Upgrade")
+		outReq.Header.Set("Upgrade", upgrade)
+	}
+	appendVia(outReq.Header)
 	if s.cfg.UserAgent != "" {
 		outReq.Header.Set("User-Agent", s.cfg.UserAgent)
 	}
@@ -765,11 +774,7 @@ func (s *Server) newOutboundRequest(req *http.Request, u *url.URL, body *replaya
 }
 
 func stripProxyHeaders(header http.Header) {
-	for key := range header {
-		if strings.HasPrefix(strings.ToLower(key), "proxy-") {
-			header.Del(key)
-		}
-	}
+	stripIntermediaryHeaders(header, true)
 }
 
 func cloneHeader(h http.Header) http.Header {

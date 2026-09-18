@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -9,7 +10,7 @@ import (
 
 type managedTunnel struct {
 	client    net.Conn
-	upstream  net.Conn
+	upstream  io.ReadWriteCloser
 	closeOnce sync.Once
 }
 
@@ -56,6 +57,10 @@ func (s *Server) cancelTunnelReservation() {
 }
 
 func (s *Server) activateTunnel(client, upstream net.Conn) (*managedTunnel, bool) {
+	return s.activateManagedTunnel(client, upstream)
+}
+
+func (s *Server) activateManagedTunnel(client net.Conn, upstream io.ReadWriteCloser) (*managedTunnel, bool) {
 	s.tunnelMu.Lock()
 	if s.tunnelPending > 0 {
 		s.tunnelPending--

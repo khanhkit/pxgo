@@ -49,6 +49,7 @@ func (s *Server) httpTransportForProxy(p wproxy.Server) *http.Transport {
 func (s *Server) newHTTPTransport(p wproxy.Server) *http.Transport {
 	timeout := time.Duration(s.cfg.SockTimeout * float64(time.Second))
 	transport := &http.Transport{
+		DisableCompression: true,
 		DialContext: (&net.Dialer{
 			Timeout:   timeout,
 			KeepAlive: 30 * time.Second,
