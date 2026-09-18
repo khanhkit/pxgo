@@ -435,6 +435,24 @@ func (s *Server) Ready() bool {
 	return s.srv != nil && len(s.listeners) != 0
 }
 
+// RuntimeStatus exposes a read-only Supervisor snapshot for diagnostics and the
+// external Process Guardian. It does not expose recovery mutation APIs.
+func (s *Server) RuntimeStatus() supervisor.Status {
+	if s.sup == nil {
+		return supervisor.Status{}
+	}
+	return s.sup.Status()
+}
+
+// RuntimeFatalSignals exposes only escalation requests. Guardian owns any
+// process-level restart decision; Runtime Supervisor never exits the process.
+func (s *Server) RuntimeFatalSignals() <-chan supervisor.FatalSignal {
+	if s.sup == nil {
+		return nil
+	}
+	return s.sup.FatalSignals()
+}
+
 func (s *Server) ActiveTunnels() int64 {
 	return atomic.LoadInt64(&s.active)
 }
@@ -442,6 +460,7 @@ func (s *Server) ActiveTunnels() int64 {
 func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			s.recordRuntimeOutcome(supervisor.OutcomeInternalFailure, wproxy.Server{})
 			debug.LogPanic(config.GetLogfile(config.LogCWD), recovered)
 			http.Error(rw, "internal server error", http.StatusInternalServerError)
 		}
