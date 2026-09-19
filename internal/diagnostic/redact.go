@@ -9,9 +9,10 @@ import (
 const redactedValue = "REDACTED"
 
 var (
-	urlPattern      = regexp.MustCompile(`(?i)\bhttps?://[^\s"'<>]+`)
-	authPattern     = regexp.MustCompile(`(?i)\b(proxy-authorization|authorization)\s*[:=]\s*(?:[A-Za-z]+\s+)?[^\s,;]+`)
-	secretKVPattern = regexp.MustCompile(`(?i)\b(password|passwd|pwd|token|api[_-]?key|secret|client_secret)\s*=\s*[^&\s,;]+`)
+	urlPattern       = regexp.MustCompile(`(?i)\bhttps?://[^\s"'<>]+`)
+	pathQueryPattern = regexp.MustCompile(`(^|\s)(/[^\s?]*\?)[^\s]+`)
+	authPattern      = regexp.MustCompile(`(?i)\b(proxy-authorization|authorization)\s*[:=]\s*(?:[A-Za-z]+\s+)?[^\s,;]+`)
+	secretKVPattern  = regexp.MustCompile(`(?i)\b(password|passwd|pwd|token|api[_-]?key|secret|client_secret)\s*[:=]\s*[^&\s,;]+`)
 )
 
 // RedactText removes common secret-bearing values from operational text. It is
@@ -22,6 +23,7 @@ func RedactText(input string) string {
 		return ""
 	}
 	out := urlPattern.ReplaceAllStringFunc(input, redactURL)
+	out = pathQueryPattern.ReplaceAllString(out, "$1$2"+redactedValue)
 	out = authPattern.ReplaceAllString(out, "$1: "+redactedValue)
 	out = secretKVPattern.ReplaceAllString(out, "$1="+redactedValue)
 	return out

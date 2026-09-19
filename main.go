@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/pavelsimo/pxgo/internal/config"
 	"github.com/pavelsimo/pxgo/internal/debug"
+	"github.com/pavelsimo/pxgo/internal/diagnostic"
 	"github.com/pavelsimo/pxgo/internal/proxy"
 	"github.com/pavelsimo/pxgo/internal/winstartup"
 	"golang.org/x/term"
@@ -28,6 +30,7 @@ import (
 var (
 	version            = "dev"
 	installStartupFunc = installStartup
+	setupDebugFunc     = setupDebug
 )
 
 const (
@@ -157,6 +160,13 @@ func run() (exitCode int) {
 		fmt.Fprintf(os.Stdout, "Password saved for %s\n", cfg.ClientUsername)
 		return 0
 	}
+	if cfg.Doctor {
+		if err := doctor(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 3
+		}
+		return 0
+	}
 	if cfg.Quit {
 		if err := quit(cfg); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -171,10 +181,7 @@ func run() (exitCode int) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if err := setupDebug(cfg); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
+	setupDebugBestEffort(cfg)
 	if cfg.Test != "" {
 		if err := runSelfTest(cfg); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -211,6 +218,14 @@ func run() (exitCode int) {
 	return 0
 }
 
+func setupDebugBestEffort(cfg config.Config) {
+	if err := setupDebugFunc(cfg); err != nil {
+		msg := diagnostic.RedactText(err.Error())
+		diagnostic.Record("diagnostic.log-error", msg)
+		fmt.Fprintln(os.Stderr, "debug logging disabled:", msg)
+	}
+}
+
 func setupDebug(cfg config.Config) error {
 	switch cfg.Log {
 	case config.LogNone:
@@ -223,7 +238,7 @@ func setupDebug(cfg config.Config) error {
 		if path == "" {
 			return nil
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
 		}
 		_, err := debug.New(path, false)
@@ -264,6 +279,7 @@ Options:
     2 = Log to working dir
     3 = Log to working dir with unique filename [--uniqlog]
     4 = Log to stdout [--verbose]. Implies --foreground
+  --doctor                        Print local read-only proxy diagnostics
   --quit                          Stop a running proxy
   --restart                       Quit then start the proxy
   --install                       Install pxgo in Windows startup registry
@@ -273,6 +289,66 @@ Options:
   --test-auth                     Self-test using configured upstream auth via auth=NONE
   --version                       Print version
   -h, --help                      Show help`)
+}
+
+func doctor(cfg config.Config) error {
+	report, err := doctorReport(cfg, diagnosticSnapshotPath())
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
+}
+
+func diagnosticSnapshotPath() string {
+	dir := config.GetConfigDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "diagnostic-snapshot.json")
+}
+
+func doctorReport(cfg config.Config, snapshotPath string) (diagnostic.DoctorReport, error) {
+	addr := net.JoinHostPort(listenForClient(cfg.Listen), fmt.Sprint(cfg.Port))
+	client := http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+	resp, err := client.Get("http://" + addr + diagnostic.DoctorControlPath)
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			var snapshot diagnostic.Snapshot
+			decoder := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
+			if decodeErr := decoder.Decode(&snapshot); decodeErr != nil {
+				return diagnostic.DoctorReport{}, fmt.Errorf("doctor failed: malformed live snapshot: %w", decodeErr)
+			}
+			var extra any
+			if decodeErr := decoder.Decode(&extra); decodeErr != io.EOF {
+				if decodeErr == nil {
+					return diagnostic.DoctorReport{}, errors.New("doctor failed: multiple JSON values in live snapshot")
+				}
+				return diagnostic.DoctorReport{}, fmt.Errorf("doctor failed: malformed live snapshot: %w", decodeErr)
+			}
+			return diagnostic.DoctorReport{Live: true, Snapshot: snapshot}, nil
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		err = fmt.Errorf("doctor live status: %s", resp.Status)
+	}
+
+	if snapshotPath != "" {
+		if snapshot, loadErr := diagnostic.LoadSnapshot(snapshotPath); loadErr == nil {
+			return diagnostic.DoctorReport{
+				Live:     false,
+				Error:    diagnostic.RedactText(err.Error()),
+				Snapshot: snapshot,
+			}, nil
+		}
+	}
+	return diagnostic.DoctorReport{}, fmt.Errorf("doctor failed: %w", err)
 }
 
 func quit(cfg config.Config) error {

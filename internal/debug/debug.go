@@ -36,7 +36,7 @@ var (
 
 func Pprint(objs ...any) {
 	defer func() { _ = recover() }()
-	fmt.Println(objs...)
+	fmt.Print(diagnostic.RedactText(fmt.Sprintln(objs...)))
 }
 
 func LogPanic(logPath string, recovered any) {
@@ -59,26 +59,37 @@ func New(name string, appendMode bool) (*Debug, error) {
 	lifecycleMu.Lock()
 	defer lifecycleMu.Unlock()
 
+	var nextFile *os.File
+	if name != "" {
+		var err error
+		nextFile, err = openLogFile(name, !appendMode)
+		if err != nil {
+			return instance.Load(), err
+		}
+	}
+
 	d := instance.Load()
-	if d == nil {
+	created := d == nil
+	if created {
 		d = &Debug{stdout: os.Stdout}
-		instance.Store(d)
 	}
 
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.file != nil {
-		_ = d.file.Close()
-		d.file = nil
-	}
+	oldFile := d.file
 	d.name = name
+	d.file = nextFile
 	if d.stdout == nil {
 		d.stdout = os.Stdout
 	}
-	if name == "" {
-		return d, nil
+	d.mu.Unlock()
+
+	if oldFile != nil {
+		_ = oldFile.Close()
 	}
-	return d, d.openFileLocked(!appendMode)
+	if created {
+		instance.Store(d)
+	}
+	return d, nil
 }
 
 func Instance() *Debug {
@@ -99,27 +110,44 @@ func ResetForTest() {
 func (d *Debug) Reopen() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.file != nil {
-		_ = d.file.Close()
-		d.file = nil
-	}
 	if d.name == "" {
+		if d.file != nil {
+			_ = d.file.Close()
+			d.file = nil
+		}
 		return nil
 	}
-	return d.openFileLocked(false)
+	next, err := openLogFile(d.name, false)
+	if err != nil {
+		return err
+	}
+	old := d.file
+	d.file = next
+	if old != nil {
+		_ = old.Close()
+	}
+	return nil
 }
 
-func (d *Debug) openFileLocked(truncate bool) error {
+func openLogFile(name string, truncate bool) (*os.File, error) {
 	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
 	if truncate {
 		flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 	}
-	f, err := os.OpenFile(d.name, flags, logFileMode)
+	f, err := os.OpenFile(name, flags, logFileMode)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := f.Chmod(logFileMode); err != nil {
 		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+func (d *Debug) openFileLocked(truncate bool) error {
+	f, err := openLogFile(d.name, truncate)
+	if err != nil {
 		return err
 	}
 	d.file = f

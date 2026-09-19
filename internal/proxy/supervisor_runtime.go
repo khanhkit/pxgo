@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/pavelsimo/pxgo/internal/diagnostic"
 	"github.com/pavelsimo/pxgo/internal/dnscache"
 	"github.com/pavelsimo/pxgo/internal/supervisor"
 	"github.com/pavelsimo/pxgo/internal/wproxy"
@@ -56,6 +57,9 @@ func (s *Server) recordRuntimeOutcome(kind supervisor.OutcomeKind, candidate wpr
 		return
 	}
 	s.sup.Record(runtimeOutcome(kind, candidate))
+	if kind != supervisor.OutcomeSuccess {
+		diagnostic.Record("runtime.outcome", kind.String())
+	}
 }
 
 func (s *Server) recoverRuntimeOutcome(kind supervisor.OutcomeKind, candidate wproxy.Server) {
@@ -63,6 +67,7 @@ func (s *Server) recoverRuntimeOutcome(kind supervisor.OutcomeKind, candidate wp
 		return
 	}
 	s.sup.Recover(runtimeOutcome(kind, candidate))
+	diagnostic.Record("runtime.recovery", kind.String())
 }
 
 func (s *Server) orderedProxyCandidates(authoritative []wproxy.Server) []wproxy.Server {

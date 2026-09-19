@@ -3,11 +3,12 @@ package diagnostic
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 const (
-	DefaultEventCapacity = 128
+	DefaultEventCapacity = 512
 	maxEventKindBytes    = 64
 	maxEventMessageBytes = 1024
 )
@@ -16,7 +17,7 @@ type Event struct {
 	Sequence uint64    `json:"sequence"`
 	Time     time.Time `json:"time"`
 	Kind     string    `json:"kind"`
-	Message  string    `json:"message"`
+	Reason   string    `json:"reason"`
 }
 
 type Ring struct {
@@ -52,7 +53,7 @@ func (r *Ring) Record(kind, message string) {
 		Sequence: r.next,
 		Time:     r.now().UTC(),
 		Kind:     kind,
-		Message:  message,
+		Reason:   message,
 	}
 	if len(r.events) == r.capacity {
 		copy(r.events, r.events[1:])
@@ -81,16 +82,26 @@ func boundText(value string, limit int) string {
 	return value[:limit-3] + "..."
 }
 
-var defaultRing = NewRing(DefaultEventCapacity)
+var defaultRing atomic.Pointer[Ring]
+
+func init() {
+	defaultRing.Store(NewRing(DefaultEventCapacity))
+}
 
 func Record(kind, message string) {
-	defaultRing.Record(kind, message)
+	defer func() { _ = recover() }()
+	if ring := defaultRing.Load(); ring != nil {
+		ring.Record(kind, message)
+	}
 }
 
 func Events() []Event {
-	return defaultRing.Snapshot()
+	if ring := defaultRing.Load(); ring != nil {
+		return ring.Snapshot()
+	}
+	return nil
 }
 
 func ResetForTest() {
-	defaultRing = NewRing(DefaultEventCapacity)
+	defaultRing.Store(NewRing(DefaultEventCapacity))
 }

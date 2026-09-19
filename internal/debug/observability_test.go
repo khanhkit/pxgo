@@ -126,6 +126,20 @@ func TestTCOBSLOG004WritePropagatesSinkFailure(t *testing.T) {
 	}
 }
 
+func TestTCOBSLOG005FailedInitializationDoesNotPublishBrokenInstance(t *testing.T) {
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	badPath := filepath.Join(t.TempDir(), "missing", "debug.log")
+	d, err := New(badPath, false)
+	if err == nil {
+		t.Fatal("New unexpectedly succeeded for missing parent")
+	}
+	if d != nil || Instance() != nil || Enabled() {
+		t.Fatalf("failed New published debug instance: returned=%p instance=%p", d, Instance())
+	}
+}
+
 func TestTCOBSLOG006RotationIsBounded(t *testing.T) {
 	ResetForTest()
 	t.Cleanup(ResetForTest)

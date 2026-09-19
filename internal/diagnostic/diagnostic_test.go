@@ -71,9 +71,9 @@ func TestTOBSEVT009ConcurrentRingSnapshotIsSafeAndCopied(t *testing.T) {
 	if len(first) == 0 {
 		t.Fatal("empty snapshot")
 	}
-	first[0].Message = "mutated"
+	first[0].Reason = "mutated"
 	second := ring.Snapshot()
-	if second[0].Message == "mutated" {
+	if second[0].Reason == "mutated" {
 		t.Fatal("caller mutated ring internals through snapshot")
 	}
 }
@@ -85,7 +85,7 @@ func TestTOBSEVT010RingRedactsBeforeStorage(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("snapshot length = %d", len(got))
 	}
-	if strings.Contains(got[0].Message, "pass") || strings.Contains(got[0].Message, "secret") {
+	if strings.Contains(got[0].Reason, "pass") || strings.Contains(got[0].Reason, "secret") {
 		t.Fatalf("event leaked secret: %+v", got[0])
 	}
 }

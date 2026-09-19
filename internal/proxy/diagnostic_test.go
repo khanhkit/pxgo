@@ -105,7 +105,7 @@ func TestTOBSDOC014SnapshotConsumesOwnerState(t *testing.T) {
 	if snapshot.ConfigSources["server"] != "env" {
 		t.Fatalf("safe config source = %q, want env", snapshot.ConfigSources["server"])
 	}
-	if len(snapshot.Events) != 1 || !strings.Contains(snapshot.Events[0].Message, "route refresh") {
+	if len(snapshot.Events) != 1 || !strings.Contains(snapshot.Events[0].Reason, "route refresh") {
 		t.Fatalf("events = %+v", snapshot.Events)
 	}
 }
