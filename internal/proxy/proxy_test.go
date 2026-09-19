@@ -1887,7 +1887,7 @@ func TestQuitEndpointRequiresAllowedClient(t *testing.T) {
 	cfg := config.Default()
 	cfg.Allow = "10.0.*.*"
 	px := startTestProxy(t, cfg)
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/PxgoQuit", px.Port()))
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", px.Port(), quitControlPath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1904,7 +1904,7 @@ func TestQuitEndpointRequiresAllowedClient(t *testing.T) {
 
 func TestQuitEndpointStopsProxy(t *testing.T) {
 	px := startTestProxy(t, config.Default())
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/PxgoQuit", px.Port()))
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", px.Port(), quitControlPath))
 	if err != nil {
 		t.Fatal(err)
 	}

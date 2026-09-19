@@ -84,7 +84,7 @@ func TestCopyDirectionRecordsActivityBeforeCopyReturns(t *testing.T) {
 	defer dst.Close()
 
 	var lastActivity atomic.Int64
-	initial := time.Now().UnixNano()
+	const initial int64 = 1
 	lastActivity.Store(initial)
 	done := make(chan bool, 1)
 	go func() { done <- copyDirection(dst, src, time.Second, &lastActivity) }()

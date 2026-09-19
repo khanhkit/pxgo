@@ -150,7 +150,7 @@ func newReplayableBodyWithLimits(ctx context.Context, src io.ReadCloser, content
 		total    int64
 	)
 
-	cleanup := func(primary error) (*replayableBody, error) {
+	cleanup := func(primary error) error {
 		clear(memory.Bytes())
 
 		var cleanupErr error
@@ -171,7 +171,7 @@ func newReplayableBodyWithLimits(ctx context.Context, src io.ReadCloser, content
 			budget.release(reserved)
 			reserved = 0
 		}
-		return nil, errors.Join(primary, cleanupErr)
+		return errors.Join(primary, cleanupErr)
 	}
 
 	writeChunk := func(chunk []byte) error {
@@ -219,33 +219,33 @@ func newReplayableBodyWithLimits(ctx context.Context, src io.ReadCloser, content
 	buf := make([]byte, 32<<10)
 	for {
 		if err := ctx.Err(); err != nil {
-			return cleanup(err)
+			return nil, cleanup(err)
 		}
 
 		n, readErr := owned.Read(buf)
 		if n > 0 {
 			if total+int64(n) > limits.maxBodyBytes {
-				return cleanup(fmt.Errorf("%w: body exceeds %d bytes", errReplayBodyTooLarge, limits.maxBodyBytes))
+				return nil, cleanup(fmt.Errorf("%w: body exceeds %d bytes", errReplayBodyTooLarge, limits.maxBodyBytes))
 			}
 			if err := writeChunk(buf[:n]); err != nil {
-				return cleanup(err)
+				return nil, cleanup(err)
 			}
 			total += int64(n)
 		}
 
 		if readErr != nil {
 			if err := ctx.Err(); err != nil {
-				return cleanup(err)
+				return nil, cleanup(err)
 			}
 			if errors.Is(readErr, io.EOF) {
 				break
 			}
-			return cleanup(fmt.Errorf("read replay body: %w", readErr))
+			return nil, cleanup(fmt.Errorf("read replay body: %w", readErr))
 		}
 	}
 
 	if err := ctx.Err(); err != nil {
-		return cleanup(err)
+		return nil, cleanup(err)
 	}
 
 	if file != nil {

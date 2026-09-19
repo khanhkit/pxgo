@@ -83,7 +83,7 @@ func TestDownstreamPasswordAuthRequiresCredentials(t *testing.T) {
 
 func TestAbsoluteProxyURLPxgoQuitIsForwardedNotControl(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/PxgoQuit" {
+		if r.URL.Path != quitControlPath {
 			t.Fatalf("path=%q", r.URL.Path)
 		}
 		_, _ = io.WriteString(w, "origin PxgoQuit resource")
@@ -91,7 +91,7 @@ func TestAbsoluteProxyURLPxgoQuitIsForwardedNotControl(t *testing.T) {
 	defer upstream.Close()
 
 	px := startTestProxy(t, config.Default())
-	resp, err := proxyClient(t, px.Port()).Get(upstream.URL + "/PxgoQuit")
+	resp, err := proxyClient(t, px.Port()).Get(upstream.URL + quitControlPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +112,8 @@ func TestRemoteOriginFormPxgoQuitCannotControlProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/PxgoQuit", nil)
-	req.RequestURI = "/PxgoQuit"
+	req := httptest.NewRequest(http.MethodGet, quitControlPath, nil)
+	req.RequestURI = quitControlPath
 	req.RemoteAddr = "203.0.113.10:44444"
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
@@ -134,8 +134,8 @@ func TestLoopbackOriginFormPxgoQuitRemainsAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/PxgoQuit", nil)
-	req.RequestURI = "/PxgoQuit"
+	req := httptest.NewRequest(http.MethodGet, quitControlPath, nil)
+	req.RequestURI = quitControlPath
 	req.RemoteAddr = "127.0.0.1:44445"
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)

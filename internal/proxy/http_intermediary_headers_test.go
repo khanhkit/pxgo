@@ -57,9 +57,9 @@ func TestOutboundRequestCanonicalizesProgrammaticHostMismatch(t *testing.T) {
 func TestOutboundRequestStripsHopByHopAndConnectionNominatedHeaders(t *testing.T) {
 	s := &Server{cfg: config.Default()}
 	req := httptest.NewRequest(http.MethodGet, "http://origin.example.test/resource", nil)
-	req.Header.Set("Connection", "X-Hop, Keep-Alive")
+	req.Header.Set(headerConnection, "X-Hop, Keep-Alive")
 	req.Header.Set("X-Hop", "secret")
-	req.Header.Set("Keep-Alive", "timeout=5")
+	req.Header.Set(headerKeepAlive, "timeout=5")
 	req.Header.Set("Proxy-Connection", "keep-alive")
 	req.Header.Set("Proxy-Authorization", "Basic client-secret")
 	req.Header.Set("TE", "gzip")
@@ -69,7 +69,7 @@ func TestOutboundRequestStripsHopByHopAndConnectionNominatedHeaders(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"Connection", "X-Hop", "Keep-Alive", "Proxy-Connection", "Proxy-Authorization", "TE", "Upgrade"} {
+	for _, name := range []string{headerConnection, "X-Hop", headerKeepAlive, "Proxy-Connection", "Proxy-Authorization", "TE", "Upgrade"} {
 		if got := out.Header.Get(name); got != "" {
 			t.Fatalf("hop-by-hop request header %s leaked: %q", name, got)
 		}
@@ -78,9 +78,9 @@ func TestOutboundRequestStripsHopByHopAndConnectionNominatedHeaders(t *testing.T
 
 func TestResponseStripsHopByHopAndConnectionNominatedHeaders(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Connection", "X-Resp-Hop")
+		w.Header().Set(headerConnection, "X-Resp-Hop")
 		w.Header().Set("X-Resp-Hop", "secret")
-		w.Header().Set("Keep-Alive", "timeout=5")
+		w.Header().Set(headerKeepAlive, "timeout=5")
 		w.Header().Set("Proxy-Authenticate", "Basic")
 		w.Header().Set("X-End-To-End", "keep")
 		_, _ = io.WriteString(w, "ok")
@@ -93,7 +93,7 @@ func TestResponseStripsHopByHopAndConnectionNominatedHeaders(t *testing.T) {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
-	for _, name := range []string{"Connection", "X-Resp-Hop", "Keep-Alive", "Proxy-Authenticate"} {
+	for _, name := range []string{headerConnection, "X-Resp-Hop", headerKeepAlive, "Proxy-Authenticate"} {
 		if got := resp.Header.Get(name); got != "" {
 			t.Fatalf("hop-by-hop response header %s leaked: %q", name, got)
 		}

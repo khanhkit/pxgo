@@ -33,7 +33,7 @@ func TestHTTPUpgrade101RelaysBidirectionally(t *testing.T) {
 			originDone <- err
 			return
 		}
-		if !intermediaryHeaderHasToken(req.Header, "Connection", "upgrade") || !strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
+		if !intermediaryHeaderHasToken(req.Header, headerConnection, "upgrade") || !strings.EqualFold(req.Header.Get("Upgrade"), "websocket") {
 			originDone <- fmt.Errorf("upgrade headers missing: %#v", req.Header)
 			return
 		}

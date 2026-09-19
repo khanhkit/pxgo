@@ -9,11 +9,15 @@ import (
 	"strings"
 )
 
-const pxgoVia = "1.1 pxgo"
+const (
+	pxgoVia          = "1.1 pxgo"
+	headerConnection = "Connection"
+	headerKeepAlive  = "Keep-Alive"
+)
 
 var fixedHopByHopHeaders = []string{
-	"Connection",
-	"Keep-Alive",
+	headerConnection,
+	headerKeepAlive,
 	"Proxy-Connection",
 	"TE",
 	"Transfer-Encoding",
@@ -21,7 +25,7 @@ var fixedHopByHopHeaders = []string{
 }
 
 func stripIntermediaryHeaders(header http.Header, stripProxyAuth bool) {
-	for _, value := range header.Values("Connection") {
+	for _, value := range header.Values(headerConnection) {
 		for _, token := range strings.Split(value, ",") {
 			if name := strings.TrimSpace(token); name != "" {
 				header.Del(name)
@@ -47,7 +51,7 @@ func appendVia(header http.Header) {
 }
 
 func requestedUpgrade(req *http.Request) string {
-	if req == nil || !headerContainsToken(req.Header, "Connection", "upgrade") {
+	if req == nil || !headerContainsToken(req.Header, headerConnection, "upgrade") {
 		return ""
 	}
 	return strings.TrimSpace(req.Header.Get("Upgrade"))
@@ -151,7 +155,7 @@ func (s *Server) handleHTTPUpgrade(rw http.ResponseWriter, req *http.Request, re
 	header := cloneHeader(resp.Header)
 	upgrade := strings.TrimSpace(resp.Header.Get("Upgrade"))
 	stripIntermediaryHeaders(header, true)
-	header.Set("Connection", "Upgrade")
+	header.Set(headerConnection, "Upgrade")
 	if upgrade != "" {
 		header.Set("Upgrade", upgrade)
 	}

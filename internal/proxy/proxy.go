@@ -38,6 +38,7 @@ const (
 	httpsScheme      = "https"
 	maxMemoryBody    = 1 << 20
 	goosWindows      = "windows"
+	quitControlPath  = "/PxgoQuit"
 )
 
 type Server struct {
@@ -502,7 +503,7 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 }
 
 func isQuitControlRequest(req *http.Request) bool {
-	return req != nil && req.Method == http.MethodGet && req.URL != nil && !req.URL.IsAbs() && req.RequestURI == "/PxgoQuit"
+	return req != nil && req.Method == http.MethodGet && req.URL != nil && !req.URL.IsAbs() && req.RequestURI == quitControlPath
 }
 
 func isLoopbackRemote(remoteAddr string) bool {
@@ -854,7 +855,7 @@ func (s *Server) newOutboundRequest(req *http.Request, u *url.URL, body *replaya
 	upgrade := requestedUpgrade(req)
 	stripIntermediaryHeaders(outReq.Header, true)
 	if upgrade != "" {
-		outReq.Header.Set("Connection", "Upgrade")
+		outReq.Header.Set(headerConnection, "Upgrade")
 		outReq.Header.Set("Upgrade", upgrade)
 	}
 	appendVia(outReq.Header)

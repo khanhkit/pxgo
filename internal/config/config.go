@@ -266,6 +266,11 @@ func fileURLToLocalPathStrict(fileURL string) (string, error) {
 	}
 	var result string
 	switch {
+	case runtime.GOOS == goosWindows && len(u.Host) == 2 && u.Host[1] == ':':
+		// file://C:/path is commonly produced by concatenating "file://" with
+		// an absolute Windows path. url.Parse treats C: as a host, but it is a
+		// local drive designator, not a UNC authority.
+		result = u.Host + path
 	case u.Host != "":
 		result = "//" + u.Host + path
 	case len(path) >= 3 && path[0] == '/' && path[2] == ':':

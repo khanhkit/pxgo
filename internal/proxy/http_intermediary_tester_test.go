@@ -180,7 +180,7 @@ func TestShutdownOwnsHTTPUpgradeTunnel(t *testing.T) {
 }
 
 func FuzzStripIntermediaryHeaders(f *testing.F) {
-	for _, token := range []string{"X-Hop", "x-hop", "Keep-Alive", "X_Custom", "X-Trace-123"} {
+	for _, token := range []string{"X-Hop", "x-hop", headerKeepAlive, "X_Custom", "X-Trace-123"} {
 		f.Add(token)
 	}
 	f.Fuzz(func(t *testing.T, token string) {
@@ -199,13 +199,13 @@ func FuzzStripIntermediaryHeaders(f *testing.F) {
 			}
 		}
 		h := http.Header{}
-		h.Add("Connection", " keep-alive, "+token)
+		h.Add(headerConnection, " keep-alive, "+token)
 		h.Set(token, "secret")
-		h.Set("Keep-Alive", "timeout=5")
+		h.Set(headerKeepAlive, "timeout=5")
 		h.Set("Proxy-Custom", "secret")
 		h.Set("Proxy-Authorization", "secret")
 		stripIntermediaryHeaders(h, true)
-		for _, name := range []string{"Connection", token, "Keep-Alive", "Proxy-Custom", "Proxy-Authorization"} {
+		for _, name := range []string{headerConnection, token, headerKeepAlive, "Proxy-Custom", "Proxy-Authorization"} {
 			if got := h.Get(name); got != "" {
 				t.Fatalf("header %q survived intermediary stripping: %q", name, got)
 			}
