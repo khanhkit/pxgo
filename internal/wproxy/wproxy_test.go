@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pavelsimo/pxgo/internal/systemproxy"
 )
 
 func TestParseProxy(t *testing.T) {
@@ -171,7 +173,7 @@ func TestWproxyNoProxyStarBypassesAllHosts(t *testing.T) {
 	}
 }
 
-func TestWproxyConfigPACMalformedReturnFallsBackDirect(t *testing.T) {
+func TestWproxyConfigPACMalformedReturnFailsExplicitly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad-return.pac")
 	if err := os.WriteFile(path, []byte(`function FindProxyForURL(url, host) { return "NOT A PROXY"; }`), 0o644); err != nil {
 		t.Fatal(err)
@@ -180,12 +182,8 @@ func TestWproxyConfigPACMalformedReturnFallsBackDirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	servers, _, _, err := w.FindProxyForURL("http://example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(servers, []Server{Direct}) {
-		t.Fatalf("malformed PAC return should fall back direct, got %#v", servers)
+	if _, _, _, err := w.FindProxyForURL("http://example.com"); err == nil {
+		t.Fatal("malformed configured PAC result should fail explicitly")
 	}
 }
 
@@ -205,6 +203,7 @@ func TestWproxyNoProxyHostsStringCached(t *testing.T) {
 }
 
 func TestWproxyEnvProxyAndNoProxy(t *testing.T) {
+	withSystemDiscovery(t, systemproxy.Config{Supported: false})
 	t.Setenv("http_proxy", "")
 	t.Setenv("https_proxy", "")
 	t.Setenv("no_proxy", "")
@@ -296,5 +295,31 @@ func TestGetNetlocDefaultPorts(t *testing.T) {
 		if netloc != (Server{"example.com", tt.port, strings.Split(tt.rawurl, ":")[0]}) {
 			t.Fatalf("%s netloc=%#v", tt.rawurl, netloc)
 		}
+	}
+}
+
+// TC-PAC-REG-001
+func TestWproxyConfigPACIsPreloadedBeforeReturn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "preload.pac")
+	if err := os.WriteFile(path, []byte(`function FindProxyForURL(url, host) { return "PROXY preloaded.proxy:8080"; }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := New(ModeConfigPAC, []Server{{Host: path, Scheme: "pac"}}, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.PAC == nil || !w.PAC.Loaded() {
+		t.Fatal("config PAC must be fetched/compiled before Wproxy becomes active")
+	}
+}
+
+// TC-PAC-REG-002
+func TestWproxyConfigPACRejectsBrokenGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "broken.pac")
+	if err := os.WriteFile(path, []byte(`this is not javascript {{{`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(ModeConfigPAC, []Server{{Host: path, Scheme: "pac"}}, "", ""); err == nil {
+		t.Fatal("broken configured PAC must prevent activation")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -24,12 +25,30 @@ import (
 	"golang.org/x/term"
 )
 
-var version = "dev"
+var (
+	version            = "dev"
+	installStartupFunc = installStartup
+)
 
 const (
-	authNone    = "NONE"
-	localhostIP = "127.0.0.1"
+	authNone               = "NONE"
+	localhostIP            = "127.0.0.1"
+	controlShutdownTimeout = 5 * time.Second
+	startExitWaitTimeout   = time.Second
 )
+
+type shutdowner interface {
+	Shutdown(context.Context) error
+}
+
+func shutdownWithTimeout(s shutdowner, timeout time.Duration) error {
+	if s == nil {
+		return errors.New("nil shutdown target")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return s.Shutdown(ctx)
+}
 
 func main() {
 	os.Exit(run())
@@ -68,15 +87,28 @@ func run() (exitCode int) {
 		return 0
 	}
 	if cfg.Install {
-		cmd, err := winstartup.BuildRunCommand(os.Args[0], config.ConfigPathForSave(cfg.ConfigPath), func(path string) bool {
-			_, err := os.Stat(path)
-			return err == nil
-		})
+		configPath := config.ConfigPathForSave(cfg.ConfigPath)
+		executable, err := os.Executable()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 6
 		}
-		if err := installStartup(cmd, cfg.Force); err != nil {
+		cmd, err := winstartup.PrepareRunCommand(
+			executable,
+			configPath,
+			func(path string) bool {
+				_, err := os.Stat(path)
+				return err == nil
+			},
+			func(path string) error {
+				return config.SaveINI(path, cfg)
+			},
+		)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 6
+		}
+		if err := installStartupFunc(cmd, cfg.Force); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 6
 		}
@@ -167,9 +199,11 @@ func run() (exitCode int) {
 		}
 	case <-ctx.Done():
 		debug.Dprint("shutdown signal received")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Shutdown(shutdownCtx)
+		if err := shutdownWithTimeout(s, controlShutdownTimeout); err != nil {
+			debug.Dprint("shutdown error: " + err.Error())
+			fmt.Fprintln(os.Stderr, err)
+			return 5
+		}
 	}
 	if d := debug.Instance(); d != nil {
 		_ = d.Close()
@@ -209,7 +243,7 @@ Options:
   --pac-encoding=ENCODING         PAC file encoding
   --port=PORT                     Listen port
   --listen=IP                     Listen address
-  --gateway                       Listen on all interfaces
+  --gateway                       Listen on all interfaces; requires restrictive allow or strong client auth
   --hostonly                      Allow local host interfaces only
   --allow=IPGLOB                  Client allow list
   --noproxy=LIST                  Direct-connect bypass list
@@ -217,7 +251,7 @@ Options:
   --auth=TYPE                     Upstream auth: ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC, NONE
   --username=USER                 Upstream auth username
   --kerberos                      Enable Kerberos ticket management
-  --client-auth=TYPE              Client auth: NONE, ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC
+  --client-auth=TYPE              Client auth: NONE, ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC (Basic-capable modes are loopback-only)
   --client-username=USER          Downstream auth username
   --client-nosspi=0|1             Disable SSPI for downstream auth compatibility
   --config=PATH                   Read or save pxgo.ini at PATH
@@ -304,13 +338,10 @@ func waitForClosed(addr string, timeout time.Duration) bool {
 }
 
 func isConnectionRefused(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "connection refused")
+	return err != nil && errors.Is(err, syscall.ECONNREFUSED)
 }
 
-func runSelfTest(cfg config.Config) error {
+func runSelfTest(cfg config.Config) (retErr error) {
 	testAuthCfg := cfg
 	if cfg.TestAuth {
 		cfg.Auth = authNone
@@ -321,17 +352,39 @@ func runSelfTest(cfg config.Config) error {
 	}
 	errc := make(chan error, 1)
 	go func() { errc <- s.Start() }()
-	if err := waitPort(cfg.Listen, cfg.Port); err != nil {
+
+	if err := waitSelfTestReady(s, errc, 5*time.Second); err != nil {
+		if shutdownErr := shutdownWithTimeout(s, controlShutdownTimeout); shutdownErr != nil {
+			return errors.Join(err, fmt.Errorf("self-test shutdown after start failure: %w", shutdownErr))
+		}
 		return err
 	}
-	defer func() { _ = s.Shutdown(context.Background()) }()
+
+	defer func() {
+		shutdownErr := shutdownWithTimeout(s, controlShutdownTimeout)
+		if shutdownErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("self-test shutdown: %w", shutdownErr))
+			return
+		}
+		select {
+		case startErr := <-errc:
+			if startErr != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("self-test proxy: %w", startErr))
+			}
+		case <-time.After(startExitWaitTimeout):
+			retErr = errors.Join(retErr, errors.New("self-test proxy did not stop after shutdown"))
+		}
+	}()
 
 	urls := selfTestURLs(cfg.Test)
 	allMode := selfTestAllMode(cfg.Test)
 	if !allMode {
 		urls = []string{cfg.Test}
 	}
-	proxyURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", listenForClient(cfg.Listen), cfg.Port))
+	proxyURL, err := url.Parse(fmt.Sprintf("http://%s:%d", listenForClient(cfg.Listen), cfg.Port))
+	if err != nil {
+		return fmt.Errorf("self-test proxy URL: %w", err)
+	}
 	tr := &http.Transport{
 		Proxy:           http.ProxyURL(proxyURL),
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- self-test intentionally accepts arbitrary test endpoints.
@@ -356,7 +409,11 @@ func runSelfTest(cfg config.Config) error {
 				if allMode {
 					targetURL = strings.TrimRight(u, "/") + "/" + strings.ToLower(method)
 				}
-				req, _ := http.NewRequest(method, targetURL, body)
+				req, err := http.NewRequest(method, targetURL, body)
+				if err != nil {
+					errs <- fmt.Errorf("%s %s: %w", method, targetURL, err)
+					return
+				}
 				resp, err := doSelfTestRequest(client, req, testAuthCfg, cfg.TestAuth)
 				if err != nil {
 					errs <- err
@@ -377,15 +434,13 @@ func runSelfTest(cfg config.Config) error {
 			return err
 		}
 	}
-	select {
-	case err := <-errc:
-		return err
-	default:
-		return nil
-	}
+	return nil
 }
 
 func doSelfTestRequest(client *http.Client, req *http.Request, authCfg config.Config, testAuth bool) (*http.Response, error) {
+	if req == nil {
+		return nil, errors.New("nil self-test request")
+	}
 	var body []byte
 	if req.Body != nil {
 		body, _ = io.ReadAll(req.Body)
@@ -442,18 +497,30 @@ func selfTestAllMode(test string) bool {
 	return test == "all" || test == "1" || strings.HasPrefix(test, "all:")
 }
 
-func waitPort(listen string, port int) error {
-	addr := net.JoinHostPort(listenForClient(listen), fmt.Sprint(port))
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
+func waitSelfTestReady(s *proxy.Server, errc <-chan error, timeout time.Duration) error {
+	if s == nil {
+		return errors.New("nil self-test proxy")
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if s.Ready() {
 			return nil
 		}
-		time.Sleep(25 * time.Millisecond)
+		select {
+		case err := <-errc:
+			if err != nil {
+				return fmt.Errorf("self-test proxy start: %w", err)
+			}
+			return errors.New("self-test proxy stopped before becoming ready")
+		case <-ticker.C:
+		case <-timer.C:
+			return errors.New("self-test proxy did not become ready before timeout")
+		}
 	}
-	return fmt.Errorf("proxy did not start at %s", addr)
 }
 
 func listenForClient(listen string) string {
