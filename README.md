@@ -70,12 +70,17 @@ pxgo --quit
 
 ## Configuration
 
-pxgo accepts command-line flags, `PXGO_*` environment variables, `.env`, and
-`pxgo.ini`. Precedence is:
+pxgo accepts command-line flags, `PXGO_*` environment variables, explicitly
+selected dotenv files, and `pxgo.ini`. Precedence is:
 
 ```text
-command line > environment > .env > pxgo.ini > defaults
+command line > environment > explicit dotenv > pxgo.ini > defaults
 ```
+
+Current-working-directory `.env` files are not trusted implicitly. Use
+`PXGO_DOTENV=/path/to/file` when dotenv loading is desired. Invalid known
+values and unknown configuration keys fail startup rather than silently
+falling back.
 
 Create a starter config:
 
@@ -104,13 +109,13 @@ to choose where it lives — see [docs/configuration.md](docs/configuration.md).
 | `--pac=URL_OR_PATH` | PAC file URL or local file |
 | `--port=NUM` | Local listen port, default `3128` |
 | `--listen=IP[,IP]` | Local listen address list, default `127.0.0.1` |
-| `--gateway` | Bind all interfaces for remote clients |
+| `--gateway` | Bind all interfaces; requires a restrictive `--allow` policy or non-Basic downstream auth |
 | `--hostonly` | Bind all interfaces but allow only local host interface IPs |
 | `--allow=LIST` | Client allow list for `--gateway` mode |
 | `--noproxy=LIST` | Hosts or IP ranges that bypass the upstream proxy |
-| `--auth=TYPE` | Upstream auth mode: `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `NONE` |
+| `--auth=TYPE` | Upstream auth mode: `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `NONE`; omitted auth with reusable credentials behaves as `ANYSAFE`, while explicit `ANY` opts into Basic fallback |
 | `--username=USER` | Upstream proxy username or Kerberos principal |
-| `--client-auth=TYPE` | Require local client auth: `NONE`, `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC` |
+| `--client-auth=TYPE` | Require client auth: `NONE`, `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`; `BASIC`/`ANY` are loopback-only on plaintext listeners; downstream `NEGOTIATE` means NTLMSSP/NTLM-over-SPNEGO, not Kerberos/GSSAPI |
 | `--log=N` | Debug log destination: `1`=script dir (`--debug`), `2`=cwd, `3`=unique file (`--uniqlog`), `4`=stdout (`--verbose`) |
 
 Use `pxgo --help` for the current CLI help.
@@ -136,7 +141,7 @@ docker build -t pxgo .
 Run pxgo in Docker:
 
 ```bash
-docker run --rm -p 3128:3128 pxgo --gateway --proxy=proxy.company.com:8080
+docker run --rm -p 3128:3128 pxgo --gateway --allow=192.168.1.0/24 --proxy=proxy.company.com:8080
 ```
 
 See [docs/installation.md](docs/installation.md) and [docker/](docker/) for

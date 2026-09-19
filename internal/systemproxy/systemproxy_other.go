@@ -2,6 +2,22 @@
 
 package systemproxy
 
+import "context"
+
+type noopResolverBackend struct{}
+
+func NewResolver() (*Resolver, error) {
+	return newResolverWithBackend(noopResolverBackend{}), nil
+}
+
+func (noopResolverBackend) resolve(ctx context.Context, rawurl string, cfg Config) (string, error) {
+	return "", nil
+}
+
+func (noopResolverBackend) close() error {
+	return nil
+}
+
 func Discover() Config {
 	return Config{}
 }

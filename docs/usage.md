@@ -31,11 +31,18 @@ pxgo tries the returned proxy list in order and falls back when a proxy fails.
 ./pxgo --pac=/path/to/proxy.pac
 ```
 
-For non-UTF-8 PAC files:
+For non-UTF-8 PAC files, select the source encoding explicitly:
 
 ```bash
 ./pxgo --pac=/path/to/proxy.pac --pac-encoding=latin1
+./pxgo --pac=/path/to/proxy.pac --pac-encoding=cp1252
+./pxgo --pac=/path/to/proxy.pac --pac-encoding=cp1251
+./pxgo --pac=/path/to/proxy.pac --pac-encoding=utf-16
 ```
+
+`--pac-encoding=auto` detects UTF BOMs, accepts valid UTF-8, and otherwise
+falls back to Windows-1252. PAC result lists are bounded to 32 candidates and
+16 KiB and malformed directives fail explicitly.
 
 ## Bypass Rules
 
@@ -83,6 +90,10 @@ Supported auth selectors:
 - `NONE`: pass proxy authentication through from the client
 - `ONLYNTLM`, `NOBASIC`, `SAFENONTLM`: selector forms matching the Python Px convention
 
+When reusable upstream username/password credentials are configured and `--auth` is omitted, pxgo uses the `ANYSAFE` challenge set so a Basic-only parent cannot silently downgrade those credentials. Use explicit `--auth=ANY`, `--auth=BASIC`, or `--auth=ONLYBASIC` only when Basic fallback is intentionally accepted. Credentials are emitted only after a matching upstream challenge.
+
+Upstream Digest supports legacy MD5 without qop and MD5 with `qop=auth`. Unsupported qop values such as `auth-int` and unsupported algorithms such as `MD5-sess` or `SHA-256` are rejected rather than being signed with an incompatible MD5 formula.
+
 ## Kerberos
 
 Kerberos ticket management is available on Linux and macOS:
@@ -106,7 +117,10 @@ PXGO_CLIENT_PASSWORD='client-secret' ./pxgo \
 ```
 
 Supported client auth modes are `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `ANY`,
-`ANYSAFE`, and `NONE`.
+`ANYSAFE`, and `NONE`. For **downstream client authentication**, `NEGOTIATE` is
+a compatibility mode for NTLMSSP carried directly under the Negotiate scheme or
+wrapped in SPNEGO. It does **not** accept Kerberos/GSSAPI tokens. Use the
+separate Kerberos support described above for upstream proxy authentication.
 
 ## Remote Clients
 
@@ -117,6 +131,8 @@ Allow remote clients:
 ```bash
 ./pxgo --gateway --allow=192.168.1.*
 ```
+
+Gateway mode is fail-closed. It starts only when at least one remote-admission policy is explicit: a restrictive `--allow` list, `--hostonly`, or downstream authentication. On plaintext remote listeners, `BASIC`, `ANY`, and explicit auth lists containing `BASIC` are rejected; use `ANYSAFE`, `DIGEST`, `NTLM`, or `NEGOTIATE` with `--client-username` and a stored/configured client password. The `/PxgoQuit` control request is accepted only as an exact origin-form request from an allowed loopback client, so a proxied absolute URL ending in `/PxgoQuit` is ordinary origin traffic.
 
 Allow only IP addresses assigned to local interfaces:
 
@@ -143,4 +159,4 @@ pxgo supports four log destinations controlled by `--log=N`, `PXGO_LOG=N`, or `s
 ./pxgo --test=all:https://httpbin.org
 ```
 
-`all` mode checks several HTTP methods through the proxy.
+`all` mode checks several HTTP methods through the proxy. Self-test startup and shutdown are deadline-bounded; malformed target URLs and shutdown/start failures are returned as errors instead of being ignored or panicking.
