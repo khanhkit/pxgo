@@ -183,6 +183,8 @@ func runGeneration(ctx context.Context, spec CommandSpec, options ParentOptions)
 	defer listener.Close()
 
 	control := WorkerControl{Addr: listener.Addr(), Token: listener.Token()}
+	// #nosec G204 -- Guardian intentionally executes an internal CommandSpec without a shell.
+	// Public integration supplies os.Executable() plus already-parsed argv; control secrets stay env-only.
 	cmd := exec.Command(spec.Path, spec.Args...)
 	cmd.Env = withWorkerControlEnv(spec.Env, control)
 	cmd.Dir = spec.Dir
