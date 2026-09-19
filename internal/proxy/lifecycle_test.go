@@ -92,7 +92,7 @@ func TestAPISS0001ConnectAuthBodyIsSizeBounded(t *testing.T) {
 	cfg.Password = "secret"
 	_ = client.SetDeadline(time.Now().Add(300 * time.Millisecond))
 
-	_, err := sendUpstreamConnectWithAuth(client, "example.com:443", cfg, "", "", nil)
+	_, err := sendUpstreamConnectWithAuth(client, "example.com:443", "proxy.test", cfg, "", "", nil)
 	if err == nil {
 		t.Fatal("expected oversized 407 body to fail")
 	}
@@ -132,7 +132,7 @@ func TestAPISS0001RetryBuildFailureCloses407Body(t *testing.T) {
 		Body: trackedBody,
 	}
 
-	got, err := s.retryHTTPProxyAuth(&http.Transport{}, req, req.URL, body, req.URL.String(), "", resp)
+	got, err := s.retryHTTPProxyAuth(&http.Transport{}, req, req.URL, body, req.URL.String(), "", "proxy.test", resp)
 	if got != nil && got.Body != nil {
 		defer got.Body.Close()
 	}

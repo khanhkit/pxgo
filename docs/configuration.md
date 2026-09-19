@@ -72,9 +72,9 @@ human-edited config with explanations.
 | `allow` / `--allow` | `*.*.*.*` | Client allow list |
 | `noproxy` / `--noproxy` | empty | Direct-connect bypass list |
 | `useragent` / `--useragent` | empty | Override or set `User-Agent` |
-| `username` / `--username` | empty | Upstream auth username or Kerberos principal |
+| `username` / `--username` | empty | Explicit upstream auth username |
 | `auth` / `--auth` | empty | Upstream auth selector; empty + reusable credentials uses `ANYSAFE`, while explicit `ANY` includes Basic fallback |
-| `kerberos` / `--kerberos` | `0` | Enable Kerberos ticket management |
+| `kerberos` / `--kerberos` | `0` | Reserved/fail-closed until an end-to-end Unix GSSAPI proxy-auth consumer exists; Windows current-user SSPI does not require this flag |
 
 ## Automatic Upstream Proxy Discovery
 

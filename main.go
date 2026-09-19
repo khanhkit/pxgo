@@ -265,7 +265,7 @@ Options:
   --useragent=VALUE               Override forwarded User-Agent
   --auth=TYPE                     Upstream auth: ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC, NONE
   --username=USER                 Upstream auth username
-  --kerberos                      Enable Kerberos ticket management
+  --kerberos                      Fail-closed: Unix ticket cache is not upstream GSSAPI auth; Windows SSPI does not use this flag
   --client-auth=TYPE              Client auth: NONE, ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC (Basic-capable modes are loopback-only)
   --client-username=USER          Downstream auth username
   --client-nosspi=0|1             Disable SSPI for downstream auth compatibility

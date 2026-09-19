@@ -243,12 +243,7 @@ func Example_runtimeSupervisorNoDirect() {
 }
 
 func countCachedTransports(s *Server) int {
-	count := 0
-	s.transports.Range(func(_, _ any) bool {
-		count++
-		return true
-	})
-	return count
+	return s.cachedTransportCount()
 }
 
 func waitForSupervisorCondition(t *testing.T, fn func() bool) {

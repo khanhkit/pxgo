@@ -12,7 +12,7 @@ The Go port is organized around one main binary and small internal packages.
 6. HTTPS `CONNECT` requests create a tunnel between client and target or client
    and upstream proxy.
 7. Optional upstream and client authentication is handled in `internal/proxy`.
-8. Optional Kerberos ticket management is handled by `internal/kerberos`.
+8. Kerberos ticket lifecycle utilities live in `internal/kerberos`; they do not currently constitute Unix upstream GSSAPI proxy authentication. Windows upstream Negotiate/NTLM is owned separately by SSPI code in `internal/proxy`.
 
 ## Packages
 
@@ -24,7 +24,7 @@ The Go port is organized around one main binary and small internal packages.
 | `internal/wproxy` | Proxy discovery model, manual proxy parsing, bypass rules |
 | `internal/pac` | PAC loading, JavaScript execution, Mozilla PAC helper functions |
 | `internal/dnscache` | TTL cache in front of `net.LookupIP` (60 s hits, 5 s misses, 4096-entry cap), shared by noproxy matching and PAC `dnsResolve()` |
-| `internal/kerberos` | `kinit`/`klist` orchestration and ticket refresh state |
+| `internal/kerberos` | `kinit`/`klist` orchestration and ticket refresh state; no upstream GSSAPI token consumer |
 | `internal/debug` | Debug logging |
 | `internal/systemproxy` | Platform system proxy discovery |
 | `internal/winstartup` | Windows startup command generation |

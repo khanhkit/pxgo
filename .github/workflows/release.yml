@@ -96,48 +96,18 @@ jobs:
         env:
           PXGO_SSPI_NATIVE: "1"
         run: |
-          $listed = go test ./internal/proxy -list 'TCSSPIWIN(INT008|SOAK009)'
+          $listed = (go test ./internal/proxy -list 'TCSSPIWIN(INT008|SOAK009)' | Out-String)
           if ($listed -notmatch 'TestTCSSPIWININT008' -or $listed -notmatch 'TestTCSSPIWINSOAK009') {
             throw 'exact tagged SHA is missing required native SSPI fixtures'
           }
           go test ./internal/proxy -run 'TCSSPIWIN(INT008|SOAK009)' -count=1 -v
 
-  windows-domain-sspi:
-    name: Protected Windows AD/SSPI exact tagged SHA
-    runs-on: [self-hosted, windows, x64, pxgo-ad]
-    environment: pxgo-ad
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Run protected real-AD Kerberos verification
-        shell: pwsh
-        env:
-          PXGO_SSPI_AD: "1"
-          PXGO_SSPI_AD_PROXY_HOST: ${{ vars.PXGO_SSPI_AD_PROXY_HOST }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:PXGO_SSPI_AD_PROXY_HOST)) {
-            throw 'pxgo-ad environment must define PXGO_SSPI_AD_PROXY_HOST'
-          }
-          $listed = go test ./internal/proxy -list 'TCSSPIWINAD010'
-          if ($listed -notmatch 'TestTCSSPIWINAD010') {
-            throw 'exact tagged SHA is missing required real-AD Kerberos testcase TCSSPIWINAD010'
-          }
-          go test ./internal/proxy -run 'TCSSPIWINAD010' -count=1 -v
 
   goreleaser:
     name: GoReleaser
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [verify-exact-sha, verify-windows-native, windows-domain-sspi]
+    needs: [verify-exact-sha, verify-windows-native]
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:

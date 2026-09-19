@@ -50,24 +50,34 @@ Build the default runtime image:
 docker build -t pxgo .
 ```
 
-Run with an upstream proxy:
+Run with an upstream proxy using the least-privilege runtime contract:
 
 ```bash
-docker run --rm -p 3128:3128 pxgo --gateway --allow=192.168.1.0/24 --proxy=proxy.company.com:8080
+docker run --rm -p 3128:3128 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
+  pxgo --gateway --allow=192.168.1.0/24 --proxy=proxy.company.com:8080
 ```
 
 Mount a config file:
 
 ```bash
 docker run --rm -p 3128:3128 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
   -v "$PWD/pxgo.ini:/pxgo/pxgo.ini:ro" \
   pxgo --config=/pxgo/pxgo.ini --gateway --allow=192.168.1.0/24
 ```
 
+The published image defaults to UID/GID `65532:65532`. Its root filesystem does not need to be writable for normal proxy operation; `/tmp` is the explicit writable scratch path for replay/Kerberos temporary state. If you intentionally persist user configuration, mount a writable directory at `/home/pxgo/.config`.
+
 `--gateway` is fail-closed: choose a restrictive client `--allow` range or configure downstream authentication. Replace the example subnet with the client network visible to the container. Plaintext remote listeners do not permit `BASIC` or `ANY` because those modes advertise Basic credentials.
 
-The runtime image includes Kerberos command-line tools so `--kerberos` can use
-`kinit` and `klist` when a suitable realm configuration is provided.
+The runtime image retains Kerberos command-line tools for ticket-lifecycle integration tests and future GSSAPI work. The current user-facing `--kerberos` mode is fail-closed because those tickets are not yet consumed for upstream HTTP proxy authentication.
 
 ## Windows Startup
 

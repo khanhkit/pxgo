@@ -42,6 +42,6 @@ pxgo --pac=http://proxy.company.com/proxy.pac
 ## What pxgo handles
 
 - **Upstream authentication.** Select `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, or pass-through modes.
-- **Kerberos workflows.** Create and refresh per-process credential caches using host Kerberos tooling.
+- **Kerberos ticket workflows.** Create and refresh per-process credential caches for integration/future GSSAPI work; current Unix upstream proxy authentication does not consume those tickets.
 - **PAC and bypass rules.** Load PAC files and bypass upstream proxies for local hosts, domains, CIDR ranges, IP ranges, and wildcard IPv4 globs.
 - **Remote access controls.** Keep the default loopback-only listener or opt in to gateway and host-only modes.
