@@ -84,6 +84,10 @@ func RunWorker(ctx context.Context, session *Session, hooks WorkerHooks, options
 			if err != nil {
 				return WorkerResult{Exit: WorkerExitRestart, Err: err}
 			}
+			// A clean server exit after READY is a worker-requested normal stop
+			// (for example local /PxgoQuit). Tell the parent explicitly so it
+			// never infers restartability from socket/process timing.
+			_ = session.Send(controlCtx, Message{Type: MessageStop})
 			return WorkerResult{Exit: WorkerExitNormal}
 
 		case <-readyTicker.C:

@@ -274,6 +274,12 @@ func monitorReadyWorker(
 					startupCode: exitCode(waitErr),
 				}
 			}
+			if waitErr == nil {
+				return generationResult{
+					disposition: ExitNormalStop,
+					readyFor:    readyDuration(readyAt),
+				}
+			}
 			return generationResult{
 				disposition: ExitRestart,
 				err:         waitErr,
@@ -305,6 +311,21 @@ func monitorReadyWorker(
 					}
 				}
 				watchdog.Beat(msg.Sequence, now)
+			case MessageStop:
+				if !ready {
+					stopErr := stopChild(nil, cmd, waitc, options.StopTimeout)
+					return generationResult{
+						disposition: ExitStartupFailure,
+						err:         errors.Join(ErrProtocol, stopErr),
+						startupCode: exitCode(stopErr),
+					}
+				}
+				stopErr := stopChild(nil, cmd, waitc, options.StopTimeout)
+				return generationResult{
+					disposition: ExitNormalStop,
+					err:         normalizeParentStopError(stopErr),
+					readyFor:    readyDuration(readyAt),
+				}
 			default:
 				stopErr := stopChild(session, cmd, waitc, options.StopTimeout)
 				disposition := ExitStartupFailure
@@ -326,6 +347,12 @@ func monitorReadyWorker(
 					disposition: ExitStartupFailure,
 					err:         errors.Join(err, stopErr),
 					startupCode: exitCode(stopErr),
+				}
+			}
+			if stopErr == nil {
+				return generationResult{
+					disposition: ExitNormalStop,
+					readyFor:    readyDuration(readyAt),
 				}
 			}
 			return generationResult{
