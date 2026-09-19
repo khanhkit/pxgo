@@ -30,7 +30,9 @@ func platformProcessMetrics() (float64, uint64, error) {
 	if err := windows.GetProcessTimes(handle, &creation, &exit, &kernel, &user); err != nil {
 		return 0, 0, err
 	}
-	cpu := float64(kernel.Nanoseconds()+user.Nanoseconds()) / 1e9
+	kernelTicks := (uint64(kernel.HighDateTime) << 32) | uint64(kernel.LowDateTime)
+	userTicks := (uint64(user.HighDateTime) << 32) | uint64(user.LowDateTime)
+	cpu := float64(kernelTicks+userTicks) / 1e7
 	counters := processMemoryCounters{CB: uint32(unsafe.Sizeof(processMemoryCounters{}))}
 	r1, _, callErr := getProcessMemoryInfo.Call(
 		uintptr(handle),

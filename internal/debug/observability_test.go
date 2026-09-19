@@ -17,9 +17,10 @@ func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
 func TestTCOBSLOG001ConcurrentFirstInitReturnsOneInstance(t *testing.T) {
 	ResetForTest()
+	dir := t.TempDir()
 	t.Cleanup(ResetForTest)
 
-	logfile := filepath.Join(t.TempDir(), "singleton.log")
+	logfile := filepath.Join(dir, "singleton.log")
 	const workers = 64
 	start := make(chan struct{})
 	results := make(chan *Debug, workers)
@@ -57,6 +58,10 @@ func TestTCOBSLOG001ConcurrentFirstInitReturnsOneInstance(t *testing.T) {
 	}
 	if first == nil || Instance() != first {
 		t.Fatal("singleton instance not retained")
+	}
+	ResetForTest()
+	if err := os.Remove(logfile); err != nil {
+		t.Fatalf("ResetForTest left log handle open: %v", err)
 	}
 }
 

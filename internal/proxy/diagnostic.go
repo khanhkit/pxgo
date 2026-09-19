@@ -110,6 +110,12 @@ func diagnosticConfigSources(sources map[string]string) map[string]string {
 	return safe
 }
 
+const (
+	sourceClassEnv    = "env"
+	sourceClassINI    = "ini"
+	sourceClassDotenv = "dotenv"
+)
+
 func sourceClass(source string) string {
 	source = strings.TrimSpace(source)
 	switch {
@@ -117,12 +123,12 @@ func sourceClass(source string) string {
 		return ""
 	case source == "default", source == "cli":
 		return source
-	case strings.HasPrefix(source, "env:"):
-		return "env"
-	case strings.HasPrefix(source, "ini:"):
-		return "ini"
-	case strings.HasPrefix(source, "dotenv:"):
-		return "dotenv"
+	case strings.HasPrefix(source, sourceClassEnv+":"):
+		return sourceClassEnv
+	case strings.HasPrefix(source, sourceClassINI+":"):
+		return sourceClassINI
+	case strings.HasPrefix(source, sourceClassDotenv+":"):
+		return sourceClassDotenv
 	default:
 		return "other"
 	}
