@@ -24,16 +24,31 @@ const (
 	ModeConfigPAC
 )
 
+type RouteSource string
+
 const (
-	directHost    = "DIRECT"
-	directKey     = "direct://DIRECT:80"
-	httpScheme    = "http"
-	httpsScheme   = "https"
-	socksScheme   = "socks"
-	socks4Scheme  = "socks4"
-	socks4aScheme = "socks4a"
-	socks5Scheme  = "socks5"
-	pacScheme     = "pac"
+	RouteSourceDirect        RouteSource = "direct"
+	RouteSourceConfig        RouteSource = "config"
+	RouteSourceConfigPAC     RouteSource = "config-pac"
+	RouteSourceSystemAuto    RouteSource = "windows-system-auto"
+	RouteSourceSystemPAC     RouteSource = "windows-system-pac"
+	RouteSourceSystemAutoPAC RouteSource = "windows-system-auto+pac"
+	RouteSourceSystemManual  RouteSource = "windows-system-manual"
+	RouteSourceEnvironment   RouteSource = "environment"
+)
+
+const (
+	directHost        = "DIRECT"
+	directKey         = "direct://DIRECT:80"
+	httpScheme        = "http"
+	httpsScheme       = "https"
+	socksScheme       = "socks"
+	socks4Scheme      = "socks4"
+	socks4aScheme     = "socks4a"
+	socks5Scheme      = "socks5"
+	pacScheme         = "pac"
+	httpProxyEnvLower = "http_proxy"
+	httpProxyEnv      = "HTTP_PROXY"
 )
 
 var Direct = Server{Host: directHost, Port: 80, Scheme: "direct"}
@@ -437,14 +452,94 @@ func addGlob(set *IPSet, glob string) error {
 	return set.AddRange(strings.Join(start, "."), strings.Join(end, "."))
 }
 
+type systemProxyResolver interface {
+	ResolveProxyForURL(rawurl string, cfg systemproxy.Config) (string, error)
+	Close() error
+}
+
+var (
+	discoverSystemProxy    = systemproxy.Discover
+	newSystemProxyResolver = func() (systemProxyResolver, error) {
+		return systemproxy.NewResolver()
+	}
+)
+
+type environmentProxySet struct {
+	byScheme map[string][]Server
+	all      []Server
+}
+
+func (e environmentProxySet) forScheme(scheme string) []Server {
+	if servers := e.byScheme[strings.ToLower(scheme)]; len(servers) > 0 {
+		return servers
+	}
+	return e.all
+}
+
+func discoverEnvironmentProxies() (environmentProxySet, bool, error) {
+	result := environmentProxySet{byScheme: make(map[string][]Server)}
+	var found bool
+	for _, item := range []struct {
+		scheme string
+		keys   []string
+	}{
+		{httpScheme, []string{httpProxyEnvLower, httpProxyEnv}},
+		{httpsScheme, []string{"https_proxy", "HTTPS_PROXY"}},
+	} {
+		raw := firstEnv(item.keys...)
+		if raw == "" {
+			continue
+		}
+		servers, err := ParseProxy(raw)
+		if err != nil {
+			return environmentProxySet{}, false, fmt.Errorf("parse %s proxy environment: %w", item.scheme, err)
+		}
+		result.byScheme[item.scheme] = servers
+		found = true
+	}
+	if raw := firstEnv("all_proxy", "ALL_PROXY"); raw != "" {
+		servers, err := ParseProxy(raw)
+		if err != nil {
+			return environmentProxySet{}, false, fmt.Errorf("parse all_proxy environment: %w", err)
+		}
+		result.all = servers
+		found = true
+	}
+	return result, found, nil
+}
+
 type Wproxy struct {
-	Mode            int
-	Servers         []Server
-	NoProxy         IPSet
-	NoProxyHosts    map[string]bool
-	NoProxyHostsStr string
-	PAC             *pac.Pac
-	noProxyMatchers []noProxyMatcher
+	Mode                 int
+	Source               RouteSource
+	SystemProxySupported bool
+	Servers              []Server
+	NoProxy              IPSet
+	NoProxyHosts         map[string]bool
+	NoProxyHostsStr      string
+	PAC                  *pac.Pac
+	noProxyMatchers      []noProxyMatcher
+	systemResolver       systemProxyResolver
+	systemConfig         systemproxy.Config
+	environmentProxies   environmentProxySet
+}
+
+func routeSourceForMode(mode int) RouteSource {
+	switch mode {
+	case ModeConfig:
+		return RouteSourceConfig
+	case ModeConfigPAC:
+		return RouteSourceConfigPAC
+	case ModeAuto:
+		return RouteSourceSystemAuto
+	case ModePAC:
+		return RouteSourceSystemPAC
+	case ModeManual:
+		return RouteSourceSystemManual
+	case ModeEnv:
+		return RouteSourceEnvironment
+	default:
+		return RouteSourceDirect
+	}
 }
 
 func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, error) {
@@ -452,60 +547,105 @@ func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, erro
 	if err != nil {
 		return nil, err
 	}
-	w := &Wproxy{Mode: mode, Servers: servers, NoProxy: np, NoProxyHosts: hosts, noProxyMatchers: matchers}
+	w := &Wproxy{
+		Mode:            mode,
+		Source:          routeSourceForMode(mode),
+		Servers:         servers,
+		NoProxy:         np,
+		NoProxyHosts:    hosts,
+		noProxyMatchers: matchers,
+	}
 	if mode == ModeConfigPAC && len(servers) > 0 {
 		w.PAC = pac.New(servers[0].Host, pacEncoding)
 		if err := w.PAC.Load(); err != nil {
 			return nil, fmt.Errorf("load configured PAC: %w", err)
 		}
 	}
+
 	if mode == ModeNone {
-		if env := firstEnv("http_proxy", "HTTP_PROXY"); env != "" {
-			parsed, err := ParseProxy(env)
+		sysproxy := discoverSystemProxy()
+		w.SystemProxySupported = sysproxy.Supported
+		if sysproxy.Found {
+			w.systemConfig = sysproxy
+			switch {
+			case sysproxy.AutoDetect && sysproxy.IsPAC:
+				w.Mode = ModeAuto
+				w.Source = RouteSourceSystemAutoPAC
+				w.Servers = []Server{{Host: sysproxy.PACURL, Scheme: pacScheme}}
+			case sysproxy.AutoDetect:
+				w.Mode = ModeAuto
+				w.Source = RouteSourceSystemAuto
+			case sysproxy.IsPAC:
+				w.Mode = ModePAC
+				w.Source = RouteSourceSystemPAC
+				w.Servers = []Server{{Host: sysproxy.PACURL, Scheme: pacScheme}}
+			case !sysproxy.ManualProxy.Empty():
+				w.Mode = ModeManual
+				w.Source = RouteSourceSystemManual
+			default:
+				return nil, errors.New("system proxy discovery marked Found without a usable source")
+			}
+			if err := mergeNoProxy(w, sysproxy.Bypass); err != nil {
+				return nil, fmt.Errorf("parse system proxy bypass: %w", err)
+			}
+		} else {
+			envProxies, found, err := discoverEnvironmentProxies()
 			if err != nil {
 				return nil, err
 			}
-			w.Mode = ModeEnv
-			w.Servers = parsed
-			if no := firstEnv("no_proxy", "NO_PROXY"); no != "" {
-				if err := mergeNoProxy(w, no); err != nil {
-					return nil, fmt.Errorf("parse no_proxy: %w", err)
+			if found {
+				w.Mode = ModeEnv
+				w.Source = RouteSourceEnvironment
+				w.environmentProxies = envProxies
+				w.Servers = envProxies.forScheme(httpScheme)
+				if len(w.Servers) == 0 {
+					w.Servers = envProxies.all
 				}
-			}
-		}
-		if w.Mode == ModeNone {
-			sysproxy := systemproxy.Discover()
-			switch {
-			case sysproxy.Found && sysproxy.AutoDetect:
-				w.Mode = ModeAuto
-				if err := mergeNoProxy(w, sysproxy.Bypass); err != nil {
-					return nil, fmt.Errorf("parse system proxy bypass: %w", err)
+				if no := firstEnv("no_proxy", "NO_PROXY"); no != "" {
+					if err := mergeNoProxy(w, no); err != nil {
+						return nil, fmt.Errorf("parse no_proxy: %w", err)
+					}
 				}
-			case sysproxy.Found && sysproxy.IsPAC:
-				w.Mode = ModePAC
-				w.Servers = []Server{{Host: sysproxy.PACURL, Scheme: pacScheme}}
-				if err := mergeNoProxy(w, sysproxy.Bypass); err != nil {
-					return nil, fmt.Errorf("parse system proxy bypass: %w", err)
-				}
-			case sysproxy.Found:
-				parsed, err := ParseProxy(sysproxy.ManualProxy)
-				if err != nil {
-					return nil, err
-				}
-				w.Mode = ModeManual
-				w.Servers = parsed
-				if err := mergeNoProxy(w, sysproxy.Bypass); err != nil {
-					return nil, fmt.Errorf("parse system proxy bypass: %w", err)
-				}
+			} else {
+				w.Source = RouteSourceDirect
 			}
 		}
 	}
+
+	if w.Mode == ModeAuto || w.Mode == ModePAC {
+		if !w.systemConfig.Found {
+			w.systemConfig = systemproxy.Config{
+				Supported:  true,
+				Found:      true,
+				AutoDetect: w.Mode == ModeAuto,
+				IsPAC:      w.Mode == ModePAC,
+			}
+			if w.Mode == ModePAC && len(w.Servers) > 0 {
+				w.systemConfig.PACURL = w.Servers[0].Host
+			}
+		}
+		resolver, err := newSystemProxyResolver()
+		if err != nil {
+			return nil, fmt.Errorf("initialize system proxy resolver: %w", err)
+		}
+		w.systemResolver = resolver
+	}
+
 	var hostList []string
 	for h := range w.NoProxyHosts {
 		hostList = append(hostList, h)
 	}
 	w.NoProxyHostsStr = strings.Join(hostList, ",")
 	return w, nil
+}
+
+func (w *Wproxy) Close() error {
+	if w == nil || w.systemResolver == nil {
+		return nil
+	}
+	resolver := w.systemResolver
+	w.systemResolver = nil
+	return resolver.Close()
 }
 
 func mergeNoProxy(w *Wproxy, noproxy string) error {
@@ -594,28 +734,54 @@ func (w *Wproxy) FindProxyForURL(rawurl string) ([]Server, Server, string, error
 		if err != nil {
 			return nil, netloc, path, fmt.Errorf("evaluate configured PAC: %w", err)
 		}
-		return parseProxyOrDirect(out), netloc, path, nil
-	}
-	if w.Mode == ModeAuto || w.Mode == ModePAC {
-		cfg := systemproxy.Config{AutoDetect: w.Mode == ModeAuto, IsPAC: w.Mode == ModePAC}
-		if w.Mode == ModePAC && len(w.Servers) > 0 {
-			cfg.PACURL = w.Servers[0].Host
+		servers, err := ParseProxy(out)
+		if err != nil {
+			return nil, netloc, path, fmt.Errorf("parse configured PAC result: %w", err)
 		}
-		out, _ := systemproxy.ResolveProxyForURL(rawurl, cfg)
-		if strings.TrimSpace(out) == "" {
+		return servers, netloc, path, nil
+	}
+	if w.Mode == ModeEnv {
+		servers := w.environmentProxies.forScheme(netloc.Scheme)
+		if len(servers) == 0 && len(w.Servers) > 0 && len(w.environmentProxies.byScheme) == 0 && len(w.environmentProxies.all) == 0 {
+			servers = w.Servers
+		}
+		if len(servers) == 0 {
 			return []Server{Direct}, netloc, path, nil
 		}
-		return parseProxyOrDirect(out), netloc, path, nil
+		return servers, netloc, path, nil
+	}
+	if w.Mode == ModeManual && !w.systemConfig.ManualProxy.Empty() {
+		raw := w.systemConfig.ManualProxy.ForScheme(netloc.Scheme)
+		if strings.TrimSpace(raw) == "" {
+			return []Server{Direct}, netloc, path, nil
+		}
+		servers, err := ParseProxy(raw)
+		if err != nil {
+			return nil, netloc, path, fmt.Errorf("parse system manual proxy for %s: %w", netloc.Scheme, err)
+		}
+		return servers, netloc, path, nil
+	}
+	if w.Mode == ModeAuto || w.Mode == ModePAC {
+		if w.systemResolver == nil {
+			return nil, netloc, path, errors.New("system proxy resolver is not initialized")
+		}
+		out, err := w.systemResolver.ResolveProxyForURL(rawurl, w.systemConfig)
+		if err != nil {
+			return nil, netloc, path, fmt.Errorf("resolve system proxy: %w", err)
+		}
+		if strings.TrimSpace(out) == "" {
+			return nil, netloc, path, errors.New("system proxy resolver returned empty result")
+		}
+		if err := pac.ValidateCanonicalResult(out); err != nil {
+			return nil, netloc, path, fmt.Errorf("validate system PAC result: %w", err)
+		}
+		servers, err := ParseProxy(out)
+		if err != nil {
+			return nil, netloc, path, fmt.Errorf("parse system PAC result: %w", err)
+		}
+		return servers, netloc, path, nil
 	}
 	return w.Servers, netloc, path, nil
-}
-
-func parseProxyOrDirect(proxy string) []Server {
-	servers, err := ParseProxy(proxy)
-	if err != nil {
-		return []Server{Direct}
-	}
-	return servers
 }
 
 func (w *Wproxy) isNoProxy(netloc Server) bool {

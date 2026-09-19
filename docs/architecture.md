@@ -39,6 +39,35 @@ The proxy server runs one `http.Server` over one or more listeners.
 - per-connection client auth state lives in a `sync.Map` of `clientState`
   entries keyed by remote address, dropped when the connection closes
 - Kerberos check and renewal state is guarded by the Kerberos manager mutex
+- hijacked CONNECT tunnels and HTTP Upgrade streams use one server-owned lifecycle
+  registry. A reservation is taken before `Hijack`, converted to an active managed
+  stream immediately after ownership transfer, and released only when both relay
+  directions terminate. `Shutdown` prevents new reservations, closes registered
+  endpoints, and waits for both pending handoffs and active streams to reach zero
+  within its context.
+
+## HTTP Intermediary Boundary
+
+Plain HTTP forwarding is an explicit intermediary boundary rather than a request
+clone pass-through:
+
+- the absolute request-target authority is canonical for outbound `Host`;
+- `Connection`-nominated fields and standard hop-by-hop fields are consumed on
+  requests and responses;
+- downstream `Proxy-*` credentials/metadata terminate locally. The explicit
+  `Auth=NONE` parent-proxy compatibility path may forward client
+  `Proxy-Authorization` and relay the parent's 407 `Proxy-Authenticate`;
+- PxGo appends `Via: 1.1 pxgo` to forwarded requests, informational responses,
+  and final responses;
+- forward transports disable automatic compression so representation bytes and
+  `Content-Encoding` are not silently transformed;
+- response trailers are declared before the final status and populated after body
+  EOF; informational 1xx responses such as 103 Early Hints are forwarded
+  deliberately;
+- HTTP `101 Switching Protocols` is a dedicated path: only Upgrade semantics are
+  restored after generic hop-header stripping, downstream is hijacked, buffered
+  client bytes are preserved, and the bidirectional stream joins the same managed
+  lifecycle registry used by CONNECT.
 
 Time-based housekeeping (proxy reload, Kerberos ticket refresh) runs on a
 background one-second ticker owned by `Start`/`Shutdown`, not on the request
@@ -53,10 +82,17 @@ path. A failed reload is logged and the previous proxy config stays active.
   a `sync.Pool`, so lookups run in parallel without a shared-VM lock.
 - DNS lookups for noproxy matching and PAC `dnsResolve()` go through
   `internal/dnscache`.
-- CONNECT relays keep both ends as raw `*net.TCPConn` so `io.Copy` can use
-  `splice(2)` on Linux; idle detection uses read deadlines, and each direction
-  half-closes independently (`CloseWrite`) so early EOF on one side does not
-  truncate the other.
+- Request bodies stay streaming when only one forwarding attempt is possible.
+  Requests that need auth/fallback replay keep up to 1 MiB in memory, then spool
+  to a temp file with a 256 MiB per-request replay cap and a 512 MiB
+  process-wide disk-spool budget. Replay capture follows request cancellation;
+  terminal cleanup zeroes in-memory data and removes temp files.
+- CONNECT relays preserve TCP half-close (`CloseWrite`) so early EOF on one side
+  does not truncate the other. With idle tracking disabled, raw `io.Copy` keeps
+  the platform zero-copy path. With idle tracking enabled, a lightweight reader
+  wrapper refreshes the read deadline and shared tunnel activity timestamp on
+  every successful read, preventing long one-way transfers from being mistaken
+  for idle tunnels.
 
 The test suite includes race-detector coverage for the proxy and Kerberos
 packages.

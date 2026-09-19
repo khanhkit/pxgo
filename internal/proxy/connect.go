@@ -11,16 +11,25 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/pavelsimo/pxgo/internal/config"
 	"github.com/pavelsimo/pxgo/internal/debug"
+	"github.com/pavelsimo/pxgo/internal/supervisor"
 	"github.com/pavelsimo/pxgo/internal/wproxy"
 )
 
 // connectTarget defaults the port to 443 when the CONNECT host has none,
 // including bracketed IPv6 literals like "[::1]".
+type upstreamConnectStatusError struct {
+	StatusCode int
+	Status     string
+}
+
+func (e *upstreamConnectStatusError) Error() string {
+	return "upstream CONNECT failed: " + e.Status
+}
+
 func connectTarget(host string) string {
 	if _, _, err := net.SplitHostPort(host); err != nil {
 		return net.JoinHostPort(strings.Trim(host, "[]"), "443")
@@ -31,8 +40,9 @@ func connectTarget(host string) string {
 func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 	target := connectTarget(req.Host)
 	debug.Dprint("CONNECT target: " + target)
-	proxies, _, _, err := s.currentWproxy().FindProxyForURL("https://" + target)
+	proxies, err := s.findProxyForURL("https://" + target)
 	if err != nil {
+		s.recoverRuntimeOutcome(supervisor.OutcomeRouteFailure, wproxy.Server{})
 		debug.Dprint("CONNECT proxy lookup error: " + err.Error())
 		http.Error(rw, err.Error(), http.StatusBadGateway)
 		return
@@ -50,9 +60,19 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, "hijacking unsupported", http.StatusInternalServerError)
 		return
 	}
+	if !s.reserveTunnel() {
+		_ = upstream.Close()
+		http.Error(rw, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	client, brw, err := hijacker.Hijack()
 	if err != nil {
+		s.cancelTunnelReservation()
 		_ = upstream.Close()
+		return
+	}
+	tunnel, ok := s.activateTunnel(client, upstream)
+	if !ok {
 		return
 	}
 	_, _ = brw.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -62,8 +82,7 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 		_, _ = brw.Write(leftover)
 	}
 	if err := brw.Flush(); err != nil {
-		_ = upstream.Close()
-		_ = client.Close()
+		s.closeAndFinishTunnel(tunnel)
 		return
 	}
 	// Bytes the client pipelined behind the CONNECT request (e.g. an eager
@@ -72,16 +91,14 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 	if n := brw.Reader.Buffered(); n > 0 {
 		pipelined, _ := brw.Peek(n)
 		if _, err := upstream.Write(pipelined); err != nil {
-			_ = upstream.Close()
-			_ = client.Close()
+			s.closeAndFinishTunnel(tunnel)
 			return
 		}
 		_, _ = brw.Discard(n)
 	}
 	debug.Dprint("CONNECT tunnel established: " + target)
-	atomic.AddInt64(&s.active, 1)
 	go func() {
-		defer atomic.AddInt64(&s.active, -1)
+		defer s.finishTunnel(tunnel)
 		relay(client, upstream, time.Duration(s.cfg.Idle)*time.Second)
 	}()
 }
@@ -90,7 +107,7 @@ func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingP
 	timeout := time.Duration(s.cfg.SockTimeout * float64(time.Second))
 	dialer := &net.Dialer{Timeout: timeout}
 	var lastErr error
-	for _, p := range proxyCandidates(proxies) {
+	for _, p := range s.orderedProxyCandidates(proxyCandidates(proxies)) {
 		var upstream net.Conn
 		var leftover []byte
 		var err error
@@ -130,12 +147,25 @@ func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingP
 			err = ctx.Err()
 		}
 		if err == nil {
+			s.recordRuntimeOutcome(supervisor.OutcomeSuccess, p)
 			debug.Dprint("CONNECT: upstream connected to " + target)
 			return upstream, leftover, nil
+		}
+
+		kind := classifyProxyTransportOutcome(ctx, p, err)
+		if kind == supervisor.OutcomeAuthExhausted {
+			// Existing CONNECT auth handling already asks the Kerberos owner to
+			// refresh. Record the classification without scheduling a duplicate.
+			s.recordRuntimeOutcome(kind, p)
+		} else {
+			s.recoverRuntimeOutcome(kind, p)
 		}
 		debug.Dprint("CONNECT: attempt failed: " + err.Error())
 		if upstream != nil {
 			_ = upstream.Close()
+		}
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
 		}
 		lastErr = err
 	}
@@ -211,7 +241,7 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target, pro
 	}
 	if resp.StatusCode == http.StatusProxyAuthRequired && attempts < 3 {
 		nextChallenge := resp.Header.Get("Proxy-Authenticate")
-		if selected := selectProxyAuthenticateChallenge(cfg.Auth, resp.Header.Values("Proxy-Authenticate")); selected != "" {
+		if selected := selectProxyAuthenticateChallenge(effectiveUpstreamAuth(cfg), resp.Header.Values("Proxy-Authenticate")); selected != "" {
 			nextChallenge = selected
 		}
 		if err := drainUpstream407Body(resp.Body); err != nil {
@@ -244,7 +274,7 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target, pro
 			onAuthFailure(resp)
 		}
 		_ = resp.Body.Close()
-		return fmt.Errorf("upstream CONNECT failed: %s", resp.Status)
+		return &upstreamConnectStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
 	}
 	return nil
 }

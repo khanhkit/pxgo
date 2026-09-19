@@ -4,7 +4,7 @@ pxgo is a single-binary HTTP/HTTPS proxy for developer machines, build agents,
 and local services that need to authenticate through corporate upstream proxies.
 
 By default pxgo listens on `127.0.0.1:3128` and can be configured with CLI
-flags, environment variables, `.env`, or `pxgo.ini`.
+flags, environment variables, an explicitly selected dotenv file, or `pxgo.ini`.
 
 ## Try it
 

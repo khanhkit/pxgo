@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,7 +16,9 @@ import (
 
 	"github.com/pavelsimo/pxgo/internal/config"
 	"github.com/pavelsimo/pxgo/internal/debug"
+	"github.com/pavelsimo/pxgo/internal/diagnostic"
 	"github.com/pavelsimo/pxgo/internal/kerberos"
+	"github.com/pavelsimo/pxgo/internal/supervisor"
 	"github.com/pavelsimo/pxgo/internal/wproxy"
 )
 
@@ -37,6 +39,7 @@ const (
 	httpsScheme      = "https"
 	maxMemoryBody    = 1 << 20
 	goosWindows      = "windows"
+	quitControlPath  = "/PxgoQuit"
 )
 
 type Server struct {
@@ -44,16 +47,24 @@ type Server struct {
 	w          *wproxy.Wproxy
 	wmu        sync.RWMutex
 	lastReload time.Time
+	startedAt  time.Time
 	srv        *http.Server
 	listeners  []net.Listener
 	port       int
 	stateMu    sync.RWMutex
 	clients    sync.Map // remoteAddr string -> *clientState
 	krb        *kerberos.Manager
+	sup        *supervisor.Supervisor
 	closed     chan struct{}
 	once       sync.Once
 	active     int64
 	transports sync.Map // proxy key -> *http.Transport, reused across requests
+
+	tunnelMu           sync.Mutex
+	tunnels            map[*managedTunnel]struct{}
+	tunnelPending      int
+	tunnelZero         chan struct{}
+	tunnelShuttingDown bool
 
 	// Derived from immutable config once in New so request handlers do not
 	// re-parse it on every call.
@@ -79,6 +90,15 @@ func New(cfg config.Config) (*Server, error) {
 	if err := validateAllow(cfg.Allow); err != nil {
 		return nil, err
 	}
+	if err := validateDownstreamCredentials(cfg); err != nil {
+		return nil, err
+	}
+	if err := validateGatewaySecurity(cfg); err != nil {
+		return nil, err
+	}
+	if err := validateServerBudgets(cfg); err != nil {
+		return nil, err
+	}
 	wp, err := buildWproxy(cfg)
 	if err != nil {
 		return nil, err
@@ -90,7 +110,18 @@ func New(cfg config.Config) (*Server, error) {
 	if krb != nil {
 		krb.Check(true)
 	}
-	s := &Server{cfg: cfg, w: wp, lastReload: time.Now(), port: cfg.Port, krb: krb, closed: make(chan struct{})}
+	s := &Server{
+		cfg:        cfg,
+		w:          wp,
+		lastReload: time.Now(),
+		startedAt:  time.Now(),
+		port:       cfg.Port,
+		krb:        krb,
+		closed:     make(chan struct{}),
+		tunnels:    make(map[*managedTunnel]struct{}),
+		tunnelZero: closedSignal(),
+	}
+	s.sup = newRuntimeSupervisor(s)
 	s.clientAuthList = clientAuthMethods(cfg.ClientAuth)
 	if cfg.Allow != "" {
 		// Already validated by validateAllow above.
@@ -107,6 +138,115 @@ func validateAllow(allow string) error {
 		return fmt.Errorf("unsupported allow value: %w", err)
 	}
 	return nil
+}
+
+func validateDownstreamCredentials(cfg config.Config) error {
+	if len(clientAuthMethods(cfg.ClientAuth)) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(cfg.ClientUsername) == "" {
+		return errors.New("client authentication requires --client-username")
+	}
+	if cfg.ClientPassword == "" {
+		return errors.New("client authentication requires a non-empty client password")
+	}
+	return nil
+}
+
+func validateGatewaySecurity(cfg config.Config) error {
+	methods := clientAuthMethods(cfg.ClientAuth)
+	if isRemotePlaintextExposure(cfg) && containsClientAuthMethod(methods, authBasic) {
+		return errors.New("plaintext remote exposure cannot advertise BASIC client authentication; use ANYSAFE/DIGEST/NTLM/NEGOTIATE or a loopback listener")
+	}
+	if !cfg.Gateway {
+		return nil
+	}
+	if cfg.Hostonly || hasRestrictiveAllow(cfg.Allow) || len(methods) != 0 {
+		return nil
+	}
+	return errors.New("gateway requires an explicit restrictive --allow policy or downstream client authentication")
+}
+
+func containsClientAuthMethod(methods []string, want string) bool {
+	for _, method := range methods {
+		if method == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRestrictiveAllow(allow string) bool {
+	allow = strings.TrimSpace(allow)
+	if allow == "" {
+		return false
+	}
+	for _, raw := range strings.Split(allow, ",") {
+		token := strings.ToLower(strings.TrimSpace(raw))
+		switch token {
+		case "", "*", "*.*.*.*", "0.0.0.0/0", "::/0":
+			return false
+		}
+	}
+	return true
+}
+
+func isRemotePlaintextExposure(cfg config.Config) bool {
+	if cfg.Gateway {
+		return true
+	}
+	if cfg.Hostonly {
+		return false
+	}
+	for _, raw := range strings.Split(cfg.Listen, ",") {
+		host := strings.Trim(strings.TrimSpace(raw), "[]")
+		if host == "" {
+			continue
+		}
+		if strings.EqualFold(host, "localhost") {
+			continue
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return true
+		}
+	}
+	return false
+}
+
+func validateServerBudgets(cfg config.Config) error {
+	if cfg.Workers <= 0 || cfg.Threads <= 0 {
+		return errors.New("workers and threads must both be greater than zero")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if cfg.Workers > maxInt/cfg.Threads {
+		return errors.New("workers*threads connection budget overflows int")
+	}
+	if cfg.Idle <= 0 {
+		return errors.New("idle timeout must be greater than zero")
+	}
+	if cfg.SockTimeout <= 0 || math.IsNaN(cfg.SockTimeout) || math.IsInf(cfg.SockTimeout, 0) {
+		return errors.New("socktimeout must be a finite value greater than zero")
+	}
+	if cfg.SockTimeout > float64((1<<63-1)/(2*int64(time.Second))) {
+		return errors.New("socktimeout is too large")
+	}
+	if int64(cfg.Idle) > (1<<63-1)/int64(time.Second) {
+		return errors.New("idle timeout is too large")
+	}
+	return nil
+}
+
+func connectionBudget(cfg config.Config) int {
+	return cfg.Workers * cfg.Threads
+}
+
+func configuredSockTimeout(cfg config.Config) time.Duration {
+	return time.Duration(cfg.SockTimeout * float64(time.Second))
+}
+
+func configuredWriteTimeout(cfg config.Config) time.Duration {
+	return 2 * configuredSockTimeout(cfg)
 }
 
 func buildWproxy(cfg config.Config) (*wproxy.Wproxy, error) {
@@ -198,23 +338,29 @@ func (s *Server) listenHosts() []string {
 func (s *Server) Start() error {
 	port := s.cfg.Port
 	var listeners []net.Listener
+	admissionSlots := make(chan struct{}, connectionBudget(s.cfg))
 	for _, host := range s.listenHosts() {
 		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-		ln, err := net.Listen("tcp", addr)
+		rawListener, err := net.Listen("tcp", addr)
 		if err != nil {
 			for _, opened := range listeners {
 				_ = opened.Close()
 			}
 			return err
 		}
+		ln := newAdmissionListener(rawListener, admissionSlots)
 		listeners = append(listeners, ln)
 		if port == 0 {
-			port = ln.Addr().(*net.TCPAddr).Port
+			port = rawListener.Addr().(*net.TCPAddr).Port
 		}
 	}
+	sockTimeout := configuredSockTimeout(s.cfg)
 	srv := &http.Server{
 		Handler:           s,
-		ReadHeaderTimeout: 30 * time.Second,
+		ReadHeaderTimeout: sockTimeout,
+		ReadTimeout:       sockTimeout,
+		WriteTimeout:      configuredWriteTimeout(s.cfg),
+		IdleTimeout:       time.Duration(s.cfg.Idle) * time.Second,
 		ConnState: func(conn net.Conn, state http.ConnState) {
 			if state == http.StateClosed || state == http.StateHijacked {
 				s.clearClientState(conn.RemoteAddr().String())
@@ -226,6 +372,7 @@ func (s *Server) Start() error {
 	s.port = port
 	s.srv = srv
 	s.stateMu.Unlock()
+	diagnostic.Record("process.start", "proxy listener started")
 	go s.maintenanceLoop()
 	errc := make(chan error, len(listeners))
 	for _, ln := range listeners {
@@ -250,13 +397,30 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	var err error
 	s.once.Do(func() {
+		tunnelsDone := s.beginTunnelShutdown()
 		s.stateMu.RLock()
 		srv := s.srv
 		s.stateMu.RUnlock()
 		if srv != nil {
 			err = srv.Shutdown(ctx)
 		}
+		if tunnelErr := waitTunnelDrain(ctx, tunnelsDone); tunnelErr != nil && err == nil {
+			err = tunnelErr
+		}
+		if s.sup != nil {
+			s.sup.Close()
+		}
 		s.clearTransports()
+		s.wmu.Lock()
+		wp := s.w
+		s.w = nil
+		if wp != nil {
+			if closeErr := wp.Close(); closeErr != nil && err == nil {
+				err = fmt.Errorf("close proxy resolver: %w", closeErr)
+			}
+		}
+		s.wmu.Unlock()
+		diagnostic.Record("process.shutdown", "proxy shutdown complete")
 		if s.krb != nil {
 			s.krb.Cleanup()
 		}
@@ -271,6 +435,30 @@ func (s *Server) Port() int {
 	return s.port
 }
 
+func (s *Server) Ready() bool {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.srv != nil && len(s.listeners) != 0
+}
+
+// RuntimeStatus exposes a read-only Supervisor snapshot for diagnostics and the
+// external Process Guardian. It does not expose recovery mutation APIs.
+func (s *Server) RuntimeStatus() supervisor.Status {
+	if s.sup == nil {
+		return supervisor.Status{}
+	}
+	return s.sup.Status()
+}
+
+// RuntimeFatalSignals exposes only escalation requests. Guardian owns any
+// process-level restart decision; Runtime Supervisor never exits the process.
+func (s *Server) RuntimeFatalSignals() <-chan supervisor.FatalSignal {
+	if s.sup == nil {
+		return nil
+	}
+	return s.sup.FatalSignals()
+}
+
 func (s *Server) ActiveTunnels() int64 {
 	return atomic.LoadInt64(&s.active)
 }
@@ -278,22 +466,37 @@ func (s *Server) ActiveTunnels() int64 {
 func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			s.recordRuntimeOutcome(supervisor.OutcomeInternalFailure, wproxy.Server{})
 			debug.LogPanic(config.GetLogfile(config.LogCWD), recovered)
 			http.Error(rw, "internal server error", http.StatusInternalServerError)
 		}
 	}()
 	debug.Dprint(req.Method + " " + req.RequestURI)
-	if !s.isClientAllowed(req.RemoteAddr) {
-		debug.Dprint("client not allowed: " + req.RemoteAddr)
-		http.Error(rw, "forbidden", http.StatusForbidden)
+	if isDoctorControlRequest(req) {
+		if !isLoopbackRemote(req.RemoteAddr) || !s.isClientAllowed(req.RemoteAddr) {
+			http.Error(rw, "forbidden", http.StatusForbidden)
+			return
+		}
+		s.writeDoctorResponse(rw)
 		return
 	}
-	if req.URL.Path == "/PxgoQuit" && req.Method == http.MethodGet {
+	if isQuitControlRequest(req) {
+		if !isLoopbackRemote(req.RemoteAddr) || !s.isClientAllowed(req.RemoteAddr) {
+			http.Error(rw, "forbidden", http.StatusForbidden)
+			return
+		}
 		rw.WriteHeader(http.StatusOK)
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = s.Shutdown(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = s.Shutdown(ctx)
 		}()
+		return
+	}
+	if !s.isClientAllowed(req.RemoteAddr) {
+		debug.Dprint("client not allowed: " + req.RemoteAddr)
+		http.Error(rw, "forbidden", http.StatusForbidden)
 		return
 	}
 	if s.clientAuthEnabled() && !s.authenticateClient(req) {
@@ -310,6 +513,19 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	s.handleHTTP(rw, req)
+}
+
+func isQuitControlRequest(req *http.Request) bool {
+	return req != nil && req.Method == http.MethodGet && req.URL != nil && !req.URL.IsAbs() && req.RequestURI == quitControlPath
+}
+
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 func (s *Server) isClientAllowed(remoteAddr string) bool {
@@ -358,11 +574,14 @@ func (s *Server) maintenanceLoop() {
 	defer t.Stop()
 	for {
 		select {
-		case <-t.C:
+		case now := <-t.C:
 			if err := s.reloadProxyIfDue(); err != nil {
 				debug.Dprintf("proxy reload failed, keeping previous: %v", err)
 			}
 			s.reloadKerberos(false)
+			if s.sup != nil {
+				s.sup.Tick(now)
+			}
 		case <-s.closed:
 			return
 		}
@@ -370,30 +589,54 @@ func (s *Server) maintenanceLoop() {
 }
 
 func (s *Server) reloadProxyIfDue() error {
+	return s.reloadProxy(context.Background(), false)
+}
+
+func (s *Server) refreshProxy(ctx context.Context) error {
+	return s.reloadProxy(ctx, true)
+}
+
+func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 	if s.cfg.ProxyReload <= 0 {
 		return nil
 	}
 	s.wmu.RLock()
 	reloadable := s.proxyReloadableLocked()
-	due := time.Since(s.lastReload) >= time.Duration(s.cfg.ProxyReload)*time.Second
+	due := force || time.Since(s.lastReload) >= time.Duration(s.cfg.ProxyReload)*time.Second
 	s.wmu.RUnlock()
 	if !reloadable || !due {
 		return nil
 	}
-	// buildWproxy may do network I/O (PAC download); keep it out of the lock
-	// so in-flight requests are never stalled by a slow reload.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// buildWproxy may do bounded network I/O (PAC/system discovery); keep it
+	// outside the lock so request-path routing is never stalled by recovery.
 	wp, err := buildWproxy(s.cfg)
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		_ = wp.Close()
+		return err
+	}
 	s.wmu.Lock()
-	changed := s.w == nil || wp.Mode != s.w.Mode || !equalServers(wp.Servers, s.w.Servers)
+	old := s.w
+	changed := old == nil || wp.Mode != old.Mode || !equalServers(wp.Servers, old.Servers)
 	s.w = wp
 	s.lastReload = time.Now()
+	var closeErr error
+	if old != nil {
+		closeErr = old.Close()
+	}
 	s.wmu.Unlock()
 	if changed {
-		// Drop keep-alive pools only when the routing actually changed.
+		// Drop keep-alive pools only when routing endpoints actually changed.
 		s.clearTransports()
+		diagnostic.Record("route.refresh", "authoritative route changed")
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close previous proxy resolver: %w", closeErr)
 	}
 	return nil
 }
@@ -431,6 +674,9 @@ func isHTTPURL(rawurl string) bool {
 func (s *Server) reloadKerberos(force bool) {
 	if s.krb != nil {
 		s.krb.Check(force)
+		if force {
+			diagnostic.Record("auth.refresh", "kerberos refresh requested")
+		}
 	}
 }
 
@@ -440,15 +686,27 @@ func (s *Server) currentWproxy() *wproxy.Wproxy {
 	return s.w
 }
 
+func (s *Server) findProxyForURL(rawurl string) ([]wproxy.Server, error) {
+	s.wmu.RLock()
+	defer s.wmu.RUnlock()
+	if s.w == nil {
+		return nil, errors.New("proxy resolver is not initialized")
+	}
+	proxies, _, _, err := s.w.FindProxyForURL(rawurl)
+	return proxies, err
+}
+
 func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
+	req = withInformationalResponseForwarding(req, rw)
 	targetURL := req.URL.String()
 	if !req.URL.IsAbs() {
 		scheme := httpScheme
 		targetURL = scheme + "://" + req.Host + req.URL.RequestURI()
 	}
 	debug.Dprint("HTTP target: " + targetURL)
-	proxies, _, _, err := s.currentWproxy().FindProxyForURL(targetURL)
+	proxies, err := s.findProxyForURL(targetURL)
 	if err != nil {
+		s.recoverRuntimeOutcome(supervisor.OutcomeRouteFailure, wproxy.Server{})
 		debug.Dprint("HTTP proxy lookup error: " + err.Error())
 		http.Error(rw, err.Error(), http.StatusBadGateway)
 		return
@@ -463,12 +721,26 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 	// auth retry); otherwise stream it straight through.
 	var body *replayableBody
 	if s.needsReplayableBody(req, proxies) {
-		body, err = newReplayableBody(req.Body)
+		body, err = newReplayableBodyForRequest(req.Context(), req.Body, req.ContentLength)
 		if err != nil {
-			http.Error(rw, err.Error(), http.StatusBadRequest)
+			switch {
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				debug.Dprint("HTTP replay capture canceled: " + err.Error())
+				return
+			case errors.Is(err, errReplayBodyTooLarge):
+				http.Error(rw, err.Error(), http.StatusRequestEntityTooLarge)
+			case errors.Is(err, errReplaySpoolQuota):
+				http.Error(rw, err.Error(), http.StatusInsufficientStorage)
+			default:
+				http.Error(rw, err.Error(), http.StatusBadRequest)
+			}
 			return
 		}
-		defer body.Close()
+		defer func() {
+			if err := body.Close(); err != nil {
+				debug.Dprint("HTTP replay body cleanup failed: " + err.Error())
+			}
+		}()
 	}
 	incomingProxyAuth := req.Header.Get("Proxy-Authorization")
 	resp, err := s.roundTripHTTPWithProxyFallback(req, u, body, targetURL, incomingProxyAuth, proxies)
@@ -477,11 +749,13 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
 	debug.Dprintf("HTTP response: %d %s", resp.StatusCode, targetURL)
-	copyHeader(rw.Header(), resp.Header)
-	rw.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(rw, resp.Body)
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		s.handleHTTPUpgrade(rw, req, resp)
+		return
+	}
+	defer resp.Body.Close()
+	s.writeHTTPResponse(rw, resp)
 }
 
 // needsReplayableBody reports whether the request body must be buffered so it
@@ -494,6 +768,9 @@ func (s *Server) needsReplayableBody(req *http.Request, proxies []wproxy.Server)
 		return false
 	}
 	candidates := proxyCandidates(proxies)
+	if len(candidates) == 0 {
+		return false
+	}
 	if len(candidates) > 1 {
 		return true
 	}
@@ -513,7 +790,7 @@ func (s *Server) needsReplayableBody(req *http.Request, proxies []wproxy.Server)
 }
 
 func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, body *replayableBody, targetURL, incomingProxyAuth string, proxies []wproxy.Server) (*http.Response, error) {
-	candidates := proxyCandidates(proxies)
+	candidates := s.orderedProxyCandidates(proxyCandidates(proxies))
 	var lastErr error
 	for _, candidate := range candidates {
 		if candidate == wproxy.Direct {
@@ -525,6 +802,10 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 		usesUpstreamProxy := candidate != wproxy.Direct
 		outReq, err := s.newOutboundRequest(req, u, body, "")
 		if err != nil {
+			if req.Context().Err() != nil {
+				s.recordRuntimeOutcome(supervisor.OutcomeClientCancelled, candidate)
+				return nil, req.Context().Err()
+			}
 			lastErr = err
 			continue
 		}
@@ -535,6 +816,8 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 		}
 		resp, err := transport.RoundTrip(outReq)
 		if err != nil {
+			kind := classifyProxyTransportOutcome(req.Context(), candidate, err)
+			s.recoverRuntimeOutcome(kind, candidate)
 			if req.Context().Err() != nil {
 				return nil, req.Context().Err()
 			}
@@ -542,10 +825,21 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 			lastErr = err
 			continue
 		}
+
+		// Any syntactically valid HTTP response proves the transport path itself
+		// is usable, including origin 4xx/5xx and upstream 407 responses.
+		s.recordRuntimeOutcome(supervisor.OutcomeSuccess, candidate)
+
 		if usesUpstreamProxy && resp.StatusCode == http.StatusProxyAuthRequired {
 			resp, err = s.retryHTTPProxyAuth(transport, req, u, body, targetURL, incomingProxyAuth, candidate.Host, resp)
 			if err != nil {
+				s.recoverRuntimeOutcome(classifyProxyTransportOutcome(req.Context(), candidate, err), candidate)
 				return nil, err
+			}
+			if resp != nil && resp.StatusCode == http.StatusProxyAuthRequired {
+				s.recordRuntimeOutcome(supervisor.OutcomeAuthExhausted, candidate)
+			} else {
+				s.recordRuntimeOutcome(supervisor.OutcomeSuccess, candidate)
 			}
 		}
 		return resp, nil
@@ -558,15 +852,13 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 }
 
 func proxyCandidates(proxies []wproxy.Server) []wproxy.Server {
-	if len(proxies) == 0 {
-		return []wproxy.Server{wproxy.Direct}
-	}
 	return proxies
 }
 
 func (s *Server) newOutboundRequest(req *http.Request, u *url.URL, body *replayableBody, proxyAuth string) (*http.Request, error) {
 	outReq := req.Clone(req.Context())
 	outReq.URL = u
+	outReq.Host = u.Host
 	outReq.RequestURI = ""
 	if body != nil {
 		rc, err := body.Open()
@@ -577,7 +869,13 @@ func (s *Server) newOutboundRequest(req *http.Request, u *url.URL, body *replaya
 		outReq.ContentLength = body.Size()
 	} // else: stream req.Body as-is (single attempt, no replay needed)
 	outReq.Header = cloneHeader(req.Header)
-	stripProxyHeaders(outReq.Header)
+	upgrade := requestedUpgrade(req)
+	stripIntermediaryHeaders(outReq.Header, true)
+	if upgrade != "" {
+		outReq.Header.Set(headerConnection, "Upgrade")
+		outReq.Header.Set("Upgrade", upgrade)
+	}
+	appendVia(outReq.Header)
 	if s.cfg.UserAgent != "" {
 		outReq.Header.Set("User-Agent", s.cfg.UserAgent)
 	}
@@ -585,14 +883,6 @@ func (s *Server) newOutboundRequest(req *http.Request, u *url.URL, body *replaya
 		outReq.Header.Set("Proxy-Authorization", proxyAuth)
 	}
 	return outReq, nil
-}
-
-func stripProxyHeaders(header http.Header) {
-	for key := range header {
-		if strings.HasPrefix(strings.ToLower(key), "proxy-") {
-			header.Del(key)
-		}
-	}
 }
 
 func cloneHeader(h http.Header) http.Header {

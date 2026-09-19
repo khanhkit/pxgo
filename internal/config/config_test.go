@@ -103,12 +103,8 @@ func TestParseArgsNormalizesPACLocations(t *testing.T) {
 	if cfg.PAC != pacPath {
 		t.Fatalf("file pac got %q want %q", cfg.PAC, pacPath)
 	}
-	cfg, err = ParseArgs([]string{"--pac=missing.pac"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.PAC != "" {
-		t.Fatalf("missing pac should be ignored, got %q", cfg.PAC)
+	if _, err = ParseArgs([]string{"--pac=missing.pac"}); err == nil {
+		t.Fatal("expected missing PAC path to fail")
 	}
 }
 
@@ -179,27 +175,19 @@ func TestSaveAndReadINI(t *testing.T) {
 	}
 }
 
-func TestReadINIIgnoresInvalidNumericValues(t *testing.T) {
+func TestReadINIRejectsInvalidNumericValues(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pxgo.ini")
 	if err := os.WriteFile(path, []byte("[proxy]\nport = not-a-port\n[settings]\nthreads = nope\nsocktimeout = nope\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := ReadINI(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Port != 3128 || cfg.Threads != 32 || cfg.SockTimeout != 20.0 {
-		t.Fatalf("invalid numeric values should preserve defaults: %#v", cfg)
+	if _, err := ReadINI(path); err == nil {
+		t.Fatal("expected invalid numeric INI values to fail")
 	}
 }
 
-func TestParseArgsIgnoresInvalidNumericValues(t *testing.T) {
-	cfg, err := ParseArgs([]string{"--port=bad", "--threads=bad", "--socktimeout=bad", "--log=bad"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Port != 3128 || cfg.Threads != 32 || cfg.SockTimeout != 20.0 || cfg.Log != 0 {
-		t.Fatalf("invalid numeric CLI values should preserve defaults: %#v", cfg)
+func TestParseArgsRejectsInvalidNumericValues(t *testing.T) {
+	if _, err := ParseArgs([]string{"--port=bad", "--threads=bad", "--socktimeout=bad", "--log=bad"}); err == nil {
+		t.Fatal("expected invalid numeric CLI values to fail")
 	}
 }
 
@@ -286,6 +274,7 @@ func TestParseArgsLoadsDotenvBeforeEnvironmentAndCLI(t *testing.T) {
 	if err := os.WriteFile(".env", []byte("PXGO_PORT=4141\nPXGO_THREADS=7\nPXGO_USERNAME=dotenv-user\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("PXGO_DOTENV", ".env")
 	t.Setenv("PXGO_THREADS", "9")
 	cfg, err := ParseArgs([]string{"--port=5151"})
 	if err != nil {
@@ -319,6 +308,7 @@ func TestDotenvCanSelectConfigFile(t *testing.T) {
 	if err := os.WriteFile(".env", []byte("PXGO_CONFIG="+ini+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("PXGO_DOTENV", ".env")
 	cfg, err := ParseArgs(nil)
 	if err != nil {
 		t.Fatal(err)

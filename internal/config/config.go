@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -59,8 +60,13 @@ const (
 	keyClientPassword = "client_password"
 	keyConfig         = "config"
 	keyTest           = "test"
+	keyDotenv         = "dotenv"
+	keySave           = "save"
+	keyInstall        = "install"
 	localhostIP       = "127.0.0.1"
 )
+
+const maxConfigLineBytes = 1 << 20
 
 var Defaults = map[string]string{
 	keyServer:         "",
@@ -88,7 +94,10 @@ var Defaults = map[string]string{
 	keyClientUsername: "",
 }
 
-var executablePath = os.Executable
+var (
+	executablePath = os.Executable
+	userHomeDir    = os.UserHomeDir
+)
 
 const (
 	Realm       = "pxgo"
@@ -130,10 +139,19 @@ type Config struct {
 	Save                 bool
 	Quit                 bool
 	Restart              bool
+	Doctor               bool
 	ClientAuth           string
 	ClientUsername       string
 	ClientPassword       string
 	ClientNoSSPI         bool
+	Sources              map[string]string
+}
+
+func (c Config) SourceOf(name string) string {
+	if c.Sources == nil {
+		return ""
+	}
+	return c.Sources[canonicalConfigKey(name)]
 }
 
 func Default() Config {
@@ -143,6 +161,10 @@ func Default() Config {
 	idle, _ := strconv.Atoi(Defaults[keyIdle])
 	sockTimeout, _ := strconv.ParseFloat(Defaults[keySockTimeout], 64)
 	proxyReload, _ := strconv.Atoi(Defaults[keyProxyReload])
+	sources := make(map[string]string, len(Defaults))
+	for key := range Defaults {
+		sources[key] = "default"
+	}
 	return Config{
 		PACEncoding: Defaults[keyPACEncoding],
 		Port:        port,
@@ -155,25 +177,41 @@ func Default() Config {
 		ProxyReload: proxyReload,
 		Auth:        Defaults[keyAuth],
 		ClientAuth:  Defaults[keyClientAuth],
+		Sources:     sources,
 	}
 }
 
 func GetConfigDir() string {
+	dir, _ := getConfigDirStrict()
+	return dir
+}
+
+func getConfigDirStrict() (string, error) {
 	if runtime.GOOS == goosWindows {
 		if appdata := os.Getenv("APPDATA"); appdata != "" {
-			return filepath.Join(appdata, "pxgo")
+			return filepath.Join(appdata, "pxgo"), nil
 		}
-		return filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming", "pxgo")
+		profile := os.Getenv("USERPROFILE")
+		if profile == "" {
+			return "", fmt.Errorf("USERPROFILE is empty")
+		}
+		return filepath.Join(profile, "AppData", "Roaming", "pxgo"), nil
 	}
 	if runtime.GOOS == "darwin" {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, "Library", "Application Support", "pxgo")
+		home, err := userHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, "Library", "Application Support", "pxgo"), nil
 	}
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		return filepath.Join(xdg, "pxgo")
+		return filepath.Join(xdg, "pxgo"), nil
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "pxgo")
+	home, err := userHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "pxgo"), nil
 }
 
 func GetLogfile(location int) string {
@@ -207,22 +245,44 @@ func GetLogfile(location int) string {
 }
 
 func FileURLToLocalPath(fileURL string) string {
-	normalized := strings.ReplaceAll(fileURL, "\\", "/")
-	u, err := url.Parse(normalized)
+	path, err := fileURLToLocalPathStrict(fileURL)
 	if err != nil {
 		return fileURL
 	}
-	path, _ := url.PathUnescape(u.Path)
+	return path
+}
+
+func fileURLToLocalPathStrict(fileURL string) (string, error) {
+	normalized := strings.ReplaceAll(fileURL, "\\", "/")
+	u, err := url.Parse(normalized)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "file" {
+		return "", fmt.Errorf("expected file URL")
+	}
+	path, err := url.PathUnescape(u.Path)
+	if err != nil {
+		return "", err
+	}
 	var result string
 	switch {
-	case u.Host != "":
+	case runtime.GOOS == goosWindows && len(u.Host) == 2 && u.Host[1] == ':':
+		// file://C:/path is commonly produced by concatenating "file://" with
+		// an absolute Windows path. url.Parse treats C: as a host, but it is a
+		// local drive designator, not a UNC authority.
 		result = u.Host + path
+	case u.Host != "":
+		result = "//" + u.Host + path
 	case len(path) >= 3 && path[0] == '/' && path[2] == ':':
 		result = path[1:]
 	default:
 		result = path
 	}
-	return filepath.FromSlash(result)
+	if result == "" {
+		return "", fmt.Errorf("empty file path")
+	}
+	return filepath.FromSlash(result), nil
 }
 
 func GetHostIPs() []net.IP {
@@ -258,34 +318,77 @@ func GetHostIPs() []net.IP {
 
 func ParseArgs(args []string) (Config, error) {
 	cfg := Default()
-	dotenv := loadDotenv()
-	isSave := hasBareArg(args, "save") || truthy(os.Getenv(envPrefix+"SAVE")) || truthy(dotenv["save"])
-	configPath := preScanConfigPath(args)
-	if configPath == "" {
-		configPath = os.Getenv(envPrefix + "CONFIG")
+	dotenv, dotenvSource, err := loadDotenv()
+	if err != nil {
+		return cfg, err
 	}
-	if configPath == "" {
-		configPath = dotenv[keyConfig]
+
+	isSave := false
+	if raw, ok := dotenv[keySave]; ok {
+		value, err := parseBoolValue(raw)
+		if err != nil {
+			return cfg, fmt.Errorf("%s %s: %w", dotenvSource, keySave, err)
+		}
+		isSave = value
+	}
+	if raw, ok := os.LookupEnv(envPrefix + "SAVE"); ok {
+		value, err := parseBoolValue(raw)
+		if err != nil {
+			return cfg, fmt.Errorf("environment %sSAVE: %w", envPrefix, err)
+		}
+		isSave = value
+	}
+	if hasBareArg(args, keySave) {
+		isSave = true
+	}
+	cfg.Save = isSave
+	allowMissingConfig := isSave || hasBareArg(args, keyInstall)
+
+	configPath := preScanConfigPath(args)
+	configPathSource := ""
+	if configPath != "" {
+		configPathSource = "cli"
+	} else if raw, ok := os.LookupEnv(envPrefix + "CONFIG"); ok {
+		configPath = raw
+		configPathSource = "env:" + envPrefix + "CONFIG"
+	} else if raw, ok := dotenv[keyConfig]; ok {
+		configPath = raw
+		configPathSource = dotenvSource
 	}
 	if configPath != "" {
 		cfg.ConfigPath = normalizePath(configPath)
+		markSource(&cfg, keyConfig, configPathSource)
 	}
-	if loadPath := ConfigPath(configPath); loadPath != "" {
-		if configPath != "" && !isSave {
-			if _, err := os.Stat(loadPath); err != nil { // #nosec G703 -- config paths are explicitly user-controlled inputs.
-				return cfg, fmt.Errorf("could not find config file: %s", loadPath)
+	loadPath, err := configPathStrict(configPath)
+	if err != nil {
+		return cfg, fmt.Errorf("resolve config path: %w", err)
+	}
+	if loadPath != "" {
+		_, statErr := os.Stat(loadPath) // #nosec G703 -- config paths are explicitly user-controlled inputs.
+		switch {
+		case statErr == nil:
+			fileCfg, err := ReadINI(loadPath)
+			if err != nil {
+				return cfg, fmt.Errorf("read config %s: %w", loadPath, err)
 			}
-		}
-		if fileCfg, err := ReadINI(loadPath); err == nil {
 			cfg = fileCfg
 			cfg.ConfigPath = loadPath
+			cfg.Save = isSave
+			if configPathSource != "" {
+				markSource(&cfg, keyConfig, configPathSource)
+			}
+		case configPath != "" && !allowMissingConfig:
+			return cfg, fmt.Errorf("could not open config file %s: %w", loadPath, statErr)
+		case configPath == "" && !errors.Is(statErr, os.ErrNotExist):
+			return cfg, fmt.Errorf("could not inspect config file %s: %w", loadPath, statErr)
 		}
 	}
-	cfg.Password = os.Getenv(envPrefix + "PASSWORD")
-	cfg.ClientPassword = os.Getenv(envPrefix + "CLIENT_PASSWORD")
-	cfg.ClientUsername = os.Getenv(envPrefix + "CLIENT_USERNAME")
-	applyMap(&cfg, dotenv)
-	applyEnv(&cfg)
+	if err := applyMap(&cfg, dotenv, dotenvSource); err != nil {
+		return cfg, err
+	}
+	if err := applyEnv(&cfg); err != nil {
+		return cfg, err
+	}
 	for _, arg := range args {
 		if arg == "--save" {
 			cfg.Save = true
@@ -297,6 +400,10 @@ func ParseArgs(args []string) (Config, error) {
 		}
 		if arg == "--restart" {
 			cfg.Restart = true
+			continue
+		}
+		if arg == "--doctor" {
+			cfg.Doctor = true
 			continue
 		}
 		if arg == "--gateway" {
@@ -346,7 +453,7 @@ func ParseArgs(args []string) (Config, error) {
 			cfg.Version = true
 			continue
 		}
-		if arg == "--install" {
+		if arg == "--"+keyInstall {
 			cfg.Install = true
 			continue
 		}
@@ -373,11 +480,13 @@ func ParseArgs(args []string) (Config, error) {
 		if !ok {
 			name, val = strings.TrimPrefix(arg, "--"), "1"
 		}
-		if err := applyValue(&cfg, strings.ReplaceAll(name, "-", "_"), val); err != nil {
-			return cfg, err
+		if err := applyValueFrom(&cfg, strings.ReplaceAll(name, "-", "_"), val, "cli"); err != nil {
+			return cfg, fmt.Errorf("command line --%s: %w", name, err)
 		}
 	}
-	loadStoredPasswords(&cfg)
+	if err := loadStoredPasswords(&cfg); err != nil {
+		return cfg, err
+	}
 	normalizeDependencies(&cfg)
 	return cfg, nil
 }
@@ -401,44 +510,92 @@ func hasBareArg(args []string, name string) bool {
 	return false
 }
 
-func applyEnv(cfg *Config) {
+func applyEnv(cfg *Config) error {
 	for _, item := range os.Environ() {
 		key, val, ok := strings.Cut(item, "=")
-		if !ok || val == "" || !strings.HasPrefix(key, envPrefix) || len(key) <= len(envPrefix) {
+		if !ok || !strings.HasPrefix(key, envPrefix) || len(key) <= len(envPrefix) {
 			continue
 		}
-		_ = applyValue(cfg, strings.ToLower(key[len(envPrefix):]), val)
-	}
-}
-
-func applyMap(cfg *Config, values map[string]string) {
-	for key, val := range values {
-		if val != "" {
-			_ = applyValue(cfg, key, val)
+		name := strings.ToLower(key[len(envPrefix):])
+		if isAuxiliaryEnvKey(name) {
+			continue
+		}
+		if err := applyValueFrom(cfg, name, val, "env:"+key); err != nil {
+			return fmt.Errorf("environment %s: %w", key, err)
 		}
 	}
+	return nil
 }
 
-func loadDotenv() map[string]string {
-	values := map[string]string{}
-	if !loadDotenvFile(filepath.Join(".", ".env"), values) {
-		cwd, _ := os.Getwd()
-		scriptEnv := filepath.Join(GetScriptDir(), ".env")
-		if filepath.Dir(scriptEnv) != cwd {
-			loadDotenvFile(scriptEnv, values)
+func applyMap(cfg *Config, values map[string]string, source string) error {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if isAuxiliaryEnvKey(key) {
+			continue
+		}
+		if err := applyValueFrom(cfg, key, values[key], source); err != nil {
+			return fmt.Errorf("%s %s: %w", source, key, err)
 		}
 	}
-	return values
+	return nil
 }
 
-func loadDotenvFile(path string, values map[string]string) bool {
-	f, err := os.Open(path) // #nosec G703 -- config paths are explicitly user-controlled inputs.
-	if err != nil {
+func isAuxiliaryEnvKey(name string) bool {
+	switch name {
+	case keySave, keyDotenv, "keyring_file", "keyring_plaintext", "kerberos_flavor", "kerberos_password", "kerberos_principal", "bin":
+		return true
+	default:
 		return false
 	}
+}
+
+func loadDotenv() (map[string]string, string, error) {
+	values := map[string]string{}
+	if explicit, ok := os.LookupEnv(envPrefix + "DOTENV"); ok {
+		explicit = strings.TrimSpace(explicit)
+		if explicit == "" {
+			return values, "", nil
+		}
+		loaded, err := loadDotenvFile(explicit, values)
+		if err != nil {
+			return nil, "", fmt.Errorf("load dotenv %s: %w", explicit, err)
+		}
+		if !loaded {
+			return nil, "", fmt.Errorf("load dotenv %s: %w", explicit, os.ErrNotExist)
+		}
+		return values, "dotenv:" + explicit, nil
+	}
+
+	scriptEnv := filepath.Join(GetScriptDir(), ".env")
+	loaded, err := loadDotenvFile(scriptEnv, values)
+	if err != nil {
+		return nil, "", fmt.Errorf("load dotenv %s: %w", scriptEnv, err)
+	}
+	if loaded {
+		return values, "dotenv:" + scriptEnv, nil
+	}
+	return values, "", nil
+}
+
+func loadDotenvFile(path string, values map[string]string) (bool, error) {
+	f, err := os.Open(path) // #nosec G703 -- dotenv paths are explicitly selected or resolved from the executable directory.
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
 	defer f.Close()
+
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 4096), maxConfigLineBytes)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -448,17 +605,45 @@ func loadDotenvFile(path string, values map[string]string) bool {
 		}
 		key, val, ok := strings.Cut(line, "=")
 		if !ok {
-			continue
+			return false, fmt.Errorf("line %d: expected KEY=VALUE", lineNo)
 		}
 		key = strings.TrimSpace(key)
-		if !strings.HasPrefix(key, envPrefix) || os.Getenv(key) != "" {
+		if !strings.HasPrefix(key, envPrefix) {
+			continue
+		}
+		if _, present := os.LookupEnv(key); present {
 			continue
 		}
 		val = strings.TrimSpace(val)
 		val = strings.Trim(val, `"'`)
 		values[strings.ToLower(key[len(envPrefix):])] = val
 	}
-	return true
+	if err := scanner.Err(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func canonicalConfigKey(name string) string {
+	if name == "proxy" {
+		return keyServer
+	}
+	return name
+}
+
+func markSource(cfg *Config, name, source string) {
+	if cfg.Sources == nil {
+		cfg.Sources = map[string]string{}
+	}
+	cfg.Sources[canonicalConfigKey(name)] = source
+}
+
+func applyValueFrom(cfg *Config, name, val, source string) error {
+	if err := applyValue(cfg, name, val); err != nil {
+		return err
+	}
+	markSource(cfg, name, source)
+	return nil
 }
 
 func applyValue(cfg *Config, name, val string) error {
@@ -466,20 +651,36 @@ func applyValue(cfg *Config, name, val string) error {
 	case keyServer, "proxy":
 		cfg.Server = val
 	case keyPAC:
-		cfg.PAC = normalizePACLocation(val)
+		pac, err := normalizePACLocation(val)
+		if err != nil {
+			return err
+		}
+		cfg.PAC = pac
 	case keyPACEncoding:
 		cfg.PACEncoding = val
 	case keyPort:
-		cfg.Port = parseIntValue(val, cfg.Port)
+		parsed, err := parseIntValue(name, val)
+		if err != nil {
+			return err
+		}
+		cfg.Port = parsed
 	case keyListen:
 		cfg.Listen = val
 	case keyGateway:
-		cfg.Gateway = truthy(val)
+		parsed, err := parseBoolValue(val)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: %w", name, val, err)
+		}
+		cfg.Gateway = parsed
 		if cfg.Gateway {
 			cfg.Listen = ""
 		}
 	case keyHostonly:
-		cfg.Hostonly = truthy(val)
+		parsed, err := parseBoolValue(val)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: %w", name, val, err)
+		}
+		cfg.Hostonly = parsed
 		if cfg.Hostonly {
 			cfg.Listen = ""
 		}
@@ -487,6 +688,8 @@ func applyValue(cfg *Config, name, val string) error {
 		cfg.Allow = val
 	case keyNoProxy:
 		cfg.NoProxy = val
+	case keyUserAgent:
+		cfg.UserAgent = val
 	case keyUsername:
 		cfg.Username = val
 	case keyPassword:
@@ -496,51 +699,102 @@ func applyValue(cfg *Config, name, val string) error {
 	case keyAuth:
 		cfg.Auth = strings.ToUpper(val)
 	case keyKerberos:
-		cfg.Kerberos = truthy(val)
+		parsed, err := parseBoolValue(val)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: %w", name, val, err)
+		}
+		cfg.Kerberos = parsed
 	case keyWorkers:
-		cfg.Workers = parseIntValue(val, cfg.Workers)
+		parsed, err := parseIntValue(name, val)
+		if err != nil {
+			return err
+		}
+		cfg.Workers = parsed
 	case keyThreads:
-		cfg.Threads = parseIntValue(val, cfg.Threads)
+		parsed, err := parseIntValue(name, val)
+		if err != nil {
+			return err
+		}
+		cfg.Threads = parsed
 	case keyIdle:
-		cfg.Idle = parseIntValue(val, cfg.Idle)
+		parsed, err := parseIntValue(name, val)
+		if err != nil {
+			return err
+		}
+		cfg.Idle = parsed
 	case keySockTimeout:
-		cfg.SockTimeout = parseFloatValue(val, cfg.SockTimeout)
+		parsed, err := parseFloatValue(name, val)
+		if err != nil {
+			return err
+		}
+		cfg.SockTimeout = parsed
 	case keyProxyReload:
-		cfg.ProxyReload = parseIntValue(val, cfg.ProxyReload)
+		parsed, err := parseIntValue(name, val)
+		if err != nil {
+			return err
+		}
+		cfg.ProxyReload = parsed
 	case keyForeground:
-		cfg.Foreground = truthy(val)
+		parsed, err := parseBoolValue(val)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: %w", name, val, err)
+		}
+		cfg.Foreground = parsed
 	case keyLog:
-		cfg.Log = parseIntValue(val, cfg.Log)
+		parsed, err := parseIntValue(name, val)
+		if err != nil {
+			return err
+		}
+		cfg.Log = parsed
 	case keyTest:
 		cfg.Test = val
 	case keyConfig:
-		cfg.ConfigPath = normalizePath(val)
+		if val == "" {
+			cfg.ConfigPath = ""
+		} else {
+			cfg.ConfigPath = normalizePath(val)
+		}
 	case keyClientAuth:
 		cfg.ClientAuth = strings.ToUpper(val)
 	case keyClientUsername:
 		cfg.ClientUsername = val
 	case keyClientNoSSPI:
-		cfg.ClientNoSSPI = truthy(val)
+		parsed, err := parseBoolValue(val)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: %w", name, val, err)
+		}
+		cfg.ClientNoSSPI = parsed
 	default:
 		return fmt.Errorf("unsupported option %s", name)
 	}
 	return nil
 }
 
-func parseIntValue(val string, current int) int {
+func parseIntValue(name, val string) (int, error) {
 	parsed, err := strconv.Atoi(val)
 	if err != nil {
-		return current
+		return 0, fmt.Errorf("invalid %s %q: %w", name, val, err)
 	}
-	return parsed
+	return parsed, nil
 }
 
-func parseFloatValue(val string, current float64) float64 {
+func parseFloatValue(name, val string) (float64, error) {
 	parsed, err := strconv.ParseFloat(val, 64)
 	if err != nil {
-		return current
+		return 0, fmt.Errorf("invalid %s %q: %w", name, val, err)
 	}
-	return parsed
+	return parsed, nil
+}
+
+func parseBoolValue(val string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "", "0", "false", "no", "off":
+		return false, nil
+	case "1", "true", "yes", "on":
+		return true, nil
+	default:
+		return false, fmt.Errorf("expected boolean value")
+	}
 }
 
 func normalizeDependencies(cfg *Config) {
@@ -552,17 +806,26 @@ func normalizeDependencies(cfg *Config) {
 	}
 }
 
-func loadStoredPasswords(cfg *Config) {
+func loadStoredPasswords(cfg *Config) error {
 	if cfg.Password == "" && cfg.Username != "" {
-		if pwd, ok := GetPassword(Realm, cfg.Username); ok {
+		pwd, ok, err := getPasswordStrict(Realm, cfg.Username)
+		if err != nil {
+			return fmt.Errorf("load stored upstream password: %w", err)
+		}
+		if ok {
 			cfg.Password = pwd
 		}
 	}
 	if cfg.ClientPassword == "" && cfg.ClientUsername != "" {
-		if pwd, ok := GetPassword(ClientRealm, cfg.ClientUsername); ok {
+		pwd, ok, err := getPasswordStrict(ClientRealm, cfg.ClientUsername)
+		if err != nil {
+			return fmt.Errorf("load stored client password: %w", err)
+		}
+		if ok {
 			cfg.ClientPassword = pwd
 		}
 	}
+	return nil
 }
 
 func StorePassword(realm, username, password string) error {
@@ -583,16 +846,21 @@ func StorePassword(realm, username, password string) error {
 }
 
 func GetPassword(realm, username string) (string, bool) {
+	pwd, ok, _ := getPasswordStrict(realm, username)
+	return pwd, ok
+}
+
+func getPasswordStrict(realm, username string) (string, bool, error) {
 	if username == "" {
-		return "", false
+		return "", false, nil
 	}
 	if os.Getenv(envPrefix+"KEYRING_PLAINTEXT") == "1" {
-		return getPlaintext(realm, username)
+		return getPlaintextStrict(realm, username)
 	}
 	if pwd, err := keyring.Get(realm, username); err == nil {
-		return pwd, true
+		return pwd, true, nil
 	}
-	return "", false
+	return "", false, nil
 }
 
 func storePlaintext(realm, username, password string) error {
@@ -600,32 +868,45 @@ func storePlaintext(realm, username, password string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	data := map[string]map[string]string{}
-	if raw, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(raw, &data)
-	}
-	if data[realm] == nil {
-		data[realm] = map[string]string{}
-	}
-	data[realm][username] = password
-	raw, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, raw, 0o600)
+	return withFileLock(path, 0o600, func() error {
+		data := map[string]map[string]string{}
+		raw, err := os.ReadFile(path)
+		switch {
+		case err == nil:
+			if err := json.Unmarshal(raw, &data); err != nil {
+				return fmt.Errorf("parse plaintext keyring %s: %w", path, err)
+			}
+		case errors.Is(err, os.ErrNotExist):
+		default:
+			return fmt.Errorf("read plaintext keyring %s: %w", path, err)
+		}
+		if data[realm] == nil {
+			data[realm] = map[string]string{}
+		}
+		data[realm][username] = password
+		raw, err = json.MarshalIndent(data, "", "  ")
+		if err != nil {
+			return err
+		}
+		return atomicWriteFile(path, raw, 0o600)
+	})
 }
 
-func getPlaintext(realm, username string) (string, bool) {
-	raw, err := os.ReadFile(keyringPath())
+func getPlaintextStrict(realm, username string) (string, bool, error) {
+	path := keyringPath()
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
 	if err != nil {
-		return "", false
+		return "", false, fmt.Errorf("read plaintext keyring %s: %w", path, err)
 	}
 	data := map[string]map[string]string{}
 	if err := json.Unmarshal(raw, &data); err != nil {
-		return "", false
+		return "", false, fmt.Errorf("parse plaintext keyring %s: %w", path, err)
 	}
 	password := data[realm][username]
-	return password, password != ""
+	return password, password != "", nil
 }
 
 func keyringPath() string {
@@ -635,52 +916,66 @@ func keyringPath() string {
 	return filepath.Join(GetConfigDir(), "keyring.json")
 }
 
-func truthy(v string) bool {
-	v = strings.ToLower(strings.TrimSpace(v))
-	return v == "1" || v == "true" || v == "yes" || v == "on"
-}
-
-func normalizePACLocation(pac string) string {
-	if pac == "" || strings.HasPrefix(pac, "http://") || strings.HasPrefix(pac, "https://") {
-		return pac
+func normalizePACLocation(pac string) (string, error) {
+	if pac == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(pac, "http://") || strings.HasPrefix(pac, "https://") {
+		u, err := url.Parse(pac)
+		if err != nil || u.Host == "" {
+			return "", fmt.Errorf("invalid PAC URL %q", pac)
+		}
+		return pac, nil
 	}
 	if strings.HasPrefix(pac, "file:") {
-		path := FileURLToLocalPath(pac)
-		if _, err := os.Stat(path); err == nil { // #nosec G703 -- PAC paths are explicitly user-configured.
-			return path
+		path, err := fileURLToLocalPathStrict(pac)
+		if err != nil {
+			return "", fmt.Errorf("invalid PAC file URL %q: %w", pac, err)
 		}
-		return ""
-	}
-	if filepath.IsAbs(pac) {
-		if _, err := os.Stat(pac); err == nil { // #nosec G703 -- PAC paths are explicitly user-configured.
-			return pac
+		if _, err := os.Stat(path); err != nil { // #nosec G703 -- PAC paths are explicitly user-configured.
+			return "", fmt.Errorf("PAC path %s: %w", path, err)
 		}
-		return ""
+		return path, nil
 	}
-	path := filepath.Join(GetScriptDir(), pac)
-	if _, err := os.Stat(path); err == nil { // #nosec G703 -- relative PAC paths are resolved against the executable directory.
-		return path
+	path := pac
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(GetScriptDir(), path)
 	}
-	return ""
+	if _, err := os.Stat(path); err != nil { // #nosec G703 -- PAC paths are explicitly user-configured.
+		return "", fmt.Errorf("PAC path %s: %w", path, err)
+	}
+	return path, nil
 }
 
 func ConfigPath(explicit string) string {
+	path, _ := configPathStrict(explicit)
+	return path
+}
+
+func configPathStrict(explicit string) (string, error) {
 	if explicit != "" {
-		return normalizePath(explicit)
+		return normalizePath(explicit), nil
 	}
 	if _, err := os.Stat("pxgo.ini"); err == nil {
-		abs, _ := filepath.Abs("pxgo.ini")
-		return abs
+		abs, absErr := filepath.Abs("pxgo.ini")
+		if absErr != nil {
+			return "", absErr
+		}
+		return abs, nil
 	}
-	configPath := filepath.Join(GetConfigDir(), "pxgo.ini")
+	configDir, err := getConfigDirStrict()
+	if err != nil {
+		return "", err
+	}
+	configPath := filepath.Join(configDir, "pxgo.ini")
 	if _, err := os.Stat(configPath); err == nil {
-		return configPath
+		return configPath, nil
 	}
 	scriptPath := filepath.Join(GetScriptDir(), "pxgo.ini")
 	if _, err := os.Stat(scriptPath); err == nil {
-		return scriptPath
+		return scriptPath, nil
 	}
-	return configPath
+	return configPath, nil
 }
 
 func ConfigPathForSave(explicit string) string {
@@ -753,6 +1048,9 @@ func SaveINI(path string, cfg Config) error {
 	if path == "" {
 		return errors.New("empty config path")
 	}
+	if err := validateINIStrings(cfg); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -791,7 +1089,34 @@ log = %d
 `, cfg.Server, cfg.PAC, cfg.PACEncoding, cfg.Port, listen, btoi(cfg.Gateway), btoi(cfg.Hostonly), cfg.Allow, cfg.NoProxy,
 		cfg.UserAgent, cfg.Username, cfg.Auth, btoi(cfg.Kerberos), cfg.ClientAuth, cfg.ClientUsername, btoi(cfg.ClientNoSSPI), cfg.Workers, cfg.Threads, cfg.Idle,
 		cfg.SockTimeout, cfg.ProxyReload, btoi(cfg.Foreground), cfg.Log)
-	return os.WriteFile(path, []byte(content), 0o600)
+	return withFileLock(path, 0o600, func() error {
+		return atomicWriteFile(path, []byte(content), 0o600)
+	})
+}
+
+func validateINIStrings(cfg Config) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{"server", cfg.Server},
+		{"pac", cfg.PAC},
+		{"pac_encoding", cfg.PACEncoding},
+		{"listen", cfg.Listen},
+		{"allow", cfg.Allow},
+		{"noproxy", cfg.NoProxy},
+		{"useragent", cfg.UserAgent},
+		{"username", cfg.Username},
+		{"auth", cfg.Auth},
+		{"client_auth", cfg.ClientAuth},
+		{"client_username", cfg.ClientUsername},
+	}
+	for _, field := range fields {
+		if strings.ContainsAny(field.value, "\r\n") {
+			return fmt.Errorf("%s contains a line break", field.name)
+		}
+	}
+	return nil
 }
 
 func btoi(v bool) int {
@@ -809,18 +1134,27 @@ func ReadINI(path string) (Config, error) {
 		return cfg, err
 	}
 	defer f.Close()
+
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 4096), maxConfigLineBytes)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "[") {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") || strings.HasPrefix(line, "[") {
 			continue
 		}
 		k, v, ok := strings.Cut(line, "=")
 		if !ok {
-			continue
+			return cfg, fmt.Errorf("%s:%d: expected key=value", path, lineNo)
 		}
-		_ = applyValue(&cfg, strings.TrimSpace(k), strings.TrimSpace(v))
+		if err := applyValueFrom(&cfg, strings.TrimSpace(k), strings.TrimSpace(v), "ini:"+path); err != nil {
+			return cfg, fmt.Errorf("%s:%d: %w", path, lineNo, err)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return cfg, fmt.Errorf("%s: %w", path, err)
 	}
 	normalizeDependencies(&cfg)
-	return cfg, scanner.Err()
+	return cfg, nil
 }

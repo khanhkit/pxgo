@@ -1,6 +1,11 @@
 package systemproxy
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestParseManualProxyString(t *testing.T) {
 	tests := []struct {
@@ -18,5 +23,149 @@ func TestParseManualProxyString(t *testing.T) {
 		if got := ParseManualProxyString(tt.in); got != tt.want {
 			t.Fatalf("ParseManualProxyString(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+type fakeResolverBackend struct {
+	resolveCalls int
+	closeCalls   int
+	result       string
+	err          error
+}
+
+func (f *fakeResolverBackend) resolve(ctx context.Context, rawurl string, cfg Config) (string, error) {
+	f.resolveCalls++
+	return f.result, f.err
+}
+
+func (f *fakeResolverBackend) close() error {
+	f.closeCalls++
+	return nil
+}
+
+func TestTCWINPACREG001ResolverReusesBackendUntilClose(t *testing.T) {
+	backend := &fakeResolverBackend{result: "proxy.example.com:8080"}
+	resolver := newResolverWithBackend(backend)
+	cfg := Config{AutoDetect: true}
+
+	for _, rawurl := range []string{"https://one.example", "https://two.example"} {
+		got, err := resolver.ResolveProxyForURL(rawurl, cfg)
+		if err != nil {
+			t.Fatalf("ResolveProxyForURL(%q) error = %v", rawurl, err)
+		}
+		if got != backend.result {
+			t.Fatalf("ResolveProxyForURL(%q) = %q, want %q", rawurl, got, backend.result)
+		}
+	}
+	if backend.resolveCalls != 2 {
+		t.Fatalf("resolve calls = %d, want 2", backend.resolveCalls)
+	}
+	if backend.closeCalls != 0 {
+		t.Fatalf("close calls before Close = %d, want 0", backend.closeCalls)
+	}
+	if err := resolver.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := resolver.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if backend.closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", backend.closeCalls)
+	}
+	if _, err := resolver.ResolveProxyForURL("https://after-close.example", cfg); !errors.Is(err, ErrResolverClosed) {
+		t.Fatalf("ResolveProxyForURL after Close error = %v, want ErrResolverClosed", err)
+	}
+}
+
+func TestTCRouteREG010ManualProxyMapPreservesPerSchemeSemantics(t *testing.T) {
+	got := ParseManualProxyMap("http=proxy-a.example:8080;https=proxy-b.example:8443;socks=socks.example:1080")
+	if got.Default != "" {
+		t.Fatalf("Default = %q, want empty", got.Default)
+	}
+	if got.ForScheme("http") != "proxy-a.example:8080" {
+		t.Fatalf("http proxy = %q", got.ForScheme("http"))
+	}
+	if got.ForScheme("https") != "proxy-b.example:8443" {
+		t.Fatalf("https proxy = %q", got.ForScheme("https"))
+	}
+	if got.ForScheme("socks") != "socks5://socks.example:1080" {
+		t.Fatalf("socks proxy = %q", got.ForScheme("socks"))
+	}
+	if got.ForScheme("ftp") != "" {
+		t.Fatalf("ftp proxy = %q, want empty", got.ForScheme("ftp"))
+	}
+}
+
+func TestTCRouteREG011ManualProxyMapKeepsUnqualifiedDefault(t *testing.T) {
+	got := ParseManualProxyMap("proxy-default.example:3128")
+	if got.Default != "proxy-default.example:3128" {
+		t.Fatalf("Default = %q", got.Default)
+	}
+	if got.ForScheme("http") != got.Default || got.ForScheme("https") != got.Default {
+		t.Fatalf("default proxy not reused by scheme: %+v", got)
+	}
+}
+
+func TestTCWINPACREG003DiscoveryPreservesAvailableSources(t *testing.T) {
+	cfg := configFromDiscoveredSources(
+		true,
+		"http://wpad.example/proxy.pac",
+		"http=manual.example:8080",
+		"<local>",
+	)
+
+	if !cfg.Found || !cfg.AutoDetect || !cfg.IsPAC {
+		t.Fatalf("discovered config = %+v, want Found+AutoDetect+IsPAC", cfg)
+	}
+	if cfg.PACURL != "http://wpad.example/proxy.pac" {
+		t.Fatalf("PACURL = %q", cfg.PACURL)
+	}
+	if cfg.ManualProxy.ForScheme("http") != "manual.example:8080" {
+		t.Fatalf("ManualProxy(http) = %q", cfg.ManualProxy.ForScheme("http"))
+	}
+	if cfg.Bypass != "<local>" {
+		t.Fatalf("Bypass = %q", cfg.Bypass)
+	}
+}
+
+type blockingResolverBackend struct{}
+
+func (blockingResolverBackend) resolve(ctx context.Context, rawurl string, cfg Config) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (blockingResolverBackend) close() error { return nil }
+
+func TestTCWINPACNEG013ResolverBoundsBackendCall(t *testing.T) {
+	resolver := newResolverWithBackendTimeout(blockingResolverBackend{}, 25*time.Millisecond)
+	defer resolver.Close()
+
+	start := time.Now()
+	got, err := resolver.ResolveProxyForURL("https://example.com", Config{AutoDetect: true})
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ResolveProxyForURL error = %v, want context deadline exceeded", err)
+	}
+	if got != "" {
+		t.Fatalf("ResolveProxyForURL result = %q, want empty on timeout", got)
+	}
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("ResolveProxyForURL elapsed = %v, want bounded completion", elapsed)
+	}
+}
+
+func TestTCWINPACNEG002ResolverPropagatesBackendFailure(t *testing.T) {
+	wantErr := errors.New("autodetection failed")
+	backend := &fakeResolverBackend{err: wantErr}
+	resolver := newResolverWithBackend(backend)
+	defer resolver.Close()
+
+	got, err := resolver.ResolveProxyForURL("https://example.com", Config{AutoDetect: true})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("ResolveProxyForURL error = %v, want %v", err, wantErr)
+	}
+	if got != "" {
+		t.Fatalf("ResolveProxyForURL result = %q, want empty on failure", got)
 	}
 }

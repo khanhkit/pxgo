@@ -58,7 +58,7 @@ func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request
 
 	for attempts := 0; attempts < 3 && resp.StatusCode == http.StatusProxyAuthRequired; attempts++ {
 		debug.Dprintf("HTTP proxy auth challenge (attempt %d): %s", attempts+1, targetURL)
-		challenge := selectProxyAuthenticateChallenge(s.cfg.Auth, resp.Header.Values("Proxy-Authenticate"))
+		challenge := selectProxyAuthenticateChallenge(effectiveUpstreamAuth(s.cfg), resp.Header.Values("Proxy-Authenticate"))
 		if pinned == nil && isConnectionAuth(authSchemeFromChallenge(challenge)) {
 			// NTLM/Negotiate handshakes must complete on one TCP connection;
 			// a shared pooled transport could spread them across several.
@@ -169,30 +169,29 @@ func (s *Server) forceKerberosReloadForUpstreamAuth(resp *http.Response) {
 }
 
 func upstreamProxyAuthHeader(cfg config.Config, method, uri, challenge, passthroughAuth string) string {
-	authModes := upstreamAuthModes(cfg.Auth)
+	authModes := upstreamAuthModes(effectiveUpstreamAuth(cfg))
 	if len(authModes) == 0 {
 		return passthroughAuth
 	}
 	if cfg.Username == "" || cfg.Password == "" {
 		return ""
 	}
-	authMode := authModes[0]
-	if len(authModes) > 1 {
-		challengeScheme := authSchemeFromChallenge(challenge)
-		if !containsAuthMode(authModes, challengeScheme) {
-			return ""
-		}
-		authMode = challengeScheme
+	challengeScheme := authSchemeFromChallenge(challenge)
+	if challengeScheme == "" || !containsAuthMode(authModes, challengeScheme) {
+		return ""
 	}
+	authMode := challengeScheme
 	if authMode == authDigest {
-		if !strings.HasPrefix(challenge, authSchemeDigest+" ") {
+		scheme, paramsText, ok := strings.Cut(strings.TrimSpace(challenge), " ")
+		if !ok || !strings.EqualFold(scheme, authSchemeDigest) || strings.TrimSpace(paramsText) == "" {
 			return ""
 		}
-		params := parseAuthParams(strings.TrimPrefix(challenge, authSchemeDigest+" "))
+		params := parseAuthParams(strings.TrimSpace(paramsText))
 		realm := params["realm"]
 		nonce := params["nonce"]
-		qop := selectDigestQop(params["qop"])
-		if realm == "" || nonce == "" {
+		qop, qopOK := selectDigestQop(params["qop"])
+		algorithm := strings.TrimSpace(params["algorithm"])
+		if realm == "" || nonce == "" || !qopOK || (algorithm != "" && !strings.EqualFold(algorithm, "MD5")) {
 			return ""
 		}
 		ha1 := md5hex(cfg.Username + ":" + realm + ":" + cfg.Password)
@@ -215,19 +214,30 @@ func upstreamProxyAuthHeader(cfg config.Config, method, uri, challenge, passthro
 	return authSchemeBasic + " " + base64.StdEncoding.EncodeToString([]byte(cfg.Username+":"+cfg.Password))
 }
 
-func selectDigestQop(qop string) string {
+func selectDigestQop(qop string) (string, bool) {
+	qop = strings.TrimSpace(qop)
+	if qop == "" {
+		return "", true
+	}
 	for _, part := range strings.Split(qop, ",") {
 		if strings.EqualFold(strings.TrimSpace(part), digestQopAuth) {
-			return digestQopAuth
+			return digestQopAuth, true
 		}
 	}
-	return strings.TrimSpace(qop)
+	return "", false
+}
+
+func effectiveUpstreamAuth(cfg config.Config) string {
+	if strings.TrimSpace(cfg.Auth) == "" && cfg.Username != "" && cfg.Password != "" {
+		return authAnySafe
+	}
+	return cfg.Auth
 }
 
 func UpstreamProxyAuthHeader(cfg config.Config, method, uri string, challenges []string) string {
 	challenge := ""
 	if len(challenges) != 0 {
-		challenge = selectProxyAuthenticateChallenge(cfg.Auth, challenges)
+		challenge = selectProxyAuthenticateChallenge(effectiveUpstreamAuth(cfg), challenges)
 	}
 	return upstreamProxyAuthHeader(cfg, method, uri, challenge, "")
 }

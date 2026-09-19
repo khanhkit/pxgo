@@ -26,7 +26,7 @@ go vet ./...
 
 The test suite covers:
 
-- CLI actions and self-test
+- CLI actions and self-test, including malformed-target and bounded shutdown lifecycle regressions
 - config parsing, saving, dotenv, environment precedence
 - debug logging
 - Kerberos command orchestration and concurrent renewal checks

@@ -36,6 +36,9 @@ import (
 
 func startTestProxy(t *testing.T, cfg config.Config) *Server {
 	t.Helper()
+	if cfg.Server == "" && cfg.PAC == "" {
+		cfg.Server = "DIRECT"
+	}
 	if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1"
 	}
@@ -538,9 +541,9 @@ func TestClientAuthPersistsOnConnection(t *testing.T) {
 	}
 }
 
-func TestClientAuthZeroLengthBodyMethodRequiresHeader(t *testing.T) {
+func TestClientAuthZeroLengthBodyMethodReusesConnectionAuth(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "should not reach")
+		fmt.Fprint(w, "body auth ok")
 	}))
 	defer upstream.Close()
 	upstreamURL, _ := url.Parse(upstream.URL)
@@ -568,9 +571,10 @@ func TestClientAuthZeroLengthBodyMethodRequiresHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	data, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusProxyAuthRequired {
-		t.Fatalf("expected 407, got %s", resp.Status)
+	if resp.StatusCode != http.StatusOK || string(data) != "body auth ok" {
+		t.Fatalf("expected authenticated POST to pass, status=%s body=%q", resp.Status, data)
 	}
 }
 
@@ -1142,6 +1146,7 @@ func TestUpstreamProxyBasicAuthHTTPAndConnect(t *testing.T) {
 	parent := startTestProxy(t, parentCfg)
 	childCfg := config.Default()
 	childCfg.Server = fmt.Sprintf("127.0.0.1:%d", parent.Port())
+	childCfg.Auth = "ANY" // Explicit opt-in to Basic fallback for this compatibility fixture.
 	childCfg.Username = "test"
 	childCfg.Password = "12345"
 	child := startTestProxy(t, childCfg)
@@ -1339,7 +1344,7 @@ func TestUpstreamNegotiateFailureForcesKerberosReloadHTTP(t *testing.T) {
 	childCfg.Username = "user@REALM"
 	childCfg.Password = "secret"
 	child := startTestProxy(t, childCfg)
-	var reloads int
+	var reloads atomic.Int32
 	child.krb = testKerberosManager(&reloads)
 	client := proxyClient(t, child.Port())
 	resp, err := client.Get("http://kerberos.example.test/resource")
@@ -1351,9 +1356,7 @@ func TestUpstreamNegotiateFailureForcesKerberosReloadHTTP(t *testing.T) {
 	if resp.StatusCode != http.StatusProxyAuthRequired {
 		t.Fatalf("expected upstream 407, got %s", resp.Status)
 	}
-	if reloads != 1 {
-		t.Fatalf("forced kerberos reload count=%d, want 1", reloads)
-	}
+	waitForKerberosReloads(t, &reloads, 1)
 }
 
 func TestUpstreamNegotiateFailureForcesKerberosReloadConnect(t *testing.T) {
@@ -1372,7 +1375,7 @@ func TestUpstreamNegotiateFailureForcesKerberosReloadConnect(t *testing.T) {
 	childCfg.Username = "user@REALM"
 	childCfg.Password = "secret"
 	child := startTestProxy(t, childCfg)
-	var reloads int
+	var reloads atomic.Int32
 	child.krb = testKerberosManager(&reloads)
 	conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", child.Port()))
 	if err != nil {
@@ -1388,9 +1391,7 @@ func TestUpstreamNegotiateFailureForcesKerberosReloadConnect(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected local 502 for failed upstream CONNECT, got %s", resp.Status)
 	}
-	if reloads != 1 {
-		t.Fatalf("forced kerberos reload count=%d, want 1", reloads)
-	}
+	waitForKerberosReloads(t, &reloads, 1)
 }
 
 func TestUnsupportedUpstreamNTLMDoesNotFallBackToBasic(t *testing.T) {
@@ -1886,7 +1887,7 @@ func TestQuitEndpointRequiresAllowedClient(t *testing.T) {
 	cfg := config.Default()
 	cfg.Allow = "10.0.*.*"
 	px := startTestProxy(t, cfg)
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/PxgoQuit", px.Port()))
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", px.Port(), quitControlPath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1903,7 +1904,7 @@ func TestQuitEndpointRequiresAllowedClient(t *testing.T) {
 
 func TestQuitEndpointStopsProxy(t *testing.T) {
 	px := startTestProxy(t, config.Default())
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/PxgoQuit", px.Port()))
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d%s", px.Port(), quitControlPath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2010,6 +2011,10 @@ func TestReplayableBodySpillsLargeBodiesToTempFile(t *testing.T) {
 }
 
 func digestAuthHeader(uri, nonce string) string {
+	if parsed, err := url.Parse(uri); err == nil && parsed.IsAbs() && parsed.Path == "" {
+		parsed.Path = "/"
+		uri = parsed.String()
+	}
 	username := "test"
 	password := "12345"
 	method := http.MethodGet
@@ -2091,16 +2096,28 @@ func authTokenBytes(t *testing.T, header string) []byte {
 	return raw
 }
 
-func testKerberosManager(reloads *int) *kerberos.Manager {
+func waitForKerberosReloads(t *testing.T, reloads *atomic.Int32, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if reloads.Load() == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("forced kerberos reload count=%d, want %d", reloads.Load(), want)
+}
+
+func testKerberosManager(reloads *atomic.Int32) *kerberos.Manager {
 	password := "secret"
 	mgr := kerberos.New("user@REALM", func() *string { return &password }, false)
 	mgr.NextCheck = time.Now().Add(time.Hour)
 	mgr.KinitWithPasswordFunc = func() bool {
-		*reloads++
+		reloads.Add(1)
 		return true
 	}
 	mgr.KinitRenewFunc = func() bool {
-		*reloads++
+		reloads.Add(1)
 		return true
 	}
 	mgr.KlistValidFunc = func() bool {
@@ -2922,7 +2939,7 @@ func TestNeedsReplayableBody(t *testing.T) {
 		want     bool
 	}{
 		{name: "no body never buffers", withBody: false, proxies: []wproxy.Server{upstreamServer}, want: false},
-		{name: "direct streams", withBody: true, proxies: nil, want: false},
+		{name: "direct streams", withBody: true, proxies: []wproxy.Server{wproxy.Direct}, want: false},
 		{name: "multiple candidates buffer for fallback", withBody: true, proxies: []wproxy.Server{upstreamServer, wproxy.Direct}, want: true},
 		{name: "upstream with credentials buffers", withBody: true, proxies: []wproxy.Server{upstreamServer}, cfg: func(c *config.Config) { c.Username = "u"; c.Password = "p" }, want: true},
 		{name: "upstream auth NONE streams", withBody: true, proxies: []wproxy.Server{upstreamServer}, cfg: func(c *config.Config) { c.Auth = "NONE" }, want: false},
