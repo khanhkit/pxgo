@@ -5,20 +5,27 @@ The Go port is organized around one main binary and small internal packages.
 ## Runtime Flow
 
 1. `main.go` parses configuration with `internal/config`.
-2. The proxy server is created by `internal/proxy.New`.
-3. Upstream proxy selection is delegated to `internal/wproxy`.
-4. PAC files are loaded and evaluated by `internal/pac`.
-5. HTTP requests are forwarded directly or through an upstream proxy.
-6. HTTPS `CONNECT` requests create a tunnel between client and target or client
+2. One-shot CLI actions execute directly and exit without creating a Guardian worker.
+3. Normal long-running mode starts an `internal/guardian` parent process, which
+   launches exactly one internal worker using a private loopback control channel.
+4. The worker creates the proxy server with `internal/proxy.New`; it reports READY
+   only after listener readiness and reports process progress from Runtime Supervisor.
+5. Upstream proxy selection is delegated to `internal/wproxy`.
+6. PAC files are loaded and evaluated by `internal/pac`.
+7. HTTP requests are forwarded directly or through an upstream proxy.
+8. HTTPS `CONNECT` requests create a tunnel between client and target or client
    and upstream proxy.
-7. Optional upstream and client authentication is handled in `internal/proxy`.
-8. Kerberos ticket lifecycle utilities live in `internal/kerberos`; they do not currently constitute Unix upstream GSSAPI proxy authentication. Windows upstream Negotiate/NTLM is owned separately by SSPI code in `internal/proxy`.
+9. Optional upstream and client authentication is handled in `internal/proxy`.
+10. Kerberos ticket lifecycle utilities live in `internal/kerberos`; they do not
+    currently constitute Unix upstream GSSAPI proxy authentication. Windows
+    upstream Negotiate/NTLM is owned separately by SSPI code in `internal/proxy`.
 
 ## Packages
 
 | Path | Responsibility |
 | --- | --- |
-| `main.go` | CLI actions, self-test, startup install/uninstall dispatch |
+| `main.go` | CLI actions, Guardian parent/worker dispatch, self-test, startup install/uninstall dispatch |
+| `internal/guardian` | Independent parent/worker process lifecycle, authenticated READY/BEAT/STOP control, watchdog and restart backoff |
 | `internal/config` | Defaults, CLI/env/INI parsing, config save, password storage |
 | `internal/proxy` | HTTP proxy, CONNECT tunnels, auth, allow rules, reload behavior |
 | `internal/wproxy` | Proxy discovery model, manual proxy parsing, bypass rules |
@@ -26,8 +33,40 @@ The Go port is organized around one main binary and small internal packages.
 | `internal/dnscache` | TTL cache in front of `net.LookupIP` (60 s hits, 5 s misses, 4096-entry cap), shared by noproxy matching and PAC `dnsResolve()` |
 | `internal/kerberos` | `kinit`/`klist` orchestration and ticket refresh state; no upstream GSSAPI token consumer |
 | `internal/debug` | Debug logging |
+| `internal/diagnostic` | Bounded/redacted operational snapshots and doctor state |
+| `internal/supervisor` | In-worker runtime progress/outcome classification and owner-scoped recovery coordination |
 | `internal/systemproxy` | Platform system proxy discovery |
 | `internal/winstartup` | Windows startup command generation |
+
+## Process Failure Boundary
+
+Long-running PxGo uses two processes under normal operation:
+
+```text
+pxgo Guardian parent
+  └── pxgo internal worker
+       └── proxy.Server + Runtime Supervisor
+```
+
+The Guardian owns process liveness only. Each worker generation receives a fresh
+256-bit token and a `127.0.0.1:0` control address through private internal
+environment variables; the secret is never placed in argv or user configuration.
+The authenticated control protocol is intentionally small: worker `READY` and
+`BEAT`, plus bidirectional `STOP` lifecycle intent. The Guardian does not import
+PAC, proxy routing, DNS, auth or Internet-health policy.
+
+Pre-READY failure is terminal and is not restart-looped. Unexpected post-READY
+crash, control loss or heartbeat timeout is restartable through capped backoff.
+A clean worker-requested stop is explicit and terminates the parent without
+respawn. Parent shutdown sends STOP, waits boundedly, force-terminates if needed
+and reaps the child. Worker control loss triggers bounded worker shutdown so a
+dead parent does not leave an unmanaged proxy process. The watchdog treats a
+large parent scheduling gap as suspend/scheduler delay and grants a fresh grace
+window before declaring a hang.
+
+One-shot actions such as help/version/save/install/uninstall/password/test/doctor
+and quit never recursively spawn a worker. `--restart` first terminates the old
+process tree and then enters the normal single-Guardian launch path.
 
 ## State And Concurrency
 
