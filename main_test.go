@@ -172,8 +172,17 @@ func TestCLIKerberosModeFailsClosed(t *testing.T) {
 		t.Fatalf("--kerberos unexpectedly succeeded:\n%s", out)
 	}
 	text := strings.ToLower(string(out))
-	if !strings.Contains(text, "gssapi") || !strings.Contains(text, "unsupported") {
+	if !strings.Contains(text, "unsupported") {
 		t.Fatalf("unexpected --kerberos error:\n%s", out)
+	}
+	if runtime.GOOS == "windows" {
+		for _, want := range []string{"sspi", "omit --kerberos", "current-user"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("windows --kerberos error missing %q:\n%s", want, out)
+			}
+		}
+	} else if !strings.Contains(text, "gssapi") {
+		t.Fatalf("unix --kerberos error must explain missing GSSAPI consumer:\n%s", out)
 	}
 	if strings.Contains(text, "requires --username") {
 		t.Fatalf("legacy misleading kerberos error leaked:\n%s", out)
