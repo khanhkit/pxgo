@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	controlAddrEnv  = "PXGO_INTERNAL_GUARDIAN_ADDR"
-	controlTokenEnv = "PXGO_INTERNAL_GUARDIAN_TOKEN"
+	controlAddrEnv  = "PXGOINT_GUARDIAN_ADDR"
+	controlTokenEnv = "PXGOINT_GUARDIAN_TOKEN"
 )
 
 type WorkerControl struct {
