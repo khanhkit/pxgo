@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo="${PXGO_GH_REPO:-khanhkit/pxgo}"
 ref="${1:-verify/ap0002-ap0024}"
-workflow="${PXGO_AD_WORKFLOW:-ci.yml}"
+workflow="${PXGO_AD_WORKFLOW:-real-ad-verification.yml}"
 environment="${PXGO_AD_ENVIRONMENT:-pxgo-ad}"
 proxy_var="${PXGO_AD_PROXY_VAR:-PXGO_SSPI_AD_PROXY_HOST}"
 
@@ -49,9 +49,7 @@ before_epoch="$(date +%s)"
 gh workflow run "$workflow" \
   --repo "$repo" \
   --ref "$ref" \
-  -f "verification_ref=${ref}" \
-  -f "native_sspi=true" \
-  -f "real_ad=true"
+  -f "verification_ref=${ref}"
 
 run_id=""
 for _ in $(seq 1 30); do
@@ -112,4 +110,4 @@ done
 
 gh run watch "$run_id" --repo "$repo" --exit-status
 
-echo "PASS: exact-ref native Windows + protected real-AD verification succeeded"
+echo "PASS: exact-ref protected real-AD verification succeeded"

@@ -14,9 +14,10 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 ## Release tags
 
 - Release publication must run from the exact tagged SHA.
-- GoReleaser is gated by `verify-exact-sha`, `verify-windows-native`, and `windows-domain-sspi`.
-- Do not manually publish artifacts when any of those jobs is absent, queued, skipped, cancelled, or failed.
+- GoReleaser is gated by `verify-exact-sha` and `verify-windows-native`.
+- Do not manually publish artifacts when either required release gate is absent, queued, skipped, cancelled, or failed.
 - Protect `v*` tags/rulesets from unreviewed overwrite/deletion.
+- Real-AD/Kerberos validation is retained as a manual TODO workflow and is not a release blocker.
 
 ## Protected AD environment
 
@@ -28,7 +29,9 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 
 ## Manual verification
 
-`CI` exposes `workflow_dispatch` for pre-release verification of an explicit `verification_ref`. `native_sspi=true` runs the generic Windows NTLM/handle fixture. `real_ad=true` schedules the protected `pxgo-ad` runner and requires the real AD testcase to exist in the selected ref.
+`CI` exposes `workflow_dispatch` for pre-release verification of an explicit `verification_ref`. `native_sspi=true` runs the generic Windows NTLM/handle fixture.
+
+Real-AD/Kerberos validation has its own manual-only `Real AD Verification` workflow. It is intentionally excluded from normal CI and release dependencies until the disposable domain lab exists.
 
 Repository administrators must enforce the settings above on the authoritative upstream repository. A fork or local source checkout can validate the workflow contract but cannot prove upstream governance is enabled.
 
@@ -74,4 +77,4 @@ Once the runner reports online, dispatch the exact integration ref from an authe
 ./scripts/dispatch-real-ad-verification.sh verify/ap0002-ap0024
 ```
 
-The helper validates the protected runner labels and environment variable, dispatches both native SSPI and real-AD gates, approves the protected environment on the single-user verification fork, and waits for the workflow result. On an authoritative multi-user upstream repository, keep self-review disabled and require a distinct reviewer instead.
+The helper validates the protected runner labels and environment variable, dispatches the manual real-AD workflow for the exact ref, approves the protected environment on the single-user verification fork, and waits for the workflow result. On an authoritative multi-user upstream repository, keep self-review disabled and require a distinct reviewer instead.

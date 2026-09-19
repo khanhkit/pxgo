@@ -70,13 +70,26 @@ grep -q 'windows-native-sspi:' .github/workflows/ci.yml || bad "independent nati
 grep -q 'PXGO_SSPI_NATIVE' .github/workflows/ci.yml || bad "native Windows SSPI gate missing"
 grep -Fq "TCSSPIWIN(INT008|SOAK009)" .github/workflows/ci.yml || bad "native Windows SSPI testcase guard missing"
 
-# TC-CI-REG-009: real AD verification has an explicit protected self-hosted contract.
-grep -q 'pxgo-ad' .github/workflows/ci.yml || bad "protected AD runner label missing"
-grep -q 'PXGO_SSPI_AD_PROXY_HOST' .github/workflows/ci.yml || bad "real AD proxy host contract missing"
-grep -q 'TCSSPIWINAD010' .github/workflows/ci.yml || bad "real AD Kerberos testcase guard missing"
+# TC-CI-REG-009: real AD verification is preserved as an explicit manual,
+# protected self-hosted workflow, but it is intentionally not a normal CI or
+# release blocker. External domain infrastructure is tracked in docs/TODO.md.
+ad_workflow=".github/workflows/real-ad-verification.yml"
+[[ -f "$ad_workflow" ]] || bad "manual real AD verification workflow missing"
+if [[ -f "$ad_workflow" ]]; then
+  grep -q 'workflow_dispatch:' "$ad_workflow" || bad "real AD workflow is not manual-only"
+  grep -q 'runs-on: \[self-hosted, windows, x64, pxgo-ad\]' "$ad_workflow" || bad "protected AD runner labels missing"
+  grep -q 'environment: pxgo-ad' "$ad_workflow" || bad "protected AD environment missing"
+  grep -q 'PXGO_SSPI_AD_PROXY_HOST' "$ad_workflow" || bad "real AD proxy host contract missing"
+  grep -q 'TCSSPIWINAD010' "$ad_workflow" || bad "real AD Kerberos testcase guard missing"
+fi
+if grep -q 'windows-domain-sspi:' .github/workflows/ci.yml; then
+  bad "real AD job must not block normal CI"
+fi
+if grep -q 'windows-domain-sspi:' .github/workflows/release.yml; then
+  bad "real AD job must not block release"
+fi
 grep -q 'verify-windows-native:' .github/workflows/release.yml || bad "release native Windows SSPI gate missing"
-grep -q 'windows-domain-sspi:' .github/workflows/release.yml || bad "release real AD SSPI gate missing"
-grep -q 'needs: \[verify-exact-sha, verify-windows-native, windows-domain-sspi\]' .github/workflows/release.yml || bad "GoReleaser is not gated on native Windows + real AD verification"
+grep -q 'needs: \[verify-exact-sha, verify-windows-native\]' .github/workflows/release.yml || bad "GoReleaser is not gated on exact SHA + native Windows verification"
 
 # TC-CI-REG-009B: the protected AD gate is reproducibly bootstrap-able from one
 # disposable Windows Server VM. The runner binary itself is pinned by version
@@ -103,8 +116,7 @@ ad_dispatch="scripts/dispatch-real-ad-verification.sh"
 [[ -f "$ad_dispatch" && -x "$ad_dispatch" ]] || bad "real AD dispatch helper missing or not executable"
 if [[ -f "$ad_dispatch" ]]; then
   bash -n "$ad_dispatch" || bad "real AD dispatch helper has invalid shell syntax"
-  grep -Fq 'real_ad=true' "$ad_dispatch" || bad "real AD dispatch helper does not request protected gate"
-  grep -Fq 'native_sspi=true' "$ad_dispatch" || bad "real AD dispatch helper does not include native SSPI verification"
+  grep -Fq 'real-ad-verification.yml' "$ad_dispatch" || bad "real AD dispatch helper does not use manual AD workflow"
   grep -Fq 'pending_deployments' "$ad_dispatch" || bad "protected environment approval orchestration missing"
   grep -Fq 'pxgo-ad' "$ad_dispatch" || bad "dispatch helper does not verify pxgo-ad runner label"
   [[ "$fail" -eq 0 ]] && ok "protected AD dispatch orchestration present"
