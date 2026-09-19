@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -368,5 +369,48 @@ func TestTCGUARDPARENT030ReadyNormalExitTerminatesParent(t *testing.T) {
 	}
 	if got := generationCount(countPath); got != 1 {
 		t.Fatalf("ready normal exit generations=%d, want 1", got)
+	}
+}
+
+func TestTCGUARDSOAKRepeatedReadyCrashRecycle(t *testing.T) {
+	want := 5
+	if raw := os.Getenv("PXGO_GUARDIAN_SOAK"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			t.Fatalf("PXGO_GUARDIAN_SOAK=%q must be a positive integer", raw)
+		}
+		want = parsed
+	}
+	spec, countPath := helperSpec(t, "ready-crash")
+	options := fastParentOptions()
+	options.RestartSchedule = []time.Duration{time.Millisecond, 2 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- RunParent(ctx, spec, options) }()
+	soakDeadline := 3 * time.Second
+	if scaled := time.Duration(want)*60*time.Millisecond + time.Second; scaled > soakDeadline {
+		soakDeadline = scaled
+	}
+	deadline := time.Now().Add(soakDeadline)
+	for time.Now().Before(deadline) && generationCount(countPath) < want {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := generationCount(countPath); got < want {
+		cancel()
+		<-done
+		t.Fatalf("recycle soak generations=%d want >=%d within %s", got, want, soakDeadline)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("recycle soak stop=%v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("recycle soak parent did not terminate")
+	}
+	got := generationCount(countPath)
+	if got < want || got > want+1 {
+		t.Fatalf("recycle soak generations=%d want %d..%d", got, want, want+1)
 	}
 }

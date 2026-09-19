@@ -145,3 +145,44 @@ func TestTCGUARDPROTO005BoundedMessageProtocol(t *testing.T) {
 		t.Fatalf("protocol error echoed payload: %v", err)
 	}
 }
+
+func FuzzGuardianMessageProtocol(f *testing.F) {
+	for _, seed := range []string{
+		"READY",
+		"STOP",
+		"BEAT 1",
+		"BEAT 18446744073709551615",
+		"BEAT -1",
+		"UNKNOWN payload",
+		"READY extra",
+		strings.Repeat("x", maxMessageBytes+8),
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, line string) {
+		if len(line) > 4*maxMessageBytes {
+			t.Skip()
+		}
+		left, right := net.Pipe()
+		defer left.Close()
+		defer right.Close()
+		go func() {
+			_, _ = left.Write([]byte(line + "\n"))
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer cancel()
+		msg, err := newSession(right).Read(ctx)
+		if err != nil {
+			return
+		}
+		switch msg.Type {
+		case MessageReady, MessageStop:
+			if msg.Sequence != 0 {
+				t.Fatalf("control message accepted nonzero sequence: %+v", msg)
+			}
+		case MessageBeat:
+		default:
+			t.Fatalf("parser accepted unknown message: %+v from %q", msg, line)
+		}
+	})
+}
