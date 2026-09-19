@@ -91,6 +91,8 @@ if [[ -f "$ad_bootstrap" ]]; then
   grep -Fq -- '--runasservice' "$ad_bootstrap" || bad "AD runner service install missing"
   grep -Fq -- '--disableupdate' "$ad_bootstrap" || bad "pinned AD runner can auto-update unexpectedly"
   grep -Fq 'PXGO_RUNNER_TOKEN' "$ad_bootstrap" || bad "one-time runner token contract missing"
+  grep -Fq 'Validate protected AD bootstrap PowerShell' .github/workflows/ci.yml || bad "Windows CI does not parse-check AD bootstrap"
+  grep -Fq 'System.Management.Automation.Language.Parser]::ParseFile' .github/workflows/ci.yml || bad "Windows CI PowerShell parser contract missing"
   if grep -Eq 'gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]+' "$ad_bootstrap"; then
     bad "hard-coded GitHub credential detected in AD bootstrap"
   fi

@@ -84,6 +84,23 @@ jobs:
           go test ./internal/wproxy -run '^$' -fuzz '^FuzzParseProxyCanonical$' -fuzztime=1000x
           go test ./internal/wproxy -run '^$' -fuzz '^FuzzParseNoProxyCanonical$' -fuzztime=1000x
 
+      - name: Validate protected AD bootstrap PowerShell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $path = (Resolve-Path 'scripts/bootstrap-pxgo-ad.ps1').Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $path,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'protected AD bootstrap PowerShell has parser errors'
+          }
+
       - name: Test
         if: runner.os == 'Windows'
         run: go test -race ./...
