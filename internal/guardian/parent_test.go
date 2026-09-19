@@ -97,11 +97,11 @@ func TestGuardianHelperProcess(t *testing.T) {
 		if err := os.WriteFile(alivePath, []byte("alive"), 0o600); err != nil {
 			os.Exit(95)
 		}
-		defer os.Remove(alivePath)
 		server := newFakeWorkerServer()
 		server.ready.Store(true)
 		server.progress.Store(1)
 		result := RunWorker(context.Background(), session, workerHooks(server), testWorkerOptions())
+		_ = os.Remove(alivePath)
 		if result.Exit != WorkerExitNormal {
 			t.Fatalf("bridge worker result=%+v", result)
 		}
@@ -110,7 +110,6 @@ func TestGuardianHelperProcess(t *testing.T) {
 		_ = session.Send(ctx, Message{Type: MessageReady})
 		var seq uint64 = 1
 		ticker := time.NewTicker(5 * time.Millisecond)
-		defer ticker.Stop()
 		msgc := make(chan Message, 1)
 		go func() {
 			for {
@@ -128,6 +127,7 @@ func TestGuardianHelperProcess(t *testing.T) {
 				_ = session.Send(ctx, Message{Type: MessageBeat, Sequence: seq})
 			case msg := <-msgc:
 				if msg.Type == MessageStop {
+					ticker.Stop()
 					_ = session.Close()
 					os.Exit(0)
 				}
