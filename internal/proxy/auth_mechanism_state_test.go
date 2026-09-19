@@ -6,41 +6,69 @@ import (
 	"testing"
 )
 
-func TestAPISS0019AuthMechanismTrackerObservesConcreteMechanism(t *testing.T) {
+func TestAPISS0019AuthMechanismObservationPrefersConcreteEvidence(t *testing.T) {
+	var observation authMechanismObservation
+	if got := observation.Result(); got != "" {
+		t.Fatalf("initial mechanism=%q want empty", got)
+	}
+
+	observation.ObserveHeader("Negotiate")
+	if got := observation.Result(); got != authSchemeNeg {
+		t.Fatalf("generic mechanism=%q", got)
+	}
+
+	kerberosSelected := derTLV(0xa1, derTLV(0x30,
+		derTLV(0xa1, derTLV(0x06, kerberosOIDValue)),
+	))
+	observation.ObserveHeader("Negotiate " + base64.StdEncoding.EncodeToString(kerberosSelected))
+	if got := observation.Result(); got != authMechanismKerberos {
+		t.Fatalf("kerberos mechanism=%q", got)
+	}
+
+	// A later generic continuation token must not erase definitive selected
+	// mechanism evidence from the same authentication handshake.
+	observation.ObserveHeader("Negotiate")
+	if got := observation.Result(); got != authMechanismKerberos {
+		t.Fatalf("generic continuation downgraded mechanism to %q", got)
+	}
+}
+
+func TestAPISS0019AuthMechanismObservationRecognizesWrappedNTLM(t *testing.T) {
+	ntlm := []byte{'N', 'T', 'L', 'M', 'S', 'S', 'P', 0, 1, 0, 0, 0}
+	var observation authMechanismObservation
+	observation.ObserveHeader("Negotiate " + base64.StdEncoding.EncodeToString(spnegoNegTokenInit(ntlm)))
+	if got := observation.Result(); got != authNTLM {
+		t.Fatalf("wrapped NTLM mechanism=%q", got)
+	}
+}
+
+func TestAPISS0019AuthMechanismTrackerRecordsLastSuccessfulHandshake(t *testing.T) {
 	var tracker authMechanismTracker
 	if got := tracker.Snapshot(); got != "" {
 		t.Fatalf("initial mechanism=%q want empty", got)
 	}
 
-	tracker.ObserveHeader("Digest realm=\"corp\"")
-	if got := tracker.Snapshot(); got != "Digest" {
-		t.Fatalf("digest mechanism=%q", got)
-	}
-
-	ntlm := base64.StdEncoding.EncodeToString([]byte{'N', 'T', 'L', 'M', 'S', 'S', 'P', 0, 1, 0, 0, 0})
-	tracker.ObserveHeader("Negotiate " + ntlm)
-	if got := tracker.Snapshot(); got != "NTLM" {
-		t.Fatalf("ntlm mechanism=%q", got)
-	}
-
-	kerberosOIDValue := []byte{0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02}
-	kerberosSelected := derTLV(0xa1, derTLV(0x30,
-		derTLV(0xa1, derTLV(0x06, kerberosOIDValue)),
-	))
-	tracker.ObserveHeader("Negotiate " + base64.StdEncoding.EncodeToString(kerberosSelected))
+	tracker.Record(authMechanismKerberos)
 	if got := tracker.Snapshot(); got != authMechanismKerberos {
 		t.Fatalf("kerberos mechanism=%q", got)
+	}
+
+	// A later successful authentication may legitimately negotiate another
+	// mechanism, so the global last-successful state is replaceable.
+	tracker.Record(authNTLM)
+	if got := tracker.Snapshot(); got != authNTLM {
+		t.Fatalf("replacement mechanism=%q", got)
+	}
+
+	tracker.Record("")
+	if got := tracker.Snapshot(); got != authNTLM {
+		t.Fatalf("empty observation erased mechanism: %q", got)
 	}
 }
 
 func TestAPISS0019AuthMechanismTrackerConcurrentAccess(t *testing.T) {
 	var tracker authMechanismTracker
-	headers := []string{
-		"Basic dXNlcjpwYXNz",
-		"Digest realm=\"corp\"",
-		"NTLM TlRMTVNTUA==",
-		"Negotiate",
-	}
+	mechanisms := []string{authSchemeBasic, authSchemeDigest, authNTLM, authSchemeNeg}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {
@@ -48,7 +76,7 @@ func TestAPISS0019AuthMechanismTrackerConcurrentAccess(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			for n := 0; n < 100; n++ {
-				tracker.ObserveHeader(headers[(i+n)%len(headers)])
+				tracker.Record(mechanisms[(i+n)%len(mechanisms)])
 				_ = tracker.Snapshot()
 			}
 		}(i)
