@@ -146,8 +146,12 @@ func TestCLIHelpAndVersion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v failed: %v\n%s", args, err, out)
 		}
-		if !strings.Contains(string(out), "Usage:") || !strings.Contains(string(out), "--proxy") {
+		text := string(out)
+		if !strings.Contains(text, "Usage:") || !strings.Contains(text, "--proxy") {
 			t.Fatalf("unexpected help:\n%s", out)
+		}
+		if !strings.Contains(text, "--kerberos") || !strings.Contains(strings.ToLower(text), "fail-closed") {
+			t.Fatalf("help must describe --kerberos as fail-closed:\n%s", out)
 		}
 	}
 	cmd := exec.Command(bin, "--version")
@@ -157,6 +161,22 @@ func TestCLIHelpAndVersion(t *testing.T) {
 	}
 	if strings.TrimSpace(string(out)) == "" {
 		t.Fatalf("unexpected version: %s", out)
+	}
+}
+
+func TestCLIKerberosModeFailsClosed(t *testing.T) {
+	bin := buildPx(t)
+	cmd := exec.Command(bin, "--kerberos")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("--kerberos unexpectedly succeeded:\n%s", out)
+	}
+	text := strings.ToLower(string(out))
+	if !strings.Contains(text, "gssapi") || !strings.Contains(text, "unsupported") {
+		t.Fatalf("unexpected --kerberos error:\n%s", out)
+	}
+	if strings.Contains(text, "requires --username") {
+		t.Fatalf("legacy misleading kerberos error leaked:\n%s", out)
 	}
 }
 
