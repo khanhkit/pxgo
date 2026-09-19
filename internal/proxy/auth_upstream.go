@@ -42,6 +42,8 @@ func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http
 	}
 
 	var session authSession
+	var mechanism authMechanismObservation
+	var authAttempted bool
 	var ephemeralPinned *http.Transport
 	activePooled := pooled
 	var lockedPooled *transportCacheEntry
@@ -81,18 +83,18 @@ func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http
 	}
 	defer func() {
 		lockPooled(nil)
-		if session == nil {
-			return
-		}
-		if err := session.Close(); err != nil && retErr == nil {
-			if retResp != nil && retResp.Body != nil {
-				_ = retResp.Body.Close()
-				retResp = nil
+		if session != nil {
+			if err := session.Close(); err != nil && retErr == nil {
+				if retResp != nil && retResp.Body != nil {
+					_ = retResp.Body.Close()
+					retResp = nil
+				}
+				removePooled()
+				closeEphemeral()
+				retErr = fmt.Errorf("close SSPI session: %w", err)
 			}
-			removePooled()
-			closeEphemeral()
-			retErr = fmt.Errorf("close SSPI session: %w", err)
 		}
+		s.recordSuccessfulAuthMechanism(retResp, retErr, authAttempted, mechanism.Result())
 	}()
 
 	// Ephemeral pinned transports preserve legacy behavior when a reusable
@@ -116,6 +118,7 @@ func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http
 	for attempts := 0; attempts < 3 && resp.StatusCode == http.StatusProxyAuthRequired; attempts++ {
 		debug.Dprintf("HTTP proxy auth challenge (attempt %d): %s", attempts+1, targetURL)
 		challenge := selectProxyAuthenticateChallenge(effectiveUpstreamAuth(s.cfg), resp.Header.Values("Proxy-Authenticate"))
+		mechanism.ObserveHeader(challenge)
 		scheme := authSchemeFromChallenge(challenge)
 		if isConnectionAuth(scheme) {
 			if activePooled != nil && !strings.EqualFold(activePooled.scheme, scheme) {
@@ -192,6 +195,8 @@ func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http
 			removePooled()
 			return finish(resp), nil
 		}
+		mechanism.ObserveHeader(auth)
+		authAttempted = true
 		if err := drainUpstream407Body(resp.Body); err != nil {
 			removePooled()
 			closeEphemeral()

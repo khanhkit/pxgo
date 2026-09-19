@@ -193,7 +193,16 @@ func (s *Server) sendUpstreamConnectBounded(ctx context.Context, conn net.Conn, 
 }
 
 func (s *Server) sendUpstreamConnect(conn net.Conn, target, proxyHost, passthroughAuth string) ([]byte, error) {
-	return sendUpstreamConnectWithAuth(conn, target, proxyHost, s.cfg, "", passthroughAuth, s.forceKerberosReloadForUpstreamAuth)
+	return sendUpstreamConnectWithAuthObserved(
+		conn,
+		target,
+		proxyHost,
+		s.cfg,
+		"",
+		passthroughAuth,
+		s.forceKerberosReloadForUpstreamAuth,
+		s.authMechanism.Record,
+	)
 }
 
 // sendUpstreamConnectWithAuth performs the CONNECT handshake with the upstream
@@ -201,21 +210,71 @@ func (s *Server) sendUpstreamConnect(conn net.Conn, target, proxyHost, passthrou
 // headers (they end up in the response reader's buffer and must be forwarded
 // to the client, or server-speaks-first protocols would hang).
 func sendUpstreamConnectWithAuth(conn net.Conn, target, proxyHost string, cfg config.Config, challenge, passthroughAuth string, onAuthFailure func(*http.Response)) ([]byte, error) {
+	return sendUpstreamConnectWithAuthObserved(
+		conn,
+		target,
+		proxyHost,
+		cfg,
+		challenge,
+		passthroughAuth,
+		onAuthFailure,
+		nil,
+	)
+}
+
+func sendUpstreamConnectWithAuthObserved(conn net.Conn, target, proxyHost string, cfg config.Config, challenge, passthroughAuth string, onAuthFailure func(*http.Response), onAuthSuccess func(string)) ([]byte, error) {
 	// One reader for all auth retry attempts: bytes buffered behind an
 	// intermediate 407 must not be stranded in a discarded reader.
 	reader := bufio.NewReader(conn)
-	if err := sendUpstreamConnectAttempt(conn, reader, target, proxyHost, cfg, challenge, passthroughAuth, 0, nil, onAuthFailure); err != nil {
+	var mechanism authMechanismObservation
+	if err := sendUpstreamConnectAttemptObserved(
+		conn,
+		reader,
+		target,
+		proxyHost,
+		cfg,
+		challenge,
+		passthroughAuth,
+		0,
+		nil,
+		onAuthFailure,
+		&mechanism,
+	); err != nil {
 		return nil, err
 	}
+
+	var leftover []byte
 	if n := reader.Buffered(); n > 0 {
-		leftover := make([]byte, n)
+		leftover = make([]byte, n)
 		_, _ = io.ReadFull(reader, leftover)
-		return leftover, nil
 	}
-	return nil, nil
+	if onAuthSuccess != nil {
+		onAuthSuccess(mechanism.Result())
+	}
+	return leftover, nil
 }
 
 func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target, proxyHost string, cfg config.Config, challenge, passthroughAuth string, attempts int, session authSession, onAuthFailure func(*http.Response)) error {
+	return sendUpstreamConnectAttemptObserved(
+		conn,
+		reader,
+		target,
+		proxyHost,
+		cfg,
+		challenge,
+		passthroughAuth,
+		attempts,
+		session,
+		onAuthFailure,
+		nil,
+	)
+}
+
+func sendUpstreamConnectAttemptObserved(conn net.Conn, reader *bufio.Reader, target, proxyHost string, cfg config.Config, challenge, passthroughAuth string, attempts int, session authSession, onAuthFailure func(*http.Response), mechanism *authMechanismObservation) error {
+	if mechanism != nil {
+		mechanism.ObserveHeader(challenge)
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n", target, target)
 	var auth string
@@ -229,6 +288,9 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target, pro
 		auth = upstreamProxyAuthHeader(cfg, http.MethodConnect, target, challenge, passthroughAuth)
 	}
 	if auth != "" {
+		if mechanism != nil {
+			mechanism.ObserveHeader(auth)
+		}
 		fmt.Fprintf(&b, "Proxy-Authorization: %s\r\n", auth)
 	}
 	b.WriteString("\r\n")
@@ -257,7 +319,7 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target, pro
 			createdSession = true
 		}
 		if nextSession != nil {
-			err = sendUpstreamConnectAttempt(conn, reader, target, proxyHost, cfg, nextChallenge, passthroughAuth, attempts+1, nextSession, onAuthFailure)
+			err = sendUpstreamConnectAttemptObserved(conn, reader, target, proxyHost, cfg, nextChallenge, passthroughAuth, attempts+1, nextSession, onAuthFailure, mechanism)
 			if createdSession {
 				if closeErr := nextSession.Close(); closeErr != nil && err == nil {
 					err = fmt.Errorf("close SSPI CONNECT session: %w", closeErr)
@@ -266,7 +328,7 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target, pro
 			return err
 		}
 		if auth := upstreamProxyAuthHeader(cfg, http.MethodConnect, target, nextChallenge, passthroughAuth); auth != "" {
-			return sendUpstreamConnectAttempt(conn, reader, target, proxyHost, cfg, nextChallenge, passthroughAuth, attempts+1, nil, onAuthFailure)
+			return sendUpstreamConnectAttemptObserved(conn, reader, target, proxyHost, cfg, nextChallenge, passthroughAuth, attempts+1, nil, onAuthFailure, mechanism)
 		}
 	}
 	if resp.StatusCode/100 != 2 {

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"net/http"
 	"strings"
 	"sync/atomic"
 )
@@ -44,6 +45,13 @@ func authMechanismSpecificity(mechanism string) int {
 	default:
 		return 0
 	}
+}
+
+func (s *Server) recordSuccessfulAuthMechanism(resp *http.Response, err error, attempted bool, mechanism string) {
+	if s == nil || err != nil || !attempted || resp == nil || resp.StatusCode == http.StatusProxyAuthRequired {
+		return
+	}
+	s.authMechanism.Record(mechanism)
 }
 
 type authMechanismTracker struct {

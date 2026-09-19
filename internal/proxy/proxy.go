@@ -43,22 +43,23 @@ const (
 )
 
 type Server struct {
-	cfg        config.Config
-	w          *wproxy.Wproxy
-	wmu        sync.RWMutex
-	lastReload time.Time
-	startedAt  time.Time
-	srv        *http.Server
-	listeners  []net.Listener
-	port       int
-	stateMu    sync.RWMutex
-	clients    sync.Map // remoteAddr string -> *clientState
-	krb        *kerberos.Manager
-	sup        *supervisor.Supervisor
-	closed     chan struct{}
-	once       sync.Once
-	active     int64
-	transports *boundedTransportCache
+	cfg           config.Config
+	w             *wproxy.Wproxy
+	wmu           sync.RWMutex
+	lastReload    time.Time
+	startedAt     time.Time
+	srv           *http.Server
+	listeners     []net.Listener
+	port          int
+	stateMu       sync.RWMutex
+	clients       sync.Map // remoteAddr string -> *clientState
+	krb           *kerberos.Manager
+	authMechanism authMechanismTracker
+	sup           *supervisor.Supervisor
+	closed        chan struct{}
+	once          sync.Once
+	active        int64
+	transports    *boundedTransportCache
 
 	tunnelMu           sync.Mutex
 	tunnels            map[*managedTunnel]struct{}
@@ -82,6 +83,9 @@ type hostIPEntry struct {
 
 func New(cfg config.Config) (*Server, error) {
 	if err := validateUpstreamAuth(cfg.Auth); err != nil {
+		return nil, err
+	}
+	if err := validateKerberosFeature(cfg); err != nil {
 		return nil, err
 	}
 	if err := validateClientAuth(cfg.ClientAuth); err != nil {
