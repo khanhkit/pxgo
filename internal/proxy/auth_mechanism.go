@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const authMechanismKerberos = "Kerberos"
+
 var kerberosMechanismOIDDER = []byte{0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02}
 
 func classifyUpstreamAuthMechanism(header string) string {
@@ -25,7 +27,7 @@ func classifyUpstreamAuthMechanism(header string) string {
 			return authNTLM
 		}
 		if bytes.Contains(raw, kerberosMechanismOIDDER) {
-			return "Kerberos"
+			return authMechanismKerberos
 		}
 		return authSchemeNeg
 	case authDigest:

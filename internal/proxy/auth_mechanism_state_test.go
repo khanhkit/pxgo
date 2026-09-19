@@ -25,7 +25,7 @@ func TestAPISS0019AuthMechanismTrackerObservesConcreteMechanism(t *testing.T) {
 
 	kerberosOID := []byte{0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02}
 	tracker.ObserveHeader("Negotiate " + base64.StdEncoding.EncodeToString(kerberosOID))
-	if got := tracker.Snapshot(); got != "Kerberos" {
+	if got := tracker.Snapshot(); got != authMechanismKerberos {
 		t.Fatalf("kerberos mechanism=%q", got)
 	}
 }

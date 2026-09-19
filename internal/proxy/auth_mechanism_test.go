@@ -17,7 +17,7 @@ func TestAPISS0019ClassifyUpstreamAuthMechanism(t *testing.T) {
 	}{
 		{name: "ntlm scheme", header: "NTLM " + base64.StdEncoding.EncodeToString(ntlmToken), want: "NTLM"},
 		{name: "negotiate ntlm fallback", header: "Negotiate " + base64.StdEncoding.EncodeToString(ntlmToken), want: "NTLM"},
-		{name: "negotiate kerberos", header: "Negotiate " + base64.StdEncoding.EncodeToString(kerberosToken), want: "Kerberos"},
+		{name: "negotiate kerberos", header: "Negotiate " + base64.StdEncoding.EncodeToString(kerberosToken), want: authMechanismKerberos},
 		{name: "bare negotiate", header: "Negotiate", want: "Negotiate"},
 		{name: "malformed negotiate token", header: "Negotiate !!!", want: "Negotiate"},
 		{name: "digest", header: "Digest realm=\"corp\"", want: "Digest"},
