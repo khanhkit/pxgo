@@ -58,7 +58,7 @@ type Server struct {
 	closed     chan struct{}
 	once       sync.Once
 	active     int64
-	transports sync.Map // proxy key -> *http.Transport, reused across requests
+	transports *boundedTransportCache
 
 	tunnelMu           sync.Mutex
 	tunnels            map[*managedTunnel]struct{}
@@ -118,6 +118,7 @@ func New(cfg config.Config) (*Server, error) {
 		port:       cfg.Port,
 		krb:        krb,
 		closed:     make(chan struct{}),
+		transports: newBoundedTransportCache(maxCachedTransports),
 		tunnels:    make(map[*managedTunnel]struct{}),
 		tunnelZero: closedSignal(),
 	}
@@ -798,10 +799,41 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 		} else {
 			debug.Dprintf("HTTP: trying proxy %s:%d for %s", candidate.Host, candidate.Port, targetURL)
 		}
-		transport := s.httpTransportForProxy(candidate)
 		usesUpstreamProxy := candidate != wproxy.Direct
+		authIdentity := ""
+		var (
+			transport  *http.Transport
+			pooledAuth *transportCacheEntry
+		)
+		if usesUpstreamProxy {
+			authIdentity = upstreamConnectionAuthIdentity(s.cfg, incomingProxyAuth)
+			if authIdentity != "" {
+				if cached, ok := s.cachedConnectionAuthTransport(candidate, authIdentity); ok {
+					pooledAuth = cached
+					transport = cached.transport
+				}
+			}
+		}
+		pooledLocked := false
+		if pooledAuth != nil {
+			pooledAuth.authMu.Lock()
+			if pooledAuth.authenticated {
+				pooledLocked = true
+			} else {
+				pooledAuth.authMu.Unlock()
+				pooledAuth = nil
+				transport = nil
+			}
+		}
+		if transport == nil {
+			transport = s.httpTransportForProxy(candidate)
+		}
 		outReq, err := s.newOutboundRequest(req, u, body, "")
 		if err != nil {
+			if pooledLocked {
+				pooledAuth.authMu.Unlock()
+				pooledLocked = false
+			}
 			if req.Context().Err() != nil {
 				s.recordRuntimeOutcome(supervisor.OutcomeClientCancelled, candidate)
 				return nil, req.Context().Err()
@@ -816,6 +848,14 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 		}
 		resp, err := transport.RoundTrip(outReq)
 		if err != nil {
+			if pooledLocked {
+				pooledAuth.authenticated = false
+				pooledAuth.authMu.Unlock()
+				pooledLocked = false
+			}
+			if pooledAuth != nil {
+				s.removeCachedTransport(pooledAuth.key, pooledAuth)
+			}
 			kind := classifyProxyTransportOutcome(req.Context(), candidate, err)
 			s.recoverRuntimeOutcome(kind, candidate)
 			if req.Context().Err() != nil {
@@ -831,7 +871,11 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 		s.recordRuntimeOutcome(supervisor.OutcomeSuccess, candidate)
 
 		if usesUpstreamProxy && resp.StatusCode == http.StatusProxyAuthRequired {
-			resp, err = s.retryHTTPProxyAuth(transport, req, u, body, targetURL, incomingProxyAuth, candidate.Host, resp)
+			if pooledLocked {
+				pooledAuth.authenticated = false
+			}
+			resp, err = s.retryHTTPProxyAuthWithPool(transport, req, u, body, targetURL, incomingProxyAuth, candidate.Host, candidate, authIdentity, pooledAuth, pooledLocked, resp)
+			pooledLocked = false // retry helper owns and releases an inherited pool lock
 			if err != nil {
 				s.recoverRuntimeOutcome(classifyProxyTransportOutcome(req.Context(), candidate, err), candidate)
 				return nil, err
@@ -841,6 +885,9 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 			} else {
 				s.recordRuntimeOutcome(supervisor.OutcomeSuccess, candidate)
 			}
+		}
+		if pooledLocked {
+			pooledAuth.authMu.Unlock()
 		}
 		return resp, nil
 	}
