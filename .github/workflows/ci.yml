@@ -96,6 +96,12 @@ jobs:
             throw 'protected AD bootstrap PowerShell has parser errors'
           }
 
+      - name: Native WinHTTP AP-ISS-0006 fixtures
+        if: runner.os == 'Windows'
+        env:
+          PXGO_WINHTTP_NATIVE: "1"
+        run: go test ./internal/systemproxy -run 'TCWINPAC(INT009|NEG010|NEG014|SOAK011)' -count=1 -v
+
       - name: Test
         if: runner.os == 'Windows'
         run: go test -race ./...
