@@ -96,11 +96,24 @@ jobs:
             throw 'protected AD bootstrap PowerShell has parser errors'
           }
 
-      - name: Native WinHTTP AP-ISS-0006 fixtures
+      - name: Native WinHTTP resolver fixtures
         if: runner.os == 'Windows'
+        shell: pwsh
         env:
           PXGO_WINHTTP_NATIVE: "1"
-        run: go test ./internal/systemproxy -run 'TCWINPAC(INT009|NEG010|NEG014|SOAK011)' -count=1 -v
+        run: |
+          $listed = (go test ./internal/systemproxy -list 'TCWINPAC(INT009|NEG010|NEG014|SOAK011)' | Out-String)
+          foreach ($required in @(
+            'TestTCWINPACINT009NativeExplicitPAC',
+            'TestTCWINPACNEG010NativePACFailureIsNotDirect',
+            'TestTCWINPACNEG014NativePACResolutionCancelsAtDeadline',
+            'TestTCWINPACSOAK011NativeHandleCountReturnsNearBaseline'
+          )) {
+            if ($listed -notmatch [regex]::Escape($required)) {
+              throw "required native WinHTTP fixture $required is missing"
+            }
+          }
+          go test ./internal/systemproxy -run 'TCWINPAC(INT009|NEG010|NEG014|SOAK011)' -count=1 -v
 
       - name: Test
         if: runner.os == 'Windows'

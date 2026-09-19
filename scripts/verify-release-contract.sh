@@ -70,6 +70,12 @@ grep -q 'windows-native-sspi:' .github/workflows/ci.yml || bad "independent nati
 grep -q 'PXGO_SSPI_NATIVE' .github/workflows/ci.yml || bad "native Windows SSPI gate missing"
 grep -Fq "TCSSPIWIN(INT008|SOAK009)" .github/workflows/ci.yml || bad "native Windows SSPI testcase guard missing"
 
+# TC-CI-REG-008B: AP-ISS-0006 native WinHTTP cancellation/handle fixtures must
+# execute on hosted Windows instead of being silently skipped behind their env guard.
+grep -Fq 'PXGO_WINHTTP_NATIVE' .github/workflows/ci.yml || bad "native WinHTTP fixture environment gate missing"
+grep -Fq "TCWINPAC(INT009|NEG010|NEG014|SOAK011)" .github/workflows/ci.yml || bad "native WinHTTP testcase guard missing"
+grep -Fq 'TestTCWINPACSOAK011NativeHandleCountReturnsNearBaseline' .github/workflows/ci.yml || bad "native WinHTTP handle-soak fixture missing"
+
 # TC-CI-REG-009: real AD verification is preserved as an explicit manual,
 # protected self-hosted workflow, but it is intentionally not a normal CI or
 # release blocker. External domain infrastructure is tracked in docs/TODO.md.
