@@ -87,6 +87,28 @@ func (p *Pac) Loaded() bool {
 	return p.runtime.Load() != nil
 }
 
+type Status struct {
+	Loaded          bool
+	LastLoadAttempt time.Time
+	LastLoadError   string
+}
+
+func (p *Pac) Status() Status {
+	if p == nil {
+		return Status{}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	status := Status{
+		Loaded:          p.runtime.Load() != nil,
+		LastLoadAttempt: p.lastLoadAttempt,
+	}
+	if p.lastLoadErr != nil {
+		status.LastLoadError = p.lastLoadErr.Error()
+	}
+	return status
+}
+
 func (p *Pac) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

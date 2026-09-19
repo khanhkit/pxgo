@@ -51,6 +51,29 @@ type Manager struct {
 	KlistValidFunc        func() bool
 }
 
+type Status struct {
+	Refreshing   bool
+	Closed       bool
+	TicketExpiry time.Time
+	NextCheck    time.Time
+	Backoff      time.Duration
+}
+
+func (m *Manager) Status() Status {
+	if m == nil {
+		return Status{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return Status{
+		Refreshing:   m.refreshing,
+		Closed:       m.closed,
+		TicketExpiry: m.TicketExpiry,
+		NextCheck:    m.NextCheck,
+		Backoff:      m.Backoff,
+	}
+}
+
 func New(principal string, passwordFunc func() *string, isHeimdal bool) *Manager {
 	ccache := "FILE:" + filepath.Join(os.TempDir(), "krb5cc_px_"+itoa(os.Getpid()))
 	env := map[string]string{}

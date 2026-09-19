@@ -25,6 +25,33 @@ const (
 
 // PenalizesCandidate reports whether this outcome is attributable to the local
 // path to an explicit upstream candidate.
+func (k OutcomeKind) String() string {
+	switch k {
+	case OutcomeSuccess:
+		return "success"
+	case OutcomeClientCancelled:
+		return "client-cancelled"
+	case OutcomeDestinationFailure:
+		return "destination-failure"
+	case OutcomeProxyDNSFailure:
+		return "proxy-dns-failure"
+	case OutcomeProxyDialFailure:
+		return "proxy-dial-failure"
+	case OutcomeProxyTLSFailure:
+		return "proxy-tls-failure"
+	case OutcomeProxyProtocolFailure:
+		return "proxy-protocol-failure"
+	case OutcomeAuthExhausted:
+		return "auth-exhausted"
+	case OutcomeRouteFailure:
+		return "route-failure"
+	case OutcomeInternalFailure:
+		return "internal-failure"
+	default:
+		return "unknown"
+	}
+}
+
 func (k OutcomeKind) PenalizesCandidate() bool {
 	switch k {
 	case OutcomeProxyDNSFailure, OutcomeProxyDialFailure, OutcomeProxyTLSFailure, OutcomeProxyProtocolFailure:

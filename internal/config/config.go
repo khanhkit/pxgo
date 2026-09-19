@@ -139,6 +139,7 @@ type Config struct {
 	Save                 bool
 	Quit                 bool
 	Restart              bool
+	Doctor               bool
 	ClientAuth           string
 	ClientUsername       string
 	ClientPassword       string
@@ -399,6 +400,10 @@ func ParseArgs(args []string) (Config, error) {
 		}
 		if arg == "--restart" {
 			cfg.Restart = true
+			continue
+		}
+		if arg == "--doctor" {
+			cfg.Doctor = true
 			continue
 		}
 		if arg == "--gateway" {

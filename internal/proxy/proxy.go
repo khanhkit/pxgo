@@ -16,6 +16,7 @@ import (
 
 	"github.com/pavelsimo/pxgo/internal/config"
 	"github.com/pavelsimo/pxgo/internal/debug"
+	"github.com/pavelsimo/pxgo/internal/diagnostic"
 	"github.com/pavelsimo/pxgo/internal/kerberos"
 	"github.com/pavelsimo/pxgo/internal/supervisor"
 	"github.com/pavelsimo/pxgo/internal/wproxy"
@@ -46,6 +47,7 @@ type Server struct {
 	w          *wproxy.Wproxy
 	wmu        sync.RWMutex
 	lastReload time.Time
+	startedAt  time.Time
 	srv        *http.Server
 	listeners  []net.Listener
 	port       int
@@ -112,6 +114,7 @@ func New(cfg config.Config) (*Server, error) {
 		cfg:        cfg,
 		w:          wp,
 		lastReload: time.Now(),
+		startedAt:  time.Now(),
 		port:       cfg.Port,
 		krb:        krb,
 		closed:     make(chan struct{}),
@@ -369,6 +372,7 @@ func (s *Server) Start() error {
 	s.port = port
 	s.srv = srv
 	s.stateMu.Unlock()
+	diagnostic.Record("process.start", "proxy listener started")
 	go s.maintenanceLoop()
 	errc := make(chan error, len(listeners))
 	for _, ln := range listeners {
@@ -416,6 +420,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			}
 		}
 		s.wmu.Unlock()
+		diagnostic.Record("process.shutdown", "proxy shutdown complete")
 		if s.krb != nil {
 			s.krb.Cleanup()
 		}
@@ -467,6 +472,14 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 	}()
 	debug.Dprint(req.Method + " " + req.RequestURI)
+	if isDoctorControlRequest(req) {
+		if !isLoopbackRemote(req.RemoteAddr) || !s.isClientAllowed(req.RemoteAddr) {
+			http.Error(rw, "forbidden", http.StatusForbidden)
+			return
+		}
+		s.writeDoctorResponse(rw)
+		return
+	}
 	if isQuitControlRequest(req) {
 		if !isLoopbackRemote(req.RemoteAddr) || !s.isClientAllowed(req.RemoteAddr) {
 			http.Error(rw, "forbidden", http.StatusForbidden)
@@ -620,6 +633,7 @@ func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 	if changed {
 		// Drop keep-alive pools only when routing endpoints actually changed.
 		s.clearTransports()
+		diagnostic.Record("route.refresh", "authoritative route changed")
 	}
 	if closeErr != nil {
 		return fmt.Errorf("close previous proxy resolver: %w", closeErr)
@@ -660,6 +674,9 @@ func isHTTPURL(rawurl string) bool {
 func (s *Server) reloadKerberos(force bool) {
 	if s.krb != nil {
 		s.krb.Check(force)
+		if force {
+			diagnostic.Record("auth.refresh", "kerberos refresh requested")
+		}
 	}
 }
 
