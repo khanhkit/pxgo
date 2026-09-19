@@ -138,10 +138,15 @@ Build the runtime image:
 docker build -t pxgo .
 ```
 
-Run pxgo in Docker:
+Run pxgo in Docker with a read-only root filesystem and no Linux capabilities:
 
 ```bash
-docker run --rm -p 3128:3128 pxgo --gateway --allow=192.168.1.0/24 --proxy=proxy.company.com:8080
+docker run --rm -p 3128:3128 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
+  pxgo --gateway --allow=192.168.1.0/24 --proxy=proxy.company.com:8080
 ```
 
 See [docs/installation.md](docs/installation.md) and [docker/](docker/) for

@@ -107,6 +107,16 @@ jobs:
         if: runner.os == 'Linux'
         run: make build
 
+      - name: Install Syft for container verification
+        if: runner.os == 'Linux'
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          syft-version: v1.33.0
+
+      - name: Verify hardened container runtime
+        if: runner.os == 'Linux'
+        run: ./scripts/verify-container-runtime.sh
+
       - name: Build
         if: runner.os == 'Windows'
         run: go build -o bin/pxgo.exe .

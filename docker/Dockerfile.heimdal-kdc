@@ -1,7 +1,12 @@
-# Heimdal Kerberos KDC for integration tests.
-FROM debian:bookworm-slim
+# Heimdal Kerberos KDC for integration tests only.
+# KDC setup requires root inside this disposable test container.
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 
+ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && \
-    apt-get install -y -qq heimdal-kdc heimdal-clients && \
+    apt-get install -y -qq --no-install-recommends \
+      heimdal-kdc=7.8.git20221117.28daf24+dfsg-2 \
+      heimdal-clients=7.8.git20221117.28daf24+dfsg-2 && \
     rm -rf /var/lib/apt/lists/*
 
+USER 0:0

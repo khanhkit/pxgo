@@ -1,5 +1,9 @@
-# MIT Kerberos KDC for integration tests.
-FROM alpine:latest
+# MIT Kerberos KDC for integration tests only.
+# KDC setup requires root inside this disposable test container.
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
-RUN apk add --no-cache krb5-server krb5
+RUN apk add --no-cache \
+      krb5-server=1.22.2-r1 \
+      krb5=1.22.2-r1
 
+USER 0:0
