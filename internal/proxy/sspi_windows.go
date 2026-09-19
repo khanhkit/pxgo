@@ -3,53 +3,66 @@
 package proxy
 
 import (
-	"encoding/base64"
-	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/alexbrainman/sspi/negotiate"
+	"github.com/alexbrainman/sspi/ntlm"
 	"github.com/pavelsimo/pxgo/internal/config"
 )
 
-type sspiAuthSession struct {
-	ctx          *negotiate.ClientContext
-	initialToken []byte
+type ntlmSSPIContext struct {
+	ctx *ntlm.ClientContext
 }
 
-// newSSPISession acquires the current Windows user's credentials and initialises
-// a Negotiate (Kerberos/NTLM) client context. The initial NEGOTIATE token is
-// generated eagerly and stored for the first Negotiate() call.
-func newSSPISession() (*sspiAuthSession, error) {
-	cred, err := negotiate.AcquireCurrentUserCredentials()
+func (c *ntlmSSPIContext) Update(token []byte) (bool, []byte, error) {
+	output, err := c.ctx.Update(token)
 	if err != nil {
-		return nil, err
+		return false, nil, err
 	}
-	ctx, token, err := negotiate.NewClientContext(cred, "")
-	if err != nil {
-		return nil, err
-	}
-	return &sspiAuthSession{ctx: ctx, initialToken: token}, nil
+	return true, output, nil
 }
 
-func (s *sspiAuthSession) Negotiate() (string, error) {
-	if len(s.initialToken) == 0 {
-		return "", errors.New("SSPI: no initial token available")
-	}
-	return authSchemeNeg + " " + base64.StdEncoding.EncodeToString(s.initialToken), nil
+func (c *ntlmSSPIContext) Release() error {
+	return c.ctx.Release()
 }
 
-func (s *sspiAuthSession) Authenticate(challengeHeader string) (string, error) {
-	_, tokenStr, _ := strings.Cut(strings.TrimSpace(challengeHeader), " ")
-	challenge, err := base64.StdEncoding.DecodeString(strings.TrimSpace(tokenStr))
-	if err != nil {
-		return "", err
+// newSSPISession creates one native SSPI session for the selected proxy
+// challenge. The returned session exclusively owns both credentials and context.
+func newSSPISession(challenge, proxyHost string) (authSession, error) {
+	scheme := authSchemeFromChallenge(challenge)
+	switch {
+	case strings.EqualFold(scheme, authNTLM):
+		cred, err := ntlm.AcquireCurrentUserCredentials()
+		if err != nil {
+			return nil, fmt.Errorf("acquire NTLM credentials: %w", err)
+		}
+		ctx, token, err := ntlm.NewClientContext(cred)
+		if err != nil {
+			_ = cred.Release()
+			return nil, fmt.Errorf("create NTLM client context: %w", err)
+		}
+		return newManagedSSPISession(authNTLM, token, cred, &ntlmSSPIContext{ctx: ctx}), nil
+
+	case strings.EqualFold(scheme, authNegotiate):
+		target := proxySPN(proxyHost)
+		if target == "" {
+			return nil, fmt.Errorf("create Negotiate client context: empty upstream proxy host")
+		}
+		cred, err := negotiate.AcquireCurrentUserCredentials()
+		if err != nil {
+			return nil, fmt.Errorf("acquire Negotiate credentials: %w", err)
+		}
+		ctx, token, err := negotiate.NewClientContext(cred, target)
+		if err != nil {
+			_ = cred.Release()
+			return nil, fmt.Errorf("create Negotiate client context for %s: %w", target, err)
+		}
+		return newManagedSSPISession(authSchemeNeg, token, cred, ctx), nil
+
+	default:
+		return nil, fmt.Errorf("unsupported SSPI proxy challenge scheme %q", scheme)
 	}
-	_, outputToken, err := s.ctx.Update(challenge)
-	if err != nil {
-		return "", err
-	}
-	s.ctx.Release()
-	return authSchemeNeg + " " + base64.StdEncoding.EncodeToString(outputToken), nil
 }
 
 // isWindowsSSPICandidate returns true when the current configuration has no

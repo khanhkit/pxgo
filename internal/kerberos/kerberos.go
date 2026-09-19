@@ -173,13 +173,16 @@ func (m *Manager) Check(force bool) *bool {
 
 func (m *Manager) refresh(force bool) {
 	defer func() {
+		// Publish refreshing=false only after closed-manager cleanup is complete.
+		// Callers use refreshing=false as the observable completion boundary; if
+		// Cleanup raced an in-flight refresh, the refreshed ccache must already be
+		// removed before that boundary becomes visible.
 		m.mu.Lock()
-		m.refreshing = false
-		closed := m.closed
-		m.mu.Unlock()
-		if closed {
+		if m.closed {
 			m.removeCCache()
 		}
+		m.refreshing = false
+		m.mu.Unlock()
 	}()
 
 	now := time.Now()

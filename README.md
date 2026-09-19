@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/github/license/pavelsimo/pxgo)](LICENSE)
 
 **pxgo** is a Go rewrite of [Px](https://github.com/genotrance/px) — a single binary that runs a local HTTP/HTTPS
-proxy so applications can authenticate through corporate NTLM or Kerberos proxies transparently.
+proxy so applications can authenticate through corporate upstream proxies. On Windows, current-user SSPI supports NTLM and Negotiate; Unix ticket management is not currently wired to end-to-end upstream GSSAPI proxy authentication.
 
 By default pxgo listens on `127.0.0.1:3128`.
 
@@ -44,9 +44,10 @@ Run with an explicit upstream proxy:
 pxgo --proxy=proxy.company.com:8080
 ```
 
-On domain-joined Windows machines pxgo authenticates to the upstream proxy
+On domain-joined Windows machines pxgo authenticates to NTLM/Negotiate upstream proxies
 with the logged-in user's credentials via SSPI — no `--username` or stored
-password needed.
+password needed. A Negotiate challenge may resolve to Kerberos or NTLM according
+to the Windows domain/SPN environment; pxgo does not label generic Negotiate as Kerberos without token evidence.
 
 Run with a PAC file:
 
@@ -114,7 +115,8 @@ to choose where it lives — see [docs/configuration.md](docs/configuration.md).
 | `--allow=LIST` | Client allow list for `--gateway` mode |
 | `--noproxy=LIST` | Hosts or IP ranges that bypass the upstream proxy |
 | `--auth=TYPE` | Upstream auth mode: `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `NONE`; omitted auth with reusable credentials behaves as `ANYSAFE`, while explicit `ANY` opts into Basic fallback |
-| `--username=USER` | Upstream proxy username or Kerberos principal |
+| `--username=USER` | Explicit upstream proxy username |
+| `--kerberos` | Reserved/fail-closed: the ticket manager is not an upstream GSSAPI proxy-auth consumer; Windows SSPI works without this flag |
 | `--client-auth=TYPE` | Require client auth: `NONE`, `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`; `BASIC`/`ANY` are loopback-only on plaintext listeners; downstream `NEGOTIATE` means NTLMSSP/NTLM-over-SPNEGO, not Kerberos/GSSAPI |
 | `--log=N` | Debug log destination: `1`=script dir (`--debug`), `2`=cwd, `3`=unique file (`--uniqlog`), `4`=stdout (`--verbose`) |
 
@@ -138,10 +140,15 @@ Build the runtime image:
 docker build -t pxgo .
 ```
 
-Run pxgo in Docker:
+Run pxgo in Docker with a read-only root filesystem and no Linux capabilities:
 
 ```bash
-docker run --rm -p 3128:3128 pxgo --gateway --allow=192.168.1.0/24 --proxy=proxy.company.com:8080
+docker run --rm -p 3128:3128 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
+  pxgo --gateway --allow=192.168.1.0/24 --proxy=proxy.company.com:8080
 ```
 
 See [docs/installation.md](docs/installation.md) and [docker/](docker/) for

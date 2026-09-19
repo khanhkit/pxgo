@@ -1,82 +1,230 @@
 package proxy
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 
 	"github.com/Azure/go-ntlmssp"
 	"github.com/pavelsimo/pxgo/internal/config"
 	"github.com/pavelsimo/pxgo/internal/debug"
+	"github.com/pavelsimo/pxgo/internal/wproxy"
 )
 
-func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth string, resp *http.Response) (*http.Response, error) {
+func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, resp *http.Response) (*http.Response, error) {
+	return s.retryHTTPProxyAuthWithPool(transport, req, u, body, targetURL, passthroughAuth, proxyHost, wproxy.Direct, "", nil, false, resp)
+}
+
+func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, authIdentity string, pooled *transportCacheEntry, pooledAlreadyLocked bool, resp *http.Response) (retResp *http.Response, retErr error) {
 	if body == nil && req.Body != nil && req.Body != http.NoBody {
 		// The body was streamed and cannot be replayed; pass the 407 through.
+		// A cached connection that produced this 407 is no longer authoritative.
+		if pooled != nil {
+			if pooledAlreadyLocked {
+				pooled.authenticated = false
+				pooled.authMu.Unlock()
+			} else {
+				pooled.authMu.Lock()
+				pooled.authenticated = false
+				pooled.authMu.Unlock()
+			}
+			s.removeCachedTransport(pooled.key, pooled)
+		}
 		s.forceKerberosReloadForUpstreamAuth(resp)
 		return resp, nil
 	}
+
 	var session authSession
-	var pinned *http.Transport
-	// finish releases the pinned connection once the caller is done with the
-	// final response body; closing it earlier would break the response.
+	var mechanism authMechanismObservation
+	var authAttempted bool
+	var ephemeralPinned *http.Transport
+	activePooled := pooled
+	var lockedPooled *transportCacheEntry
+	lockPooled := func(entry *transportCacheEntry) {
+		if lockedPooled == entry {
+			return
+		}
+		if lockedPooled != nil {
+			lockedPooled.authMu.Unlock()
+		}
+		lockedPooled = entry
+		if lockedPooled != nil {
+			lockedPooled.authMu.Lock()
+		}
+	}
+	if activePooled != nil {
+		// The caller received this 407 through the cached transport, so its
+		// previously authenticated socket is no longer authoritative.
+		if pooledAlreadyLocked {
+			lockedPooled = activePooled
+		} else {
+			lockPooled(activePooled)
+		}
+		activePooled.authenticated = false
+	}
+
+	removePooled := func() {
+		if activePooled == nil {
+			return
+		}
+		s.removeCachedTransport(activePooled.key, activePooled)
+	}
+	closeEphemeral := func() {
+		if ephemeralPinned != nil {
+			ephemeralPinned.CloseIdleConnections()
+		}
+	}
+	defer func() {
+		lockPooled(nil)
+		if session != nil {
+			if err := session.Close(); err != nil && retErr == nil {
+				if retResp != nil && retResp.Body != nil {
+					_ = retResp.Body.Close()
+					retResp = nil
+				}
+				removePooled()
+				closeEphemeral()
+				retErr = fmt.Errorf("close SSPI session: %w", err)
+			}
+		}
+		s.recordSuccessfulAuthMechanism(retResp, retErr, authAttempted, mechanism.Result())
+	}()
+
+	// Ephemeral pinned transports preserve legacy behavior when a reusable
+	// identity cannot be established. Pooled transports are owned by the
+	// bounded server cache and deliberately survive response-body close.
 	finish := func(r *http.Response) *http.Response {
-		if pinned != nil && r != nil && r.Body != nil {
-			r.Body = &transportClosingBody{ReadCloser: r.Body, transport: pinned}
+		if ephemeralPinned != nil && r != nil && r.Body != nil {
+			r.Body = &transportClosingBody{ReadCloser: r.Body, transport: ephemeralPinned}
 		}
 		return r
 	}
+	failAuth := func(err error) error {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		removePooled()
+		closeEphemeral()
+		return err
+	}
+
 	for attempts := 0; attempts < 3 && resp.StatusCode == http.StatusProxyAuthRequired; attempts++ {
 		debug.Dprintf("HTTP proxy auth challenge (attempt %d): %s", attempts+1, targetURL)
 		challenge := selectProxyAuthenticateChallenge(effectiveUpstreamAuth(s.cfg), resp.Header.Values("Proxy-Authenticate"))
-		if pinned == nil && isConnectionAuth(authSchemeFromChallenge(challenge)) {
-			// NTLM/Negotiate handshakes must complete on one TCP connection;
-			// a shared pooled transport could spread them across several.
-			pinned = transport.Clone()
-			pinned.MaxConnsPerHost = 1
-			transport = pinned
+		mechanism.ObserveHeader(challenge)
+		scheme := authSchemeFromChallenge(challenge)
+		if isConnectionAuth(scheme) {
+			if activePooled != nil && !strings.EqualFold(activePooled.scheme, scheme) {
+				// The proxy changed connection-auth scheme for this route/identity.
+				// Retire the old state rather than sharing an authenticated socket
+				// across incompatible protocol state.
+				removePooled()
+				lockPooled(nil)
+				activePooled = nil
+			}
+			if activePooled == nil {
+				if authIdentity != "" && candidate != wproxy.Direct {
+					activePooled, _ = s.connectionAuthTransportForChallenge(candidate, authIdentity, scheme, transport)
+					lockPooled(activePooled)
+					transport = activePooled.transport
+					if activePooled.authenticated {
+						// Another concurrent request finished authenticating this
+						// route+identity while we waited. Discard the stale 407
+						// from the base connection and replay through the pooled
+						// authenticated socket before attempting another handshake.
+						if err := drainUpstream407Body(resp.Body); err != nil {
+							removePooled()
+							return nil, err
+						}
+						replayReq, reqErr := s.newOutboundRequest(req, u, body, "")
+						if reqErr != nil {
+							return nil, reqErr
+						}
+						replayResp, roundTripErr := transport.RoundTrip(replayReq)
+						if roundTripErr != nil {
+							removePooled()
+							return nil, roundTripErr
+						}
+						resp = replayResp
+						if resp.StatusCode != http.StatusProxyAuthRequired {
+							return resp, nil
+						}
+						activePooled.authenticated = false
+						continue
+					}
+				} else if ephemeralPinned == nil {
+					ephemeralPinned = transport.Clone()
+					ephemeralPinned.MaxConnsPerHost = 1
+					ephemeralPinned.MaxIdleConnsPerHost = 1
+					transport = ephemeralPinned
+				}
+			} else {
+				transport = activePooled.transport
+			}
 		}
+
 		var auth string
+		var err error
 		switch {
 		case session != nil:
-			auth, _ = sspiSessionAuth(session, challenge)
-		case isWindowsSSPICandidate(s.cfg, challenge):
-			if sess, err := newSSPISession(); err == nil {
-				session = sess
-				auth, _ = session.Negotiate()
+			auth, err = sspiSessionAuth(session, challenge)
+			if err != nil {
+				return nil, failAuth(fmt.Errorf("continue SSPI proxy authentication: %w", err))
+			}
+		case sspiSessionCandidate(s.cfg, challenge):
+			session, err = sspiSessionFactory(challenge, proxyHost)
+			if err != nil {
+				return nil, failAuth(fmt.Errorf("start SSPI proxy authentication: %w", err))
+			}
+			auth, err = session.Negotiate()
+			if err != nil {
+				return nil, failAuth(fmt.Errorf("start SSPI proxy negotiation: %w", err))
 			}
 		default:
 			auth = upstreamProxyAuthHeader(s.cfg, req.Method, targetURL, challenge, passthroughAuth)
 		}
 		if auth == "" {
 			s.forceKerberosReloadForUpstreamAuth(resp)
+			removePooled()
 			return finish(resp), nil
 		}
+		mechanism.ObserveHeader(auth)
+		authAttempted = true
 		if err := drainUpstream407Body(resp.Body); err != nil {
-			if pinned != nil {
-				pinned.CloseIdleConnections()
-			}
+			removePooled()
+			closeEphemeral()
 			return nil, err
 		}
 		nextReq, reqErr := s.newOutboundRequest(req, u, body, auth)
 		if reqErr != nil {
-			if pinned != nil {
-				pinned.CloseIdleConnections()
-			}
+			removePooled()
+			closeEphemeral()
 			return nil, reqErr
 		}
 		nextResp, roundTripErr := transport.RoundTrip(nextReq)
 		if roundTripErr != nil {
 			debug.Dprint("HTTP proxy auth retry failed: " + roundTripErr.Error())
-			break
+			removePooled()
+			closeEphemeral()
+			return nil, roundTripErr
 		}
 		resp = nextResp
+		if activePooled != nil {
+			activePooled.authenticated = resp.StatusCode != http.StatusProxyAuthRequired
+		}
 	}
+
 	s.forceKerberosReloadForUpstreamAuth(resp)
+	if resp != nil && resp.StatusCode == http.StatusProxyAuthRequired {
+		removePooled()
+	}
 	return finish(resp), nil
 }
 
@@ -198,6 +346,36 @@ func effectiveUpstreamAuth(cfg config.Config) string {
 		return authAnySafe
 	}
 	return cfg.Auth
+}
+
+func hasConnectionAuthMode(auth string) bool {
+	for _, mode := range upstreamAuthModes(auth) {
+		if isConnectionAuth(mode) {
+			return true
+		}
+	}
+	return false
+}
+
+func upstreamConnectionAuthIdentity(cfg config.Config, _ string) string {
+	if !hasConnectionAuthMode(effectiveUpstreamAuth(cfg)) {
+		return ""
+	}
+	if cfg.Username != "" && cfg.Password != "" {
+		authMode := strings.ToUpper(strings.TrimSpace(effectiveUpstreamAuth(cfg)))
+		sum := sha256.Sum256([]byte("explicit\x00" + cfg.Username + "\x00" + cfg.Password + "\x00" + authMode))
+		return "explicit:" + hex.EncodeToString(sum[:])
+	}
+	if cfg.Username != "" || cfg.Password != "" {
+		return ""
+	}
+	if runtime.GOOS == goosWindows {
+		return "sspi:current-user"
+	}
+	// A downstream Proxy-Authorization token is not an authoritative reusable
+	// identity for a connection-oriented upstream pool. Keep passthrough auth
+	// ephemeral so two downstream sessions can never share authenticated state.
+	return ""
 }
 
 func UpstreamProxyAuthHeader(cfg config.Config, method, uri string, challenges []string) string {

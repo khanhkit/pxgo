@@ -28,31 +28,38 @@ func (e *socksDestinationError) Error() string {
 	return fmt.Sprintf("SOCKS%d connect failed with code %d", e.version, e.code)
 }
 
+func (s *Server) transportCache() *boundedTransportCache {
+	if s.transports != nil {
+		return s.transports
+	}
+	// A few focused unit tests construct Server values directly instead of
+	// calling New. Serialize lazy cache creation on stateMu so those zero-value
+	// servers keep the same strict cache ownership contract.
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.transports == nil {
+		s.transports = newBoundedTransportCache(maxCachedTransports)
+	}
+	return s.transports
+}
+
+func proxyTransportRouteKey(p wproxy.Server) string {
+	if p == wproxy.Direct {
+		return "direct"
+	}
+	return strings.ToLower(strings.TrimSpace(proxyScheme(p))) + "://" +
+		net.JoinHostPort(strings.ToLower(strings.TrimSpace(p.Host)), strconv.Itoa(p.Port))
+}
+
 func (s *Server) httpTransportForProxy(p wproxy.Server) *http.Transport {
-	key := "direct"
-	if p != wproxy.Direct {
-		key = proxyScheme(p) + "://" + net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
-	}
-	if t, ok := s.transports.Load(key); ok {
-		return t.(*http.Transport)
-	}
-	transport := s.newHTTPTransport(p)
-	count := 0
-	s.transports.Range(func(any, any) bool {
-		count++
-		return count < maxCachedTransports
+	key := "route|" + proxyTransportRouteKey(p)
+	entry := s.transportCache().getOrCreate(key, func() *transportCacheEntry {
+		return &transportCacheEntry{
+			transport: s.newHTTPTransport(p),
+			routeKey:  proxyTransportRouteKey(p),
+		}
 	})
-	if count >= maxCachedTransports {
-		// Evict one arbitrary victim; clearing everything would force a full
-		// reconnect for all warm upstreams because one new key showed up.
-		s.transports.Range(func(k, v any) bool {
-			v.(*http.Transport).CloseIdleConnections()
-			s.transports.Delete(k)
-			return false
-		})
-	}
-	actual, _ := s.transports.LoadOrStore(key, transport)
-	return actual.(*http.Transport)
+	return entry.transport
 }
 
 func (s *Server) newHTTPTransport(p wproxy.Server) *http.Transport {
@@ -85,11 +92,57 @@ func (s *Server) newHTTPTransport(p wproxy.Server) *http.Transport {
 }
 
 func (s *Server) clearTransports() {
-	s.transports.Range(func(key, value any) bool {
-		s.transports.Delete(key)
-		value.(*http.Transport).CloseIdleConnections()
-		return true
+	if s.transports != nil {
+		s.transports.clear()
+	}
+}
+
+func (s *Server) cachedTransportCount() int {
+	if s.transports == nil {
+		return 0
+	}
+	return s.transports.len()
+}
+
+func connectionAuthTransportKey(p wproxy.Server, identity, scheme string) string {
+	return "auth|" + strings.ToUpper(strings.TrimSpace(scheme)) + "|" + identity + "|" + proxyTransportRouteKey(p)
+}
+
+func (s *Server) cachedConnectionAuthTransport(p wproxy.Server, identity string) (*transportCacheEntry, bool) {
+	if identity == "" || s.transports == nil {
+		return nil, false
+	}
+	for _, scheme := range upstreamAuthModes(effectiveUpstreamAuth(s.cfg)) {
+		if !isConnectionAuth(scheme) {
+			continue
+		}
+		if entry, ok := s.transports.get(connectionAuthTransportKey(p, identity, scheme)); ok {
+			return entry, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Server) connectionAuthTransportForChallenge(p wproxy.Server, identity, scheme string, base *http.Transport) (*transportCacheEntry, string) {
+	key := connectionAuthTransportKey(p, identity, scheme)
+	entry := s.transportCache().getOrCreate(key, func() *transportCacheEntry {
+		transport := base.Clone()
+		transport.MaxConnsPerHost = 1
+		transport.MaxIdleConnsPerHost = 1
+		return &transportCacheEntry{
+			transport: transport,
+			scheme:    strings.ToUpper(strings.TrimSpace(scheme)),
+			identity:  identity,
+			routeKey:  proxyTransportRouteKey(p),
+		}
 	})
+	return entry, key
+}
+
+func (s *Server) removeCachedTransport(key string, entry *transportCacheEntry) {
+	if s.transports != nil && key != "" {
+		s.transports.remove(key, entry)
+	}
 }
 
 func proxyScheme(server wproxy.Server) string {

@@ -67,9 +67,10 @@ func (s *Server) DiagnosticSnapshot() diagnostic.Snapshot {
 		UptimeSeconds: now.Sub(s.startedAt).Seconds(),
 		Route:         route,
 		Auth: diagnostic.AuthSnapshot{
-			UpstreamMode:    s.cfg.Auth,
-			ClientMode:      s.cfg.ClientAuth,
-			KerberosEnabled: s.cfg.Kerberos,
+			UpstreamMode:      s.cfg.Auth,
+			UpstreamMechanism: s.authMechanism.Snapshot(),
+			ClientMode:        s.cfg.ClientAuth,
+			KerberosEnabled:   s.cfg.Kerberos,
 		},
 		Runtime: diagnostic.RuntimeSnapshot{
 			ProgressSequence: runtimeStatus.ProgressSequence,

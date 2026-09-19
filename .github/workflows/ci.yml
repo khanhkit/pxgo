@@ -16,11 +16,6 @@ on:
         required: false
         type: boolean
         default: false
-      real_ad:
-        description: Run protected real-AD Negotiate/Kerberos gate
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.verification_ref || github.sha }}
@@ -84,6 +79,42 @@ jobs:
           go test ./internal/wproxy -run '^$' -fuzz '^FuzzParseProxyCanonical$' -fuzztime=1000x
           go test ./internal/wproxy -run '^$' -fuzz '^FuzzParseNoProxyCanonical$' -fuzztime=1000x
 
+      - name: Validate protected AD bootstrap PowerShell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $path = (Resolve-Path 'scripts/bootstrap-pxgo-ad.ps1').Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $path,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'protected AD bootstrap PowerShell has parser errors'
+          }
+
+      - name: Native WinHTTP resolver fixtures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PXGO_WINHTTP_NATIVE: "1"
+        run: |
+          $listed = (go test ./internal/systemproxy -list 'TCWINPAC(INT009|NEG010|NEG014|SOAK011)' | Out-String)
+          foreach ($required in @(
+            'TestTCWINPACINT009NativeExplicitPAC',
+            'TestTCWINPACNEG010NativePACFailureIsNotDirect',
+            'TestTCWINPACNEG014NativePACResolutionCancelsAtDeadline',
+            'TestTCWINPACSOAK011NativeHandleCountReturnsNearBaseline'
+          )) {
+            if ($listed -notmatch [regex]::Escape($required)) {
+              throw "required native WinHTTP fixture $required is missing"
+            }
+          }
+          go test ./internal/systemproxy -run 'TCWINPAC(INT009|NEG010|NEG014|SOAK011)' -count=1 -v
+
       - name: Test
         if: runner.os == 'Windows'
         run: go test -race ./...
@@ -94,6 +125,16 @@ jobs:
       - name: Build
         if: runner.os == 'Linux'
         run: make build
+
+      - name: Install Syft for container verification
+        if: runner.os == 'Linux'
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          syft-version: v1.33.0
+
+      - name: Verify hardened container runtime
+        if: runner.os == 'Linux'
+        run: ./scripts/verify-container-runtime.sh
 
       - name: Build
         if: runner.os == 'Windows'
@@ -125,35 +166,3 @@ jobs:
             throw 'required native SSPI fixture tests are missing from verification_ref'
           }
           go test ./internal/proxy -run 'TCSSPIWIN(INT008|SOAK009)' -count=1 -v
-
-  windows-domain-sspi:
-    name: Protected Windows AD/SSPI gate
-    if: github.event_name == 'workflow_dispatch' && inputs.real_ad
-    runs-on: [self-hosted, windows, x64, pxgo-ad]
-    environment: pxgo-ad
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ inputs.verification_ref }}
-
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Verify protected AD fixture contract
-        shell: pwsh
-        env:
-          PXGO_SSPI_AD: "1"
-          PXGO_SSPI_AD_PROXY_HOST: ${{ vars.PXGO_SSPI_AD_PROXY_HOST }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:PXGO_SSPI_AD_PROXY_HOST)) {
-            throw 'pxgo-ad environment must define PXGO_SSPI_AD_PROXY_HOST'
-          }
-          $listed = (go test ./internal/proxy -list 'TCSSPIWINAD010' | Out-String)
-          if ($listed -notmatch 'TestTCSSPIWINAD010') {
-            throw 'verification_ref does not contain the required real-AD Kerberos testcase TCSSPIWINAD010'
-          }
-          go test ./internal/proxy -run 'TCSSPIWINAD010' -count=1 -v

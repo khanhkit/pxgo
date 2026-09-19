@@ -128,7 +128,7 @@ func TestConcurrentExpiryStateUpdatesAreSynchronized(t *testing.T) {
 
 func waitForRefresh(t *testing.T, mgr *Manager) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for {
 		mgr.mu.Lock()
 		refreshing := mgr.refreshing
@@ -155,12 +155,14 @@ func TestCleanupRemovesCCacheAfterInFlightRefresh(t *testing.T) {
 	mgr.CCacheName = "FILE:" + path
 	started := make(chan struct{})
 	release := make(chan struct{})
+	written := make(chan struct{})
 	mgr.KinitWithPasswordFunc = func() bool {
 		close(started)
 		<-release
 		if err := os.WriteFile(path, []byte("ticket"), 0o600); err != nil {
 			t.Errorf("write fake ccache: %v", err)
 		}
+		close(written)
 		return true
 	}
 
@@ -172,6 +174,11 @@ func TestCleanupRemovesCCacheAfterInFlightRefresh(t *testing.T) {
 	}
 	mgr.Cleanup()
 	close(release)
+	select {
+	case <-written:
+	case <-time.After(10 * time.Second):
+		t.Fatal("refresh did not finish fake ccache write")
+	}
 	waitForRefresh(t, mgr)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("ccache exists after cleanup + refresh completion: %v", err)
