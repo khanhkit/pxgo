@@ -22,15 +22,18 @@ import (
 	"github.com/pavelsimo/pxgo/internal/config"
 	"github.com/pavelsimo/pxgo/internal/debug"
 	"github.com/pavelsimo/pxgo/internal/diagnostic"
+	"github.com/pavelsimo/pxgo/internal/guardian"
 	"github.com/pavelsimo/pxgo/internal/proxy"
 	"github.com/pavelsimo/pxgo/internal/winstartup"
 	"golang.org/x/term"
 )
 
 var (
-	version            = "dev"
-	installStartupFunc = installStartup
-	setupDebugFunc     = setupDebug
+	version               = "dev"
+	installStartupFunc    = installStartup
+	setupDebugFunc        = setupDebug
+	runGuardianParentFunc = runGuardianParent
+	runGuardianWorkerFunc = runGuardianWorker
 )
 
 const (
@@ -68,6 +71,14 @@ func run() (exitCode int) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
+	}
+	workerControl, internalWorker, controlErr := guardian.WorkerControlFromEnv()
+	if controlErr != nil {
+		fmt.Fprintln(os.Stderr, controlErr)
+		return 5
+	}
+	if internalWorker {
+		return runGuardianWorkerFunc(cfg, workerControl)
 	}
 	if cfg.Help {
 		printHelp()
@@ -181,41 +192,117 @@ func run() (exitCode int) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	setupDebugBestEffort(cfg)
 	if cfg.Test != "" {
+		setupDebugBestEffort(cfg)
 		if err := runSelfTest(cfg); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 4
 		}
 		return 0
 	}
+	return runGuardianParentFunc(cfg)
+}
+
+func isOneShotConfig(cfg config.Config) bool {
+	return cfg.Help ||
+		cfg.Version ||
+		cfg.Save ||
+		cfg.Install ||
+		cfg.Uninstall ||
+		cfg.PasswordAction ||
+		cfg.ClientPasswordAction ||
+		cfg.Doctor ||
+		cfg.Quit ||
+		cfg.Test != ""
+}
+
+func runGuardianParent(config.Config) int {
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 5
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	spec := guardian.CommandSpec{
+		Path:   executable,
+		Args:   append([]string(nil), os.Args[1:]...),
+		Env:    os.Environ(),
+		Stdin:  os.Stdin,
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	}
+	if err := guardian.RunParent(ctx, spec, guardian.ParentOptions{}); err != nil {
+		var startup *guardian.StartupExitError
+		if errors.As(err, &startup) {
+			if startup.Err != nil {
+				fmt.Fprintln(os.Stderr, diagnostic.RedactText(startup.Err.Error()))
+			} else {
+				fmt.Fprintln(os.Stderr, startup)
+			}
+			if startup.Code > 0 && startup.Code < 256 {
+				return startup.Code
+			}
+			return 5
+		}
+		fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
+		return 5
+	}
+	return 0
+}
+
+func runGuardianWorker(cfg config.Config, control guardian.WorkerControl) int {
+	setupDebugBestEffort(cfg)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	connectCtx, cancelConnect := context.WithTimeout(ctx, controlShutdownTimeout)
+	session, err := guardian.Connect(connectCtx, control.Addr, control.Token)
+	cancelConnect()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "guardian control connection failed")
+		return int(guardian.WorkerExitStartupFailure)
+	}
+	defer session.Close()
+
 	s, err := proxy.New(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	errc := make(chan error, 1)
-	go func() { errc <- s.Start() }()
-	select {
-	case err := <-errc:
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 5
-		}
-	case <-ctx.Done():
-		debug.Dprint("shutdown signal received")
-		if err := shutdownWithTimeout(s, controlShutdownTimeout); err != nil {
-			debug.Dprint("shutdown error: " + err.Error())
-			fmt.Fprintln(os.Stderr, err)
-			return 5
-		}
+	fatalSignals := s.RuntimeFatalSignals()
+	hooks := guardian.WorkerHooks{
+		Start: s.Start,
+		Ready: s.Ready,
+		Progress: func() uint64 {
+			return s.RuntimeStatus().ProgressSequence
+		},
+		FatalRequested: func() bool {
+			if s.RuntimeStatus().FatalRequested {
+				return true
+			}
+			if fatalSignals == nil {
+				return false
+			}
+			select {
+			case <-fatalSignals:
+				return true
+			default:
+				return false
+			}
+		},
+		Shutdown: s.Shutdown,
+		Snapshot: func() {
+			s.BestEffortFatalSnapshot(diagnosticSnapshotPath())
+		},
+	}
+	result := guardian.RunWorker(ctx, session, hooks, guardian.WorkerOptions{})
+	if result.Err != nil {
+		fmt.Fprintln(os.Stderr, diagnostic.RedactText(result.Err.Error()))
 	}
 	if d := debug.Instance(); d != nil {
 		_ = d.Close()
 	}
-	return 0
+	return int(result.Exit)
 }
 
 func setupDebugBestEffort(cfg config.Config) {
