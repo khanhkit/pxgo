@@ -2,6 +2,7 @@ package debug
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -134,6 +135,9 @@ func TestTCOBSLOG006RotationIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.mu.Lock()
+	d.stdout = io.Discard
+	d.mu.Unlock()
 	payload := strings.Repeat("x", maxLogBytes/2+1)
 	for i := 0; i < maxLogBackups+4; i++ {
 		if _, err := d.Write([]byte(payload)); err != nil {
