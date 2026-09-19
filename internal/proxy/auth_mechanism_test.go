@@ -6,9 +6,21 @@ import (
 )
 
 func TestAPISS0019ClassifyUpstreamAuthMechanism(t *testing.T) {
-	kerberosOID := []byte{0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02}
-	ntlmToken := append([]byte("prefix"), []byte{'N', 'T', 'L', 'M', 'S', 'S', 'P', 0}...)
-	kerberosToken := append([]byte{0x60, 0x0b}, kerberosOID...)
+	kerberosOIDValue := []byte{0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02}
+	ntlmToken := []byte{'N', 'T', 'L', 'M', 'S', 'S', 'P', 0, 1, 0, 0, 0}
+
+	kerberosSelected := derTLV(0xa1, derTLV(0x30,
+		derTLV(0xa1, derTLV(0x06, kerberosOIDValue)),
+	))
+	ntlmSelected := derTLV(0xa1, derTLV(0x30,
+		derTLV(0xa1, derTLV(0x06, ntlmOIDValue)),
+	))
+
+	mechList := append(derTLV(0x06, kerberosOIDValue), derTLV(0x06, ntlmOIDValue)...)
+	advertisedOnly := derTLV(0x60, append(
+		derTLV(0x06, spnegoOIDValue),
+		derTLV(0xa0, derTLV(0x30, derTLV(0xa0, derTLV(0x30, mechList))))...,
+	))
 
 	tests := []struct {
 		name   string
@@ -16,8 +28,10 @@ func TestAPISS0019ClassifyUpstreamAuthMechanism(t *testing.T) {
 		want   string
 	}{
 		{name: "ntlm scheme", header: "NTLM " + base64.StdEncoding.EncodeToString(ntlmToken), want: "NTLM"},
-		{name: "negotiate ntlm fallback", header: "Negotiate " + base64.StdEncoding.EncodeToString(ntlmToken), want: "NTLM"},
-		{name: "negotiate kerberos", header: "Negotiate " + base64.StdEncoding.EncodeToString(kerberosToken), want: authMechanismKerberos},
+		{name: "negotiate raw ntlm fallback", header: "Negotiate " + base64.StdEncoding.EncodeToString(ntlmToken), want: "NTLM"},
+		{name: "negotiate selected kerberos", header: "Negotiate " + base64.StdEncoding.EncodeToString(kerberosSelected), want: authMechanismKerberos},
+		{name: "negotiate selected ntlm", header: "Negotiate " + base64.StdEncoding.EncodeToString(ntlmSelected), want: "NTLM"},
+		{name: "negotiate advertises kerberos and ntlm only", header: "Negotiate " + base64.StdEncoding.EncodeToString(advertisedOnly), want: "Negotiate"},
 		{name: "bare negotiate", header: "Negotiate", want: "Negotiate"},
 		{name: "malformed negotiate token", header: "Negotiate !!!", want: "Negotiate"},
 		{name: "digest", header: "Digest realm=\"corp\"", want: "Digest"},

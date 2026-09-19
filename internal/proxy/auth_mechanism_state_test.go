@@ -17,14 +17,17 @@ func TestAPISS0019AuthMechanismTrackerObservesConcreteMechanism(t *testing.T) {
 		t.Fatalf("digest mechanism=%q", got)
 	}
 
-	ntlm := base64.StdEncoding.EncodeToString([]byte{'N', 'T', 'L', 'M', 'S', 'S', 'P', 0})
+	ntlm := base64.StdEncoding.EncodeToString([]byte{'N', 'T', 'L', 'M', 'S', 'S', 'P', 0, 1, 0, 0, 0})
 	tracker.ObserveHeader("Negotiate " + ntlm)
 	if got := tracker.Snapshot(); got != "NTLM" {
 		t.Fatalf("ntlm mechanism=%q", got)
 	}
 
-	kerberosOID := []byte{0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02}
-	tracker.ObserveHeader("Negotiate " + base64.StdEncoding.EncodeToString(kerberosOID))
+	kerberosOIDValue := []byte{0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02}
+	kerberosSelected := derTLV(0xa1, derTLV(0x30,
+		derTLV(0xa1, derTLV(0x06, kerberosOIDValue)),
+	))
+	tracker.ObserveHeader("Negotiate " + base64.StdEncoding.EncodeToString(kerberosSelected))
 	if got := tracker.Snapshot(); got != authMechanismKerberos {
 		t.Fatalf("kerberos mechanism=%q", got)
 	}
