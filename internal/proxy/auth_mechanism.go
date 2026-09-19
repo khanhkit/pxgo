@@ -25,6 +25,9 @@ func classifyUpstreamAuthMechanism(header string) string {
 		if isNTLMSSP(raw) {
 			return authNTLM
 		}
+		if _, ok := unwrapSPNEGONTLMToken(raw); ok {
+			return authNTLM
+		}
 		if selected := selectedSPNEGOMechanism(raw); selected != "" {
 			return selected
 		}
