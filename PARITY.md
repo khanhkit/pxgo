@@ -14,7 +14,7 @@ Python's libcurl uses Windows SSPI automatically for Negotiate/NTLM when no user
 
 Go now has SSPI support via `github.com/alexbrainman/sspi`. When running on Windows with no `--username` configured, both HTTP and CONNECT tunnels detect a Negotiate/NTLM proxy challenge and transparently authenticate using the current user's Windows credentials. The implementation lives in `internal/proxy/sspi_windows.go`; non-Windows builds use a no-op stub (`sspi_stub.go`).
 
-`kerberos.go:128` still skips Kerberos on Windows — Kerberos ticket management is handled by SSPI transparently instead.
+Windows SSPI is the actual upstream Negotiate/NTLM authentication path and is separate from `internal/kerberos` ticket management. The `--kerberos` ticket-manager flag is not a selector for Windows SSPI.
 
 ---
 
@@ -132,9 +132,11 @@ Feature parity is substantially covered, and the remaining px-python test areas 
 | px-python | 9 | ~192 |
 | pxgo | 11 | ~164, including benchmarks and build-tagged integration tests |
 
-### ✓ Kerberos KDC integration tests — COVERED BY OPT-IN HARNESS
+### ✓ Kerberos ticket-lifecycle KDC integration tests — COVERED BY OPT-IN HARNESS
 
 px-python has real MIT and Heimdal KDC integration coverage in `tests/test_kerberos.py`, including raw `kinit`, manager acquisition, expiry parsing, renewal, ccache cleanup, wrong password, bad principal, klist validity, forced retry, and Heimdal-specific variants.
+
+This harness validates ticket acquisition/renewal/cleanup only; it is not evidence of Unix upstream GSSAPI proxy authentication.
 
 pxgo now has:
 - default unit coverage for Kerberos state transitions and command handling

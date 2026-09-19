@@ -96,15 +96,19 @@ Upstream Digest supports legacy MD5 without qop and MD5 with `qop=auth`. Unsuppo
 
 ## Kerberos
 
-Kerberos ticket management is available on Linux and macOS:
+The current Unix Kerberos manager can acquire and refresh a per-process credential
+cache with `kinit`/`klist`, but pxgo does **not** have a Unix GSSAPI/SPNEGO consumer
+that turns that cache into upstream HTTP proxy authentication. Therefore the
+user-facing `--kerberos` mode is fail-closed rather than pretending ticket
+acquisition is end-to-end proxy authentication.
 
-```bash
-PXGO_PASSWORD='secret' ./pxgo --kerberos --username=user@REALM
-```
+On Windows, upstream `Negotiate`/`NTLM` is handled separately through current-user
+SSPI. Omit `--kerberos` and explicit upstream username/password credentials to use
+that path. `Negotiate` is reported as Kerberos only when the authentication token
+provides Kerberos mechanism evidence; otherwise it remains `Negotiate` or `NTLM`.
 
-pxgo creates a per-process credential cache, runs `kinit`, refreshes tickets with
-`kinit -R` when possible, and removes the cache on exit. The host still needs
-working Kerberos configuration such as `/etc/krb5.conf`.
+The `internal/kerberos` package and its MIT/Heimdal integration harness remain for
+ticket lifecycle testing and future GSSAPI integration.
 
 ## Client Authentication
 
@@ -119,8 +123,9 @@ PXGO_CLIENT_PASSWORD='client-secret' ./pxgo \
 Supported client auth modes are `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `ANY`,
 `ANYSAFE`, and `NONE`. For **downstream client authentication**, `NEGOTIATE` is
 a compatibility mode for NTLMSSP carried directly under the Negotiate scheme or
-wrapped in SPNEGO. It does **not** accept Kerberos/GSSAPI tokens. Use the
-separate Kerberos support described above for upstream proxy authentication.
+wrapped in SPNEGO. It does **not** accept Kerberos/GSSAPI tokens. This downstream
+compatibility mode is separate from Windows upstream SSPI; Unix end-to-end Kerberos
+proxy authentication is currently unsupported.
 
 ## Remote Clients
 

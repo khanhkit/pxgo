@@ -1,0 +1,46 @@
+name: Real AD Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      verification_ref:
+        description: Exact branch, tag, or SHA to verify
+        required: true
+        type: string
+        default: main
+
+concurrency:
+  group: real-ad-verification-${{ inputs.verification_ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-ad:
+    name: Protected Windows AD/SSPI
+    runs-on: [self-hosted, windows, x64, pxgo-ad]
+    environment: pxgo-ad
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.verification_ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run protected real-AD Kerberos verification
+        shell: pwsh
+        env:
+          PXGO_SSPI_AD: "1"
+          PXGO_SSPI_AD_PROXY_HOST: ${{ vars.PXGO_SSPI_AD_PROXY_HOST }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PXGO_SSPI_AD_PROXY_HOST)) {
+            throw 'pxgo-ad environment must define PXGO_SSPI_AD_PROXY_HOST'
+          }
+          $listed = (go test ./internal/proxy -list 'TCSSPIWINAD010' | Out-String)
+          if ($listed -notmatch 'TestTCSSPIWINAD010') {
+            throw 'verification_ref does not contain the required real-AD Kerberos testcase TCSSPIWINAD010'
+          }
+          go test ./internal/proxy -run 'TCSSPIWINAD010' -count=1 -v
