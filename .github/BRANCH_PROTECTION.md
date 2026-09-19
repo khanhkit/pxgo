@@ -8,7 +8,9 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 - Require the Linux and Windows CI matrix checks from `.github/workflows/ci.yml`.
 - Require branches to be up to date before merge.
 - Block force pushes and branch deletion.
-- Require conversation resolution and at least one approving review for production changes.
+- Require conversation resolution.
+- On the solo-maintained `khanhkit/pxgo` repository, set required approving reviews to `0`; the hosted CI matrix is the mandatory merge gate and must not be bypassed.
+- On a multi-maintainer authoritative upstream, a distinct approving review may be required as an additional governance gate.
 - Do not permit administrators/bots to bypass required checks for release-bound commits except documented emergency recovery.
 
 ## Release tags
@@ -21,7 +23,7 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 
 ## Protected AD environment
 
-- Create GitHub environment `pxgo-ad` with required reviewer approval.
+- Create GitHub environment `pxgo-ad`. On the solo-maintained repository, self-approval may be enabled for this manual verification environment; on a multi-maintainer authoritative upstream, require a distinct reviewer and keep self-review disabled.
 - Attach only a domain-joined self-hosted Windows x64 runner carrying labels `self-hosted`, `windows`, `x64`, `pxgo-ad`.
 - Define environment variable `PXGO_SSPI_AD_PROXY_HOST` as the controlled upstream proxy DNS host whose service account owns `HTTP/<proxy-host>`.
 - Run the self-hosted runner under an authorized domain identity; do not place reusable domain passwords in repository variables.
