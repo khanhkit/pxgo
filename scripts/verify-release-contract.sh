@@ -78,6 +78,36 @@ grep -q 'verify-windows-native:' .github/workflows/release.yml || bad "release n
 grep -q 'windows-domain-sspi:' .github/workflows/release.yml || bad "release real AD SSPI gate missing"
 grep -q 'needs: \[verify-exact-sha, verify-windows-native, windows-domain-sspi\]' .github/workflows/release.yml || bad "GoReleaser is not gated on native Windows + real AD verification"
 
+# TC-CI-REG-009B: the protected AD gate is reproducibly bootstrap-able from one
+# disposable Windows Server VM. The runner binary itself is pinned by version
+# and digest; one-time registration credentials are supplied at runtime only.
+ad_bootstrap="scripts/bootstrap-pxgo-ad.ps1"
+[[ -f "$ad_bootstrap" ]] || bad "single-VM protected AD bootstrap missing"
+if [[ -f "$ad_bootstrap" ]]; then
+  grep -Fq "[string]\$RunnerVersion = '2.337.0'" "$ad_bootstrap" || bad "AD runner version is not pinned"
+  grep -Fq "1150692afa94e71f872017e254ea55b6eece1eece3fe7e3a6d4c93d0a1b85cfc" "$ad_bootstrap" || bad "AD runner SHA-256 pin missing"
+  grep -Fq 'Install-ADDSForest' "$ad_bootstrap" || bad "AD forest bootstrap missing"
+  grep -Fq 'setspn.exe -U -S' "$ad_bootstrap" || bad "HTTP SPN bootstrap missing"
+  grep -Fq -- '--runasservice' "$ad_bootstrap" || bad "AD runner service install missing"
+  grep -Fq -- '--disableupdate' "$ad_bootstrap" || bad "pinned AD runner can auto-update unexpectedly"
+  grep -Fq 'PXGO_RUNNER_TOKEN' "$ad_bootstrap" || bad "one-time runner token contract missing"
+  if grep -Eq 'gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]+' "$ad_bootstrap"; then
+    bad "hard-coded GitHub credential detected in AD bootstrap"
+  fi
+  [[ "$fail" -eq 0 ]] && ok "single-VM protected AD bootstrap contract present"
+fi
+
+ad_dispatch="scripts/dispatch-real-ad-verification.sh"
+[[ -f "$ad_dispatch" && -x "$ad_dispatch" ]] || bad "real AD dispatch helper missing or not executable"
+if [[ -f "$ad_dispatch" ]]; then
+  bash -n "$ad_dispatch" || bad "real AD dispatch helper has invalid shell syntax"
+  grep -Fq 'real_ad=true' "$ad_dispatch" || bad "real AD dispatch helper does not request protected gate"
+  grep -Fq 'native_sspi=true' "$ad_dispatch" || bad "real AD dispatch helper does not include native SSPI verification"
+  grep -Fq 'pending_deployments' "$ad_dispatch" || bad "protected environment approval orchestration missing"
+  grep -Fq 'pxgo-ad' "$ad_dispatch" || bad "dispatch helper does not verify pxgo-ad runner label"
+  [[ "$fail" -eq 0 ]] && ok "protected AD dispatch orchestration present"
+fi
+
 # TC-CI-REG-010: the minimum Go toolchain must include all reachable stdlib
 # security fixes currently required by the project.
 required_go_major=1
