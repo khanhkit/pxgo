@@ -60,6 +60,9 @@ func TestTCGUARDWATCH010DuplicateBeatDoesNotFakeProgress(t *testing.T) {
 	w.Ready(base)
 	w.Beat(5, base.Add(time.Second))
 	w.Beat(5, base.Add(10*time.Second))
+	if w.Check(base.Add(10 * time.Second)) {
+		t.Fatal("active observer marked worker hung too early")
+	}
 	if !w.Check(base.Add(21*time.Second + time.Nanosecond)) {
 		t.Fatal("duplicate heartbeat sequence incorrectly refreshed progress")
 	}

@@ -137,7 +137,7 @@ func TestTCGUARDPROTO005BoundedMessageProtocol(t *testing.T) {
 		_, _ = w.WriteString(strings.Repeat("x", maxMessageBytes+50) + "\n")
 		_ = w.Flush()
 	}()
-	_, err = newSession(right2).Read(ctx)
+	_, err := newSession(right2).Read(ctx)
 	if !errors.Is(err, ErrProtocol) {
 		t.Fatalf("oversized message error=%v, want ErrProtocol", err)
 	}
