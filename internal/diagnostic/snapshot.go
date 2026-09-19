@@ -20,10 +20,11 @@ type RouteSnapshot struct {
 }
 
 type AuthSnapshot struct {
-	UpstreamMode    string            `json:"upstream_mode"`
-	ClientMode      string            `json:"client_mode"`
-	KerberosEnabled bool              `json:"kerberos_enabled"`
-	Kerberos        *KerberosSnapshot `json:"kerberos,omitempty"`
+	UpstreamMode      string            `json:"upstream_mode"`
+	UpstreamMechanism string            `json:"upstream_mechanism,omitempty"`
+	ClientMode        string            `json:"client_mode"`
+	KerberosEnabled   bool              `json:"kerberos_enabled"`
+	Kerberos          *KerberosSnapshot `json:"kerberos,omitempty"`
 }
 
 type KerberosSnapshot struct {
