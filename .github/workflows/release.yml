@@ -149,7 +149,7 @@ jobs:
     name: Update Homebrew Tap
     runs-on: ubuntu-latest
     needs: goreleaser
-    if: ${{ !contains(needs.goreleaser.outputs.tag, '-') }}
+    if: ${{ !contains(needs.goreleaser.outputs.tag, '-') && vars.PXGO_HOMEBREW_TAP_ENABLED == 'true' }}
     steps:
       - name: Update formula
         env:
@@ -157,7 +157,7 @@ jobs:
           TAG: ${{ needs.goreleaser.outputs.tag }}
         run: |
           VERSION="${TAG#v}"
-          BASE_URL="https://github.com/pavelsimo/pxgo/releases/download/${TAG}"
+          BASE_URL="https://github.com/khanhkit/pxgo/releases/download/${TAG}"
 
           curl --fail --silent --show-error --location "${BASE_URL}/checksums.txt" -o /tmp/checksums.txt
 
@@ -166,13 +166,13 @@ jobs:
           SHA_LINUX_ARM64=$(grep  "pxgo_linux_arm64.tar.gz"  /tmp/checksums.txt | awk '{print $1}')
           SHA_LINUX_AMD64=$(grep  "pxgo_linux_amd64.tar.gz"  /tmp/checksums.txt | awk '{print $1}')
 
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/pavelsimo/homebrew-tap.git" /tmp/tap
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/khanhkit/homebrew-tap.git" /tmp/tap
           mkdir -p /tmp/tap/Formula
 
           cat > /tmp/tap/Formula/pxgo.rb << FORMULA
           class Pxgo < Formula
             desc "HTTP/HTTPS proxy with NTLM and Kerberos authentication"
-            homepage "https://pavelsimo.github.io/pxgo"
+            homepage "https://github.com/khanhkit/pxgo"
             license "MIT"
             version "${VERSION}"
 
