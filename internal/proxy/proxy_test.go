@@ -404,10 +404,10 @@ func TestListenMultipleInterfaces(t *testing.T) {
 	}))
 	defer upstream.Close()
 	cfg := config.Default()
-	cfg.Listen = "127.0.0.1, 127.0.0.2,127.0.0.1"
+	cfg.Listen = "127.0.0.1, ::1,127.0.0.1"
 	px := startTestProxy(t, cfg)
-	for _, host := range []string{"127.0.0.1", "127.0.0.2"} {
-		proxyURL, _ := url.Parse(fmt.Sprintf("http://%s:%d", host, px.Port()))
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		proxyURL, _ := url.Parse("http://" + net.JoinHostPort(host, strconv.Itoa(px.Port())))
 		client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}, Timeout: 5 * time.Second}
 		resp, err := client.Get(upstream.URL)
 		if err != nil {

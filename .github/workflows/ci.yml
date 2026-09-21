@@ -73,6 +73,10 @@ jobs:
         if: runner.os == 'Linux'
         run: make test
 
+      - name: Large transfer integrity
+        if: runner.os == 'Linux'
+        run: go test ./internal/proxy -run 'Test(LargeHTTPAndHTTPS|LargeDataMultipleSizes|MixedConcurrentLargeTransfers)$' -count=1 -v
+
       - name: Fuzz routing parsers
         if: runner.os == 'Linux'
         run: |
@@ -120,7 +124,17 @@ jobs:
         run: go test -race ./...
 
       - name: Kerberos integration compile gate
-        run: go test -tags=kerberos_integration ./internal/kerberos
+        run: go test -run '^$' -tags=kerberos_integration ./internal/kerberos
+
+      - name: Install MIT Kerberos integration fixture
+        if: runner.os == 'Linux'
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends krb5-kdc krb5-admin-server krb5-user
+
+      - name: Run live MIT Kerberos integration
+        if: runner.os == 'Linux'
+        run: ./scripts/run-kerberos-integration.sh
 
       - name: Build
         if: runner.os == 'Linux'
@@ -139,6 +153,39 @@ jobs:
       - name: Build
         if: runner.os == 'Windows'
         run: go build -o bin/pxgo.exe .
+
+  native-platform:
+    name: Native runtime (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+          - name: macos-arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify native architecture
+        shell: bash
+        run: test "$(go env GOARCH)" = arm64
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build ./...
 
   windows-native-sspi:
     name: Native Windows SSPI gate
