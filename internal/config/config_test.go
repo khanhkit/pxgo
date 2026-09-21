@@ -479,13 +479,18 @@ func TestConfigPathForSavePrefersWritableExistingLocations(t *testing.T) {
 	if err := os.Remove(cwdINI); err != nil {
 		t.Fatal(err)
 	}
-	configDir := filepath.Join(tmp, "xdg")
-	if runtime.GOOS == goosWindows {
+	configDir := filepath.Join(tmp, "config-home")
+	switch runtime.GOOS {
+	case goosWindows:
 		t.Setenv("APPDATA", configDir)
-	} else {
+	case "darwin":
+		oldUserHomeDir := userHomeDir
+		userHomeDir = func() (string, error) { return configDir, nil }
+		t.Cleanup(func() { userHomeDir = oldUserHomeDir })
+	default:
 		t.Setenv("XDG_CONFIG_HOME", configDir)
 	}
-	configINI := filepath.Join(configDir, "pxgo", "pxgo.ini")
+	configINI := filepath.Join(GetConfigDir(), "pxgo.ini")
 	if err := os.MkdirAll(filepath.Dir(configINI), 0o755); err != nil {
 		t.Fatal(err)
 	}
