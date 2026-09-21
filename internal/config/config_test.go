@@ -22,14 +22,21 @@ func TestDefaults(t *testing.T) {
 
 func TestGetConfigDir(t *testing.T) {
 	tmp := t.TempDir()
-	if runtime.GOOS == goosWindows {
+	want := filepath.Join(tmp, "pxgo")
+	switch runtime.GOOS {
+	case goosWindows:
 		t.Setenv("APPDATA", tmp)
-	} else {
+	case "darwin":
+		oldUserHomeDir := userHomeDir
+		userHomeDir = func() (string, error) { return tmp, nil }
+		t.Cleanup(func() { userHomeDir = oldUserHomeDir })
+		want = filepath.Join(tmp, "Library", "Application Support", "pxgo")
+	default:
 		t.Setenv("XDG_CONFIG_HOME", tmp)
 	}
 	got := GetConfigDir()
-	if got != filepath.Join(tmp, "pxgo") {
-		t.Fatalf("got %s", got)
+	if got != want {
+		t.Fatalf("got %s want %s", got, want)
 	}
 }
 
@@ -43,16 +50,20 @@ func TestGetLogfile(t *testing.T) {
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := GetLogfile(LogNone); got != "" {
 		t.Fatalf("LogNone got %q", got)
 	}
 	if got := GetLogfile(LogStdout); got != LogStdoutTarget {
 		t.Fatalf("LogStdout got %q", got)
 	}
-	if got := GetLogfile(LogCWD); got != filepath.Join(tmp, "debug-main.log") {
+	if got := GetLogfile(LogCWD); got != filepath.Join(cwd, "debug-main.log") {
 		t.Fatalf("LogCWD got %q", got)
 	}
-	if got := GetLogfile(LogUniqLog); !strings.HasPrefix(got, filepath.Join(tmp, "debug-main-")) || !strings.HasSuffix(got, ".log") {
+	if got := GetLogfile(LogUniqLog); !strings.HasPrefix(got, filepath.Join(cwd, "debug-main-")) || !strings.HasSuffix(got, ".log") {
 		t.Fatalf("LogUniqLog got %q", got)
 	}
 }
@@ -356,6 +367,10 @@ func TestExplicitConfigPathNormalized(t *testing.T) {
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile("custom.ini", []byte("[proxy]\nport = 7171\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -363,11 +378,11 @@ func TestExplicitConfigPathNormalized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(tmp, "custom.ini")
+	want := filepath.Join(cwd, "custom.ini")
 	if cfg.ConfigPath != want {
 		t.Fatalf("ConfigPath=%q want %q", cfg.ConfigPath, want)
 	}
-	if got := ConfigPathForSave("nested/pxgo.ini"); got != filepath.Join(tmp, "nested", "pxgo.ini") {
+	if got := ConfigPathForSave("nested/pxgo.ini"); got != filepath.Join(cwd, "nested", "pxgo.ini") {
 		t.Fatalf("ConfigPathForSave relative=%q", got)
 	}
 }
@@ -450,7 +465,11 @@ func TestConfigPathForSavePrefersWritableExistingLocations(t *testing.T) {
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatal(err)
 	}
-	cwdINI := filepath.Join(tmp, "pxgo.ini")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwdINI := filepath.Join(cwd, "pxgo.ini")
 	if err := os.WriteFile(cwdINI, []byte(""), 0o644); err != nil {
 		t.Fatal(err)
 	}
