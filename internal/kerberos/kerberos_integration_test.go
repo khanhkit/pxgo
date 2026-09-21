@@ -10,11 +10,9 @@ import (
 )
 
 func TestKerberosIntegrationKDC(t *testing.T) {
+	requireIntegrationEnv(t, "PXGO_KERBEROS_PRINCIPAL", "PXGO_KERBEROS_PASSWORD", "KRB5_CONFIG")
 	principal := os.Getenv("PXGO_KERBEROS_PRINCIPAL")
 	password := os.Getenv("PXGO_KERBEROS_PASSWORD")
-	if principal == "" || password == "" || os.Getenv("KRB5_CONFIG") == "" {
-		t.Skip("set PXGO_KERBEROS_PRINCIPAL, PXGO_KERBEROS_PASSWORD, and KRB5_CONFIG to run KDC integration tests")
-	}
 	isHeimdal := strings.EqualFold(os.Getenv("PXGO_KERBEROS_FLAVOR"), "heimdal")
 	mgr := New(principal, func() *string { return &password }, isHeimdal)
 	t.Cleanup(mgr.Cleanup)
@@ -41,11 +39,18 @@ func TestKerberosIntegrationKDC(t *testing.T) {
 	}
 }
 
-func TestKerberosIntegrationWrongPassword(t *testing.T) {
-	principal := os.Getenv("PXGO_KERBEROS_PRINCIPAL")
-	if principal == "" || os.Getenv("KRB5_CONFIG") == "" {
-		t.Skip("set PXGO_KERBEROS_PRINCIPAL and KRB5_CONFIG to run KDC integration tests")
+func requireIntegrationEnv(t *testing.T, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if os.Getenv(name) == "" {
+			t.Fatalf("%s must be set when kerberos_integration tests execute", name)
+		}
 	}
+}
+
+func TestKerberosIntegrationWrongPassword(t *testing.T) {
+	requireIntegrationEnv(t, "PXGO_KERBEROS_PRINCIPAL", "KRB5_CONFIG")
+	principal := os.Getenv("PXGO_KERBEROS_PRINCIPAL")
 	wrong := "definitely-wrong-password"
 	isHeimdal := strings.EqualFold(os.Getenv("PXGO_KERBEROS_FLAVOR"), "heimdal")
 	mgr := New(principal, func() *string { return &wrong }, isHeimdal)
