@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const testGOOSDarwin = "darwin"
+
 func TestDefaults(t *testing.T) {
 	required := []string{"server", "pac", "port", "listen", "gateway", "hostonly", "allow", "noproxy", "username", "auth", "workers", "threads", "idle", "socktimeout", "proxyreload", "foreground", "log", "client_auth", "client_nosspi", "client_username"}
 	for _, key := range required {
@@ -26,7 +28,7 @@ func TestGetConfigDir(t *testing.T) {
 	switch runtime.GOOS {
 	case goosWindows:
 		t.Setenv("APPDATA", tmp)
-	case "darwin":
+	case testGOOSDarwin:
 		oldUserHomeDir := userHomeDir
 		userHomeDir = func() (string, error) { return tmp, nil }
 		t.Cleanup(func() { userHomeDir = oldUserHomeDir })
@@ -483,7 +485,7 @@ func TestConfigPathForSavePrefersWritableExistingLocations(t *testing.T) {
 	switch runtime.GOOS {
 	case goosWindows:
 		t.Setenv("APPDATA", configDir)
-	case "darwin":
+	case testGOOSDarwin:
 		oldUserHomeDir := userHomeDir
 		userHomeDir = func() (string, error) { return configDir, nil }
 		t.Cleanup(func() { userHomeDir = oldUserHomeDir })
