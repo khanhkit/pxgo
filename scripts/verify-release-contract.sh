@@ -144,4 +144,28 @@ else
   ok "Go toolchain minimum satisfies security floor 1.25.13"
 fi
 
+# TC-CI-OWN-001/002/003/004: AP-ISS-0028 distribution identity contract.
+# Publication ownership follows the fork, while stable compatibility identifiers
+# (Go module path and existing WinGet package ID) remain intentionally unchanged.
+grep -A4 '^release:' .goreleaser.yaml | grep -q 'owner: khanhkit' || bad "GitHub release owner is not khanhkit"
+grep -q 'publisher_support_url: https://github.com/khanhkit/pxgo/issues' .goreleaser.yaml || bad "WinGet support URL does not target fork"
+grep -q 'release_notes_url: https://github.com/khanhkit/pxgo/releases/tag/' .goreleaser.yaml || bad "WinGet release notes URL does not target fork"
+grep -q 'skip_upload: true' .goreleaser.yaml || bad "WinGet publication is not fail-closed while fork repository is unprovisioned"
+grep -B2 'name: winget-pkgs' .goreleaser.yaml | grep -q 'owner: khanhkit' || bad "WinGet staging repository owner is not khanhkit"
+grep -q 'BASE_URL="https://github.com/khanhkit/pxgo/releases/download/' .github/workflows/release.yml || bad "Homebrew release URL does not target fork"
+grep -q 'github.com/khanhkit/homebrew-tap.git' .github/workflows/release.yml || bad "Homebrew tap target is not fork-owned"
+grep -q "vars.PXGO_HOMEBREW_TAP_ENABLED == 'true'" .github/workflows/release.yml || bad "Homebrew publication lacks explicit opt-in gate"
+[[ "$(awk '$1 == "module" {print $2; exit}' go.mod)" == 'github.com/pavelsimo/pxgo' ]] || bad "Go module compatibility identity changed without migration decision"
+grep -q 'package_identifier: pavelsimo.pxgo' .goreleaser.yaml || bad "WinGet compatibility package identifier changed"
+[[ -f docs/distribution-identity.md ]] || bad "distribution identity decision document missing"
+
+dependabot=.github/dependabot.yml
+[[ -f "$dependabot" ]] || bad "Dependabot configuration missing"
+if [[ -f "$dependabot" ]]; then
+  for ecosystem in gomod github-actions docker; do
+    grep -q "package-ecosystem: \"$ecosystem\"" "$dependabot" || bad "Dependabot missing $ecosystem"
+  done
+  [[ "$(grep -c 'interval: \"weekly\"' "$dependabot")" -ge 3 ]] || bad "Dependabot ecosystems are not on weekly cadence"
+fi
+
 exit "$fail"
