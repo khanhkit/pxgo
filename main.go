@@ -552,6 +552,7 @@ func runSelfTest(cfg config.Config) (retErr error) {
 		Proxy:           http.ProxyURL(proxyURL),
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- self-test intentionally accepts arbitrary test endpoints.
 	}
+	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: 30 * time.Second}
 	methods := []string{http.MethodGet}
 	if allMode {
