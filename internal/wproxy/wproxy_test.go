@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/systemproxy"
+	"github.com/khanhkit/pxgo/internal/systemproxy"
 )
 
 func TestParseProxy(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestAPISS0022StartBlocksUntilShutdown(t *testing.T) {

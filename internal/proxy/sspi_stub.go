@@ -5,7 +5,7 @@ package proxy
 import (
 	"errors"
 
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func newSSPISession(_, _ string) (authSession, error) {

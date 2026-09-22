@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestGatewayRejectsOpenUnauthenticatedDefault(t *testing.T) {

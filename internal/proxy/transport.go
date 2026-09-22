@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/wproxy"
+	"github.com/khanhkit/pxgo/internal/wproxy"
 )
 
 // maxCachedTransports bounds the transport cache; a PAC file can emit an

@@ -1,21 +1,20 @@
 # Installation
 
-## Windows with WinGet
+## Windows
 
-After the WinGet manifest for a release passes Microsoft validation, install
-pxgo with:
+Download the archive matching your machine from
+[GitHub Releases](https://github.com/khanhkit/pxgo/releases):
 
-```powershell
-winget install pavelsimo.pxgo
-```
+- `pxgo_windows_amd64.zip` for x64 Windows
+- `pxgo_windows_arm64.zip` for ARM64 Windows
 
-## macOS and Linux with Homebrew
+Extract `pxgo.exe` and place it on `PATH` if desired.
 
-Install pxgo from the Homebrew tap:
+## macOS and Linux
 
-```bash
-brew install pavelsimo/tap/pxgo
-```
+Download the matching `pxgo_darwin_*.tar.gz` or `pxgo_linux_*.tar.gz`
+archive from [GitHub Releases](https://github.com/khanhkit/pxgo/releases),
+extract `pxgo`, and place it on `PATH` if desired.
 
 ## From Source
 

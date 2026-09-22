@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/debug"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/debug"
 )
 
 func TestMain(m *testing.M) {

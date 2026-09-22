@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/wproxy"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/wproxy"
 )
 
 func TestAPISS0003SequentialNTLMRequestsReuseAuthenticatedConnection(t *testing.T) {

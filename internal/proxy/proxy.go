@@ -14,12 +14,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/debug"
-	"github.com/pavelsimo/pxgo/internal/diagnostic"
-	"github.com/pavelsimo/pxgo/internal/kerberos"
-	"github.com/pavelsimo/pxgo/internal/supervisor"
-	"github.com/pavelsimo/pxgo/internal/wproxy"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/debug"
+	"github.com/khanhkit/pxgo/internal/diagnostic"
+	"github.com/khanhkit/pxgo/internal/kerberos"
+	"github.com/khanhkit/pxgo/internal/supervisor"
+	"github.com/khanhkit/pxgo/internal/wproxy"
 )
 
 const (

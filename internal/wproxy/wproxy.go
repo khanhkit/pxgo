@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pavelsimo/pxgo/internal/dnscache"
-	"github.com/pavelsimo/pxgo/internal/pac"
-	"github.com/pavelsimo/pxgo/internal/systemproxy"
+	"github.com/khanhkit/pxgo/internal/dnscache"
+	"github.com/khanhkit/pxgo/internal/pac"
+	"github.com/khanhkit/pxgo/internal/systemproxy"
 )
 
 const (

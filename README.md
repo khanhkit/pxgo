@@ -1,9 +1,9 @@
 # 🔀 pxgo
 
-[![CI](https://github.com/pavelsimo/pxgo/actions/workflows/ci.yml/badge.svg)](https://github.com/pavelsimo/pxgo/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/pavelsimo/pxgo)](https://github.com/pavelsimo/pxgo/releases)
-[![Go version](https://img.shields.io/github/go-mod/go-version/pavelsimo/pxgo)](go.mod)
-[![License](https://img.shields.io/github/license/pavelsimo/pxgo)](LICENSE)
+[![CI](https://github.com/khanhkit/pxgo/actions/workflows/ci.yml/badge.svg)](https://github.com/khanhkit/pxgo/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/khanhkit/pxgo)](https://github.com/khanhkit/pxgo/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/khanhkit/pxgo)](go.mod)
+[![License](https://img.shields.io/github/license/khanhkit/pxgo)](LICENSE)
 
 **pxgo** is a Go rewrite of [Px](https://github.com/genotrance/px) — a single binary that runs a local HTTP/HTTPS
 proxy so applications can authenticate through corporate upstream proxies. On Windows, current-user SSPI supports NTLM and Negotiate; Unix ticket management is not currently wired to end-to-end upstream GSSAPI proxy authentication.
@@ -12,17 +12,8 @@ By default pxgo listens on `127.0.0.1:3128`.
 
 ## Quick Start
 
-Install on Windows with WinGet:
-
-```powershell
-winget install pavelsimo.pxgo
-```
-
-Install on macOS or Linux with Homebrew:
-
-```bash
-brew install pavelsimo/tap/pxgo
-```
+Install a prebuilt binary by downloading the archive matching your platform
+from the [GitHub Releases](https://github.com/khanhkit/pxgo/releases) page.
 
 Build and run from this repository:
 

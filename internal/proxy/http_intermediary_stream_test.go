@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestResponseTrailersAreForwarded(t *testing.T) {

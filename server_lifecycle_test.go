@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/proxy"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/proxy"
 )
 
 type blockingShutdowner struct{}

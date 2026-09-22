@@ -13,9 +13,9 @@ import (
 	"strings"
 
 	"github.com/Azure/go-ntlmssp"
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/debug"
-	"github.com/pavelsimo/pxgo/internal/wproxy"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/debug"
+	"github.com/khanhkit/pxgo/internal/wproxy"
 )
 
 func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, resp *http.Response) (*http.Response, error) {

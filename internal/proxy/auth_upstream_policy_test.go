@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestDefaultUpstreamAuthWithCredentialsDoesNotDowngradeToBasic(t *testing.T) {

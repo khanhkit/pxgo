@@ -171,7 +171,6 @@ jobs:
           args: release --clean --skip=publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
 
       - name: Stage immutable release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

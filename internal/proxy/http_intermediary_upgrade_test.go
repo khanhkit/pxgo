@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestHTTPUpgrade101RelaysBidirectionally(t *testing.T) {

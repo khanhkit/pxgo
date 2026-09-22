@@ -1,4 +1,4 @@
-module github.com/pavelsimo/pxgo
+module github.com/khanhkit/pxgo
 
 go 1.25.13
 

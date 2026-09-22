@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/crypto/md4" //nolint:staticcheck,gosec // NTLM compatibility requires MD4.
 
-	"github.com/pavelsimo/pxgo/internal/debug"
+	"github.com/khanhkit/pxgo/internal/debug"
 )
 
 // clientState holds per-connection auth state, keyed by RemoteAddr in
