@@ -157,3 +157,47 @@ make fmt         # format code
 make ci          # full CI gate: fmt-check + lint + test + build
 make docs        # build docs site to dist/docs-site/
 ```
+
+## ❤️ Support
+One developer + too many over-nights + coffee = still shipping. If this repo or content has saved you some time or headaches, feel free to fuel me with a coffee. Appreciate it! ☕
+
+<div align="center">
+
+  <!-- GitHub Sponsors Card -->
+  <div style="display: inline-block; vertical-align: top; margin: 10px; padding: 24px; border: 1px solid #d0d7de; border-radius: 12px; background: #f6f8fa; max-width: 320px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <h3 style="margin-top: 0; color: #24292f;">🌟 GitHub Sponsors</h3>
+    <a href="https://github.com/sponsors/khanhkit">
+      <img src="https://img.shields.io/github/sponsors/khanhkit?label=Sponsor%20me%20a%20cup%20of%20coffee&logo=GitHub&style=for-the-badge&color=pink" alt="Sponsor me a cup of coffee" />
+    </a>
+  </div>
+
+  <!-- TPBank Card -->
+  <div style="display: inline-block; vertical-align: top; margin: 10px; padding: 24px; border: 1px solid #d0d7de; border-radius: 12px; background: #f6f8fa; max-width: 320px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <h3 style="margin-top: 0; color: #24292f;">🏦 TPBank (Việt Nam)</h3>
+    <p style="color: #57606a; margin: 12px 0;">STK: <strong>KHANHKIT</strong><br><span style="font-size: 1.1em; color: #0969da;"></span></p>
+  </div>
+
+  <!-- USDT Card -->
+  <!-- USDT BEP20 Card -->
+  <div style="display: inline-block; vertical-align: top; margin: 10px; padding: 24px; border: 1px solid #d0d7de; border-radius: 12px; background: #f6f8fa; max-width: 320px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <h3 style="margin-top: 0; color: #24292f;">💰 USDT (BNB Smart Chain)</h3>
+    <p style="color: #57606a; margin: 8px 0;"><strong>Network:</strong> BNB Smart Chain (BEP20)</p>
+    <p style="margin: 12px 0;">
+      <strong>Wallet Address:</strong><br>
+      <code style="background: #fff; padding: 6px 10px; border-radius: 6px; font-size: 0.9em; word-break: break-all;">0x56e49EF13229E35b5ebea96cB85934d58459dE18</code>
+    </p>
+    <p style="color: #cf222e; font-size: 0.85em; margin-top: 8px;"><strong>⚠️ Only send on BEP20 network</strong></p>
+  </div>
+
+  <!-- USDT TRC20 Card -->
+  <div style="display: inline-block; vertical-align: top; margin: 10px; padding: 24px; border: 1px solid #d0d7de; border-radius: 12px; background: #f6f8fa; max-width: 320px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <h3 style="margin-top: 0; color: #24292f;">⚡ USDT (TRON)</h3>
+    <p style="color: #57606a; margin: 8px 0;"><strong>Network:</strong> TRON (TRC20)</p>
+    <p style="margin: 12px 0;">
+      <strong>Wallet Address:</strong><br>
+      <code style="background: #fff; padding: 6px 10px; border-radius: 6px; font-size: 0.9em; word-break: break-all;">THtezQttphE8ramQYeYemYfAWDVSKsZvbF</code>
+    </p>
+    <p style="color: #cf222e; font-size: 0.85em; margin-top: 8px;"><strong>⚠️ Only send on TRC20 network</strong></p>
+  </div>
+
+</div>
