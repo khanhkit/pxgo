@@ -9,9 +9,18 @@ ok() { echo "PASS: $*"; }
 grep -q '^  release-candidate:' "$release" || bad 'release-candidate job missing'
 grep -q '^  verify-release-artifacts:' "$release" || bad 'verify-release-artifacts job missing'
 grep -q '^  promote-release:' "$release" || bad 'promote-release job missing'
+grep -q '^  dry-run-promotion-proof:' "$release" || bad 'dry-run promotion proof job missing'
+
+grep -q 'workflow_dispatch:' "$release" || bad 'manual hosted dry-run trigger missing'
+grep -q 'verification_ref:' "$release" || bad 'manual dry-run lacks exact verification_ref input'
+grep -q 'inject_verifier_failure:' "$release" || bad 'manual dry-run lacks verifier failure-injection input'
+grep -Fq 'v0.0.0-ap0030-dryrun-' "$release" || bad 'manual dry-run does not create a local-only release-like tag'
+grep -Fq "github.event_name == 'push'" "$release" || bad 'promotion is not explicitly push-only'
+grep -Fq 'needs.verify-release-artifacts.result' "$release" || bad 'dry-run does not report promotion eligibility from verifier result'
 
 grep -Eq 'release --clean .*--skip=publish|release .*--skip=publish.*--clean' "$release" || bad 'candidate GoReleaser run does not skip publish'
-grep -Fq 'release-candidate-${{ github.sha }}' "$release" || bad 'candidate artifact is not keyed to exact SHA'
+grep -Fq 'release-candidate-${{ steps.tag.outputs.sha }}' "$release" || bad 'candidate upload is not keyed to exact checked-out SHA'
+grep -Fq 'release-candidate-${{ needs.release-candidate.outputs.sha }}' "$release" || bad 'candidate consumers are not keyed to exact candidate SHA'
 grep -q 'actions/upload-artifact@' "$release" || bad 'candidate dist is not staged with upload-artifact'
 grep -q 'actions/download-artifact@' "$release" || bad 'staged candidate is not downloaded for verification/promotion'
 
