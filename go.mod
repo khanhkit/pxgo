@@ -1,6 +1,6 @@
 module github.com/khanhkit/pxgo
 
-go 1.25.13
+go 1.25.14
 
 require (
 	github.com/Azure/go-ntlmssp v0.1.1
