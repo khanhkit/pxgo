@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      verification_ref:
+        description: "Exact 40-character commit SHA to verify without publishing"
+        required: true
+        type: string
+      inject_verifier_failure:
+        description: "Dry-run only: force linux-amd64 artifact verification to fail"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -17,11 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout exact event SHA
+      - name: Checkout exact verification SHA
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -30,12 +41,21 @@ jobs:
           cache: true
 
       - name: Verify tag points to event SHA
+        if: ${{ github.event_name == 'push' }}
         env:
           EXPECTED_SHA: ${{ github.sha }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git rev-list -n 1 "$TAG_NAME")" = "$EXPECTED_SHA"
+
+      - name: Verify manual exact SHA
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          EXPECTED_SHA: ${{ inputs.verification_ref }}
+        run: |
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Verify module metadata is tidy
         run: |
@@ -77,13 +97,13 @@ jobs:
         run: ./scripts/verify-release-contract.sh
 
   verify-windows-native:
-    name: Verify native Windows SSPI exact tagged SHA
+    name: Verify native Windows SSPI exact SHA
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -103,18 +123,20 @@ jobs:
           go test ./internal/proxy -run 'TCSSPIWIN(INT008|SOAK009)' -count=1 -v
 
 
-  goreleaser:
-    name: GoReleaser
+  release-candidate:
+    name: Build release candidate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [verify-exact-sha, verify-windows-native]
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      sha: ${{ steps.tag.outputs.sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -127,34 +149,258 @@ jobs:
         with:
           syft-version: v1.33.0
 
-      - name: Get tag
+      - name: Get release identity
         id: tag
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            TAG="v0.0.0-ap0030-dryrun-${SHA:0:12}"
+            git tag "$TAG" "$SHA"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: v2.18.2
-          args: release --clean
+          args: release --clean --skip=publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
 
-      - name: Attest released artifacts
+      - name: Stage immutable release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-candidate-${{ steps.tag.outputs.sha }}
+          path: dist
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  verify-release-artifacts:
+    name: Verify candidate (${{ matrix.name }})
+    needs: release-candidate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+            os: linux
+            arch: amd64
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+          - name: windows-amd64
+            runner: windows-latest
+            os: windows
+            arch: amd64
+          - name: macos-arm64
+            runner: macos-15
+            os: darwin
+            arch: arm64
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.release-candidate.outputs.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download exact release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-candidate-${{ needs.release-candidate.outputs.sha }}
+          path: dist
+
+      - name: Inject verifier failure for dry-run proof
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.inject_verifier_failure && matrix.name == 'linux-amd64' }}
+        shell: bash
+        run: |
+          echo "intentional AP-ISS-0030 verifier failure injection" >&2
+          exit 1
+
+      - name: Execute exact packaged archive
+        shell: bash
+        env:
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          EXPECTED_VERSION: ${{ needs.release-candidate.outputs.version }}
+        run: |
+          go run ./scripts/verify-release-artifact.go \
+            --dist dist \
+            --os "$TARGET_OS" \
+            --arch "$TARGET_ARCH" \
+            --version "$EXPECTED_VERSION"
+
+  promote-release:
+    name: Promote verified release candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [release-candidate, verify-release-artifacts]
+    if: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Download verified release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-candidate-${{ needs.release-candidate.outputs.sha }}
+          path: dist
+
+      - name: Verify staged checksums before promotion
+        working-directory: dist
+        run: sha256sum --check checksums.txt
+
+      - name: Attest verified release artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-checksums: dist/checksums.txt
 
+      - name: Promote exact verified bytes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-candidate.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG already exists; refusing to overwrite immutable release" >&2
+            exit 1
+          fi
+
+          mapfile -t assets < <(
+            jq -r '.[] | select(.type == "Archive" or .type == "SBOM" or .type == "Checksum") | .path' dist/artifacts.json | sort
+          )
+          if (( ${#assets[@]} == 0 )); then
+            echo "no publishable release assets found in staged candidate metadata" >&2
+            exit 1
+          fi
+          for asset in "${assets[@]}"; do
+            [[ "$asset" == dist/* && -f "$asset" ]] || {
+              echo "invalid staged release asset: $asset" >&2
+              exit 1
+            }
+          done
+          test -s dist/CHANGELOG.md
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --title "$TAG" \
+            --notes-file dist/CHANGELOG.md
+
+          cleanup_draft() {
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          }
+          trap cleanup_draft ERR
+
+          gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY"
+
+          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id')
+          prerelease=false
+          if [[ "$TAG" == *-* ]]; then
+            prerelease=true
+          fi
+          gh api \
+            --method PATCH \
+            "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false \
+            -F prerelease="$prerelease" >/dev/null
+
+          trap - ERR
+
+  dry-run-promotion-proof:
+    name: Prove dry-run promotion is fail-closed
+    runs-on: ubuntu-latest
+    needs: [release-candidate, verify-release-artifacts, promote-release]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Download exact candidate for draft promotion proof
+        if: ${{ !inputs.inject_verifier_failure }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-candidate-${{ needs.release-candidate.outputs.sha }}
+          path: dist
+
+      - name: Assert verifier result and immutable draft promotion
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-candidate.outputs.tag }}
+          SHA: ${{ needs.release-candidate.outputs.sha }}
+          VERIFIER_RESULT: ${{ needs.verify-release-artifacts.result }}
+          PROMOTION_RESULT: ${{ needs.promote-release.result }}
+          INJECTED: ${{ inputs.inject_verifier_failure }}
+        run: |
+          test "$PROMOTION_RESULT" = "skipped"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "dry-run unexpectedly found pre-existing GitHub Release $TAG" >&2
+            exit 1
+          fi
+
+          if [[ "$INJECTED" == "true" ]]; then
+            test "$VERIFIER_RESULT" = "failure"
+            echo "dry-run is fail-closed: verifier=failure promotion=skipped release=absent"
+            exit 0
+          fi
+
+          test "$VERIFIER_RESULT" = "success"
+          (cd dist && sha256sum --check checksums.txt)
+
+          mapfile -t assets < <(
+            jq -r '.[] | select(.type == "Archive" or .type == "SBOM" or .type == "Checksum") | .path' dist/artifacts.json | sort
+          )
+          test "${#assets[@]}" -gt 0
+          for asset in "${assets[@]}"; do
+            [[ "$asset" == dist/* && -f "$asset" ]]
+          done
+          test -s dist/CHANGELOG.md
+
+          cleanup_draft() {
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes >/dev/null 2>&1 || true
+          }
+          trap cleanup_draft EXIT
+
+          gh release create "$TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --latest=false \
+            --target "$SHA" \
+            --title "$TAG" \
+            --notes-file dist/CHANGELOG.md
+
+          mkdir -p /tmp/ap0030-promoted
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir /tmp/ap0030-promoted
+
+          for asset in "${assets[@]}"; do
+            cmp --silent "$asset" "/tmp/ap0030-promoted/$(basename "$asset")" || {
+              echo "draft promotion changed bytes for $asset" >&2
+              exit 1
+            }
+          done
+
+          echo "dry-run immutable promotion passed: verifier=success promotion=skipped draft-bytes=identical"
+
   update-homebrew-tap:
     name: Update Homebrew Tap
     runs-on: ubuntu-latest
-    needs: goreleaser
-    if: ${{ !contains(needs.goreleaser.outputs.tag, '-') && vars.PXGO_HOMEBREW_TAP_ENABLED == 'true' }}
+    needs: [release-candidate, promote-release]
+    if: ${{ github.event_name == 'push' && !contains(needs.release-candidate.outputs.tag, '-') && vars.PXGO_HOMEBREW_TAP_ENABLED == 'true' }}
     steps:
       - name: Update formula
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG: ${{ needs.goreleaser.outputs.tag }}
+          TAG: ${{ needs.release-candidate.outputs.tag }}
         run: |
           VERSION="${TAG#v}"
           BASE_URL="https://github.com/khanhkit/pxgo/releases/download/${TAG}"
