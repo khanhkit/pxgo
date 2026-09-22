@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Migrate the authoritative repository and Go module identity to `github.com/khanhkit/pxgo`
-- Use `khanhkit/tap/pxgo` for Homebrew installation and fork-owned release URLs throughout the docs and generated site
+- Use fork-owned release URLs throughout the docs and generated site; package-manager install commands are hidden until their fork-owned repositories are provisioned
 - Reuse upstream connections via cached keep-alive transports keyed by proxy candidate
 - Compile PAC scripts once and evaluate them on a pooled set of JavaScript VMs, removing the global PAC lock
 - Cache DNS lookups used by `--noproxy` matching and PAC `dnsResolve()` (new `internal/dnscache`)

@@ -6,7 +6,7 @@ PxGo is published and maintained from `khanhkit/pxgo`.
 
 - GitHub repository: `https://github.com/khanhkit/pxgo`
 - Go module path: `github.com/khanhkit/pxgo`
-- Homebrew tap: `khanhkit/homebrew-tap`
+- Planned Homebrew tap target: `khanhkit/homebrew-tap` (not currently provisioned or advertised as an install path)
 
 The Go module/import path was migrated with the v0.5.0 ownership cleanup so source,
 build metadata, documentation, and release contracts use the same fork identity.

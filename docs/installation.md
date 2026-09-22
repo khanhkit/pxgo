@@ -10,13 +10,11 @@ Download the archive matching your machine from
 
 Extract `pxgo.exe` and place it on `PATH` if desired.
 
-## macOS and Linux with Homebrew
+## macOS and Linux
 
-Install pxgo from the Homebrew tap:
-
-```bash
-brew install khanhkit/tap/pxgo
-```
+Download the matching `pxgo_darwin_*.tar.gz` or `pxgo_linux_*.tar.gz`
+archive from [GitHub Releases](https://github.com/khanhkit/pxgo/releases),
+extract `pxgo`, and place it on `PATH` if desired.
 
 ## From Source
 

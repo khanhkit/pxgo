@@ -12,15 +12,8 @@ By default pxgo listens on `127.0.0.1:3128`.
 
 ## Quick Start
 
-Install on Windows by downloading the matching `pxgo_windows_amd64.zip` or
-`pxgo_windows_arm64.zip` archive from the
-[GitHub Releases](https://github.com/khanhkit/pxgo/releases) page.
-
-Install on macOS or Linux with Homebrew:
-
-```bash
-brew install khanhkit/tap/pxgo
-```
+Install a prebuilt binary by downloading the archive matching your platform
+from the [GitHub Releases](https://github.com/khanhkit/pxgo/releases) page.
 
 Build and run from this repository:
 
