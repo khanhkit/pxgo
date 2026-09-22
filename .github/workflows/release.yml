@@ -300,20 +300,30 @@ jobs:
           done
           test -s dist/CHANGELOG.md
 
-          gh release create "$TAG" \
+          release_id=""
+          cleanup_draft() {
+            if [[ -n "$release_id" ]]; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_draft ERR
+
+          gh release create "$TAG" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --draft \
             --title "$TAG" \
             --notes-file dist/CHANGELOG.md
 
-          cleanup_draft() {
-            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
-          }
-          trap cleanup_draft ERR
+          release_id=$(
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+              jq -r --arg tag "$TAG" '.[] | select(.tag_name == $tag and .draft == true) | .id' |
+              head -n 1
+          )
+          if [[ -z "$release_id" || "$release_id" == "null" ]]; then
+            echo "unable to resolve draft release id for $TAG" >&2
+            exit 1
+          fi
 
-          gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY"
-
-          release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.id')
           prerelease=false
           if [[ "$TAG" == *-* ]]; then
             prerelease=true
