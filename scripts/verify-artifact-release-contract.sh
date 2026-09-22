@@ -34,6 +34,12 @@ grep -Fq 'sha256sum --check checksums.txt' "$release" || bad 'promotion does not
 grep -Fq '.type == "Archive" or .type == "SBOM" or .type == "Checksum"' "$release" || bad 'promotion asset set is not derived from GoReleaser publishable artifact metadata'
 grep -Fq -- '--notes-file dist/CHANGELOG.md' "$release" || bad 'promotion does not preserve GoReleaser changelog notes'
 grep -Fq 'gh release create' "$release" || bad 'promotion does not create release from staged artifacts'
+grep -Fq -- '--draft' "$release" || bad 'dry-run promotion does not use a draft release'
+grep -Fq -- '--latest=false' "$release" || bad 'dry-run draft could affect latest release state'
+grep -Fq -- '--target "$SHA"' "$release" || bad 'dry-run draft is not bound to exact candidate SHA'
+grep -Fq 'gh release download "$TAG"' "$release" || bad 'dry-run promotion does not download uploaded assets for byte verification'
+grep -Fq 'cmp --silent' "$release" || bad 'dry-run promotion does not compare uploaded bytes to candidate bytes'
+grep -Fq -- '--cleanup-tag' "$release" || bad 'dry-run promotion does not clean temporary release tag'
 
 count=$(grep -c 'goreleaser/goreleaser-action@' "$release" || true)
 [[ "$count" -eq 1 ]] || bad "expected exactly one GoReleaser action, found ${count}"

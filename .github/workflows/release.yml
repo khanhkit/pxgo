@@ -324,29 +324,72 @@ jobs:
     needs: [release-candidate, verify-release-artifacts, promote-release]
     if: ${{ always() && github.event_name == 'workflow_dispatch' }}
     steps:
-      - name: Assert verifier result and absence of release
+      - name: Download exact candidate for draft promotion proof
+        if: ${{ !inputs.inject_verifier_failure }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-candidate-${{ needs.release-candidate.outputs.sha }}
+          path: dist
+
+      - name: Assert verifier result and immutable draft promotion
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.release-candidate.outputs.tag }}
+          SHA: ${{ needs.release-candidate.outputs.sha }}
           VERIFIER_RESULT: ${{ needs.verify-release-artifacts.result }}
           PROMOTION_RESULT: ${{ needs.promote-release.result }}
           INJECTED: ${{ inputs.inject_verifier_failure }}
         run: |
-          if [[ "$INJECTED" == "true" ]]; then
-            test "$VERIFIER_RESULT" = "failure"
-          else
-            test "$VERIFIER_RESULT" = "success"
-          fi
-
           test "$PROMOTION_RESULT" = "skipped"
 
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "dry-run unexpectedly created GitHub Release $TAG" >&2
+            echo "dry-run unexpectedly found pre-existing GitHub Release $TAG" >&2
             exit 1
           fi
 
-          echo "dry-run is fail-closed: verifier=$VERIFIER_RESULT promotion=$PROMOTION_RESULT release=absent"
+          if [[ "$INJECTED" == "true" ]]; then
+            test "$VERIFIER_RESULT" = "failure"
+            echo "dry-run is fail-closed: verifier=failure promotion=skipped release=absent"
+            exit 0
+          fi
+
+          test "$VERIFIER_RESULT" = "success"
+          sha256sum --check dist/checksums.txt
+
+          mapfile -t assets < <(
+            jq -r '.[] | select(.type == "Archive" or .type == "SBOM" or .type == "Checksum") | .path' dist/artifacts.json | sort
+          )
+          test "${#assets[@]}" -gt 0
+          for asset in "${assets[@]}"; do
+            [[ "$asset" == dist/* && -f "$asset" ]]
+          done
+          test -s dist/CHANGELOG.md
+
+          cleanup_draft() {
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes >/dev/null 2>&1 || true
+          }
+          trap cleanup_draft EXIT
+
+          gh release create "$TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --latest=false \
+            --target "$SHA" \
+            --title "$TAG" \
+            --notes-file dist/CHANGELOG.md
+
+          mkdir -p /tmp/ap0030-promoted
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir /tmp/ap0030-promoted
+
+          for asset in "${assets[@]}"; do
+            cmp --silent "$asset" "/tmp/ap0030-promoted/$(basename "$asset")" || {
+              echo "draft promotion changed bytes for $asset" >&2
+              exit 1
+            }
+          done
+
+          echo "dry-run immutable promotion passed: verifier=success promotion=skipped draft-bytes=identical"
 
   update-homebrew-tap:
     name: Update Homebrew Tap
