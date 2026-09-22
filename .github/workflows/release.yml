@@ -224,14 +224,14 @@ jobs:
           name: release-candidate-${{ needs.release-candidate.outputs.sha }}
           path: dist
 
-      - name: Inject verifier failure for dry-run proof
+      - name: Corrupt downloaded candidate for dry-run failure proof
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.inject_verifier_failure && matrix.name == 'linux-amd64' }}
         shell: bash
-        run: |
-          echo "intentional AP-ISS-0030 verifier failure injection" >&2
-          exit 1
+        run: printf '\nAP-ISS-0030 intentional checksum corruption\n' >> dist/pxgo_linux_amd64.tar.gz
 
       - name: Execute exact packaged archive
+        id: artifact_verify
+        continue-on-error: ${{ github.event_name == 'workflow_dispatch' && inputs.inject_verifier_failure && matrix.name == 'linux-amd64' }}
         shell: bash
         env:
           TARGET_OS: ${{ matrix.os }}
@@ -243,6 +243,15 @@ jobs:
             --os "$TARGET_OS" \
             --arch "$TARGET_ARCH" \
             --version "$EXPECTED_VERSION"
+
+      - name: Assert injected artifact verification failed
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.inject_verifier_failure && matrix.name == 'linux-amd64' }}
+        shell: bash
+        env:
+          VERIFY_OUTCOME: ${{ steps.artifact_verify.outcome }}
+        run: |
+          test "$VERIFY_OUTCOME" = "failure"
+          echo "intentional dry-run artifact corruption was rejected by the real verifier"
 
   promote-release:
     name: Promote verified release candidate
@@ -349,8 +358,8 @@ jobs:
           fi
 
           if [[ "$INJECTED" == "true" ]]; then
-            test "$VERIFIER_RESULT" = "failure"
-            echo "dry-run is fail-closed: verifier=failure promotion=skipped release=absent"
+            test "$VERIFIER_RESULT" = "success"
+            echo "dry-run failure proof passed: real verifier rejected the corrupted job-local archive, the matrix contained the expected failure, promotion=skipped, release=absent"
             exit 0
           fi
 
