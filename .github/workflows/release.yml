@@ -355,7 +355,7 @@ jobs:
           fi
 
           test "$VERIFIER_RESULT" = "success"
-          sha256sum --check dist/checksums.txt
+          (cd dist && sha256sum --check checksums.txt)
 
           mapfile -t assets < <(
             jq -r '.[] | select(.type == "Archive" or .type == "SBOM" or .type == "Checksum") | .path' dist/artifacts.json | sort
