@@ -8,8 +8,8 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/dop251/goja v0.0.0-20250630131328-58d95d85e994
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/crypto v0.35.0
-	golang.org/x/sys v0.44.0
+	golang.org/x/crypto v0.52.0
+	golang.org/x/sys v0.45.0
 	golang.org/x/term v0.43.0
 )
 
