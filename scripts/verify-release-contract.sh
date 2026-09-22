@@ -153,10 +153,16 @@ grep -q "vars.PXGO_HOMEBREW_TAP_ENABLED == 'true'" .github/workflows/release.yml
 grep -q '^winget:' .goreleaser.yaml && bad "legacy WinGet publication config must remain retired"
 grep -q 'WINGET_TOKEN' .github/workflows/release.yml && bad "release workflow still references retired WinGet credentials"
 legacy_owner='pavel''simo'
-if git grep -n -i "$legacy_owner" -- . >/dev/null 2>&1; then
-  bad "legacy repository/package owner marker is still present"
-fi
+for surface in README.md docs .github .goreleaser.yaml CHANGELOG.md pxgo.ini go.mod; do
+  if git grep -n -i "$legacy_owner" -- "$surface" >/dev/null 2>&1; then
+    bad "legacy repository/package owner marker is still present in user-facing distribution surface: $surface"
+  fi
+done
 [[ -f docs/distribution-identity.md ]] || bad "distribution identity decision document missing"
+
+grep -Fq 'dist/RELEASE_NOTES.md' .github/workflows/release.yml || bad "release workflow does not stage curated release notes"
+grep -Fq -- '--notes-file dist/RELEASE_NOTES.md' .github/workflows/release.yml || bad "release promotion does not publish curated release notes"
+[[ -f docs/releases/v0.5.1.md ]] || bad "v0.5.1 curated release notes missing"
 
 dependabot=.github/dependabot.yml
 [[ -f "$dependabot" ]] || bad "Dependabot configuration missing"

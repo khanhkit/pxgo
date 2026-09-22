@@ -15,6 +15,10 @@ By default pxgo listens on `127.0.0.1:3128`.
 Install a prebuilt binary by downloading the archive matching your platform
 from the [GitHub Releases](https://github.com/khanhkit/pxgo/releases) page.
 
+> ☕ **Using the release binary?** If pxgo saves you time, you can support ongoing
+> development via [GitHub Sponsors](https://github.com/sponsors/khanhkit).
+> The full support options are also included in this README inside every release archive.
+
 Build and run from this repository:
 
 ```bash
@@ -86,7 +90,40 @@ Then run it with:
 pxgo --config=./pxgo.ini
 ```
 
-The repository includes a commented sample config at [pxgo.ini](pxgo.ini).
+### Write `pxgo.ini` by hand
+
+`--save` is optional. If you prefer to maintain the INI yourself, create a
+plain-text `pxgo.ini` such as:
+
+```ini
+[proxy]
+server = proxy.company.com:8080
+listen = 127.0.0.1
+port = 3128
+auth = ANYSAFE
+noproxy = localhost,127.0.0.1
+
+[settings]
+workers = 1
+threads = 32
+idle = 30
+socktimeout = 20.0
+proxyreload = 60
+log = 0
+```
+
+On domain-joined Windows, omit `username` when you want pxgo to use the logged-in
+user's SSPI credentials. For explicit credentials, add `username = DOMAIN\\user`
+and store the password with the OS keyring rather than writing it into the INI.
+
+You can place `pxgo.ini` next to the binary, in the platform config directory,
+or anywhere you prefer when you pass its path explicitly:
+
+```bash
+pxgo --config=/path/to/pxgo.ini
+```
+
+The repository includes a fully commented sample config at [pxgo.ini](pxgo.ini).
 
 Passwords stored with `--password`/`--client-password` go to the OS keyring
 (Credential Manager, Keychain, or libsecret). Set `PXGO_KEYRING_PLAINTEXT=1`

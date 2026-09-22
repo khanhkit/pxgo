@@ -155,13 +155,20 @@ jobs:
         run: |
           SHA="$(git rev-parse HEAD)"
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            EXISTING_TAG="$(git tag --points-at "$SHA" --list 'v[0-9]*' --sort=-version:refname | head -n 1)"
             TAG="v0.0.0-ap0030-dryrun-${SHA:0:12}"
             git tag "$TAG" "$SHA"
+            if [[ -n "$EXISTING_TAG" ]]; then
+              VERSION="${EXISTING_TAG#v}"
+            else
+              VERSION="${TAG#v}"
+            fi
           else
             TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Run GoReleaser
@@ -171,6 +178,19 @@ jobs:
           args: release --clean --skip=publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage curated release notes
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          NOTES="docs/releases/${TAG}.md"
+          if [[ -f "$NOTES" ]]; then
+            cp "$NOTES" dist/RELEASE_NOTES.md
+          else
+            cp dist/CHANGELOG.md dist/RELEASE_NOTES.md
+          fi
+          test -s dist/RELEASE_NOTES.md
 
       - name: Stage immutable release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -298,7 +318,7 @@ jobs:
               exit 1
             }
           done
-          test -s dist/CHANGELOG.md
+          test -s dist/RELEASE_NOTES.md
 
           release_id=""
           cleanup_draft() {
@@ -312,7 +332,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --draft \
             --title "$TAG" \
-            --notes-file dist/CHANGELOG.md
+            --notes-file dist/RELEASE_NOTES.md
 
           release_id=$(
             gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
@@ -382,7 +402,7 @@ jobs:
           for asset in "${assets[@]}"; do
             [[ "$asset" == dist/* && -f "$asset" ]]
           done
-          test -s dist/CHANGELOG.md
+          test -s dist/RELEASE_NOTES.md
 
           cleanup_draft() {
             gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes >/dev/null 2>&1 || true
@@ -395,7 +415,7 @@ jobs:
             --latest=false \
             --target "$SHA" \
             --title "$TAG" \
-            --notes-file dist/CHANGELOG.md
+            --notes-file dist/RELEASE_NOTES.md
 
           mkdir -p /tmp/ap0030-promoted
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir /tmp/ap0030-promoted

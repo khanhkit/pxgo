@@ -35,7 +35,6 @@ grep -Fq 'go run ./scripts/verify-release-artifact.go' "$release" || bad 'exact 
 grep -Eq 'needs:.*release-candidate.*verify-release-artifacts|needs:.*verify-release-artifacts.*release-candidate' "$release" || bad 'promotion is not gated on candidate plus native verification'
 grep -Fq 'sha256sum --check checksums.txt' "$release" || bad 'promotion does not re-verify staged checksums'
 grep -Fq '.type == "Archive" or .type == "SBOM" or .type == "Checksum"' "$release" || bad 'promotion asset set is not derived from GoReleaser publishable artifact metadata'
-grep -Fq -- '--notes-file dist/CHANGELOG.md' "$release" || bad 'promotion does not preserve GoReleaser changelog notes'
 grep -Fq 'gh release create "$TAG" "${assets[@]}"' "$release" || bad 'production promotion does not create the draft with exact staged assets in one operation'
 if grep -Fq 'gh release upload "$TAG"' "$release"; then
   bad 'production promotion uploads to a draft by tag, which is not resolvable reliably'
@@ -53,6 +52,8 @@ count=$(grep -c 'goreleaser/goreleaser-action@' "$release" || true)
 [[ "$count" -eq 1 ]] || bad "expected exactly one GoReleaser action, found ${count}"
 
 grep -q 'subject-checksums:' "$release" || bad 'provenance attestation missing after promotion'
+grep -Fq 'dist/RELEASE_NOTES.md' "$release" || bad 'curated release notes are not staged with the candidate'
+grep -Fq -- '--notes-file dist/RELEASE_NOTES.md' "$release" || bad 'promotion does not use curated release notes'
 grep -A5 '^  update-homebrew-tap:' "$release" | grep -Eq 'needs:.*promote-release' || bad 'Homebrew update is not downstream of promotion'
 
 [[ -f scripts/verify-release-artifact.go ]] || bad 'release artifact runtime verifier missing'
