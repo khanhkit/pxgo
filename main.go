@@ -19,12 +19,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/debug"
-	"github.com/pavelsimo/pxgo/internal/diagnostic"
-	"github.com/pavelsimo/pxgo/internal/guardian"
-	"github.com/pavelsimo/pxgo/internal/proxy"
-	"github.com/pavelsimo/pxgo/internal/winstartup"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/debug"
+	"github.com/khanhkit/pxgo/internal/diagnostic"
+	"github.com/khanhkit/pxgo/internal/guardian"
+	"github.com/khanhkit/pxgo/internal/proxy"
+	"github.com/khanhkit/pxgo/internal/winstartup"
 	"golang.org/x/term"
 )
 

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/diagnostic"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/diagnostic"
 )
 
 func TestTOBSDOC012DoctorControlRequestShape(t *testing.T) {

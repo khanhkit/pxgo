@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/systemproxy"
+	"github.com/khanhkit/pxgo/internal/systemproxy"
 )
 
 func TestParseProxyCanonicalIPv6AndValidation(t *testing.T) {

@@ -19,7 +19,7 @@ import (
 
 	"github.com/dop251/goja"
 
-	"github.com/pavelsimo/pxgo/internal/dnscache"
+	"github.com/khanhkit/pxgo/internal/dnscache"
 )
 
 const (

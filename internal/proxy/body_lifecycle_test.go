@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 type countingReadCloser struct {

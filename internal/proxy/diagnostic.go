@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/diagnostic"
+	"github.com/khanhkit/pxgo/internal/diagnostic"
 )
 
 const doctorControlPath = diagnostic.DoctorControlPath

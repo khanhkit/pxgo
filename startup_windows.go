@@ -5,7 +5,7 @@ package main
 import (
 	"errors"
 
-	"github.com/pavelsimo/pxgo/internal/winstartup"
+	"github.com/khanhkit/pxgo/internal/winstartup"
 	"golang.org/x/sys/windows/registry"
 )
 

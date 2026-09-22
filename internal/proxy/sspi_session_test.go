@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 type fakeSSPICredential struct {

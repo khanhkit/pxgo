@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/pavelsimo/pxgo/internal/diagnostic"
-	"github.com/pavelsimo/pxgo/internal/dnscache"
-	"github.com/pavelsimo/pxgo/internal/supervisor"
-	"github.com/pavelsimo/pxgo/internal/wproxy"
+	"github.com/khanhkit/pxgo/internal/diagnostic"
+	"github.com/khanhkit/pxgo/internal/dnscache"
+	"github.com/khanhkit/pxgo/internal/supervisor"
+	"github.com/khanhkit/pxgo/internal/wproxy"
 )
 
 func newRuntimeSupervisor(s *Server) *supervisor.Supervisor {

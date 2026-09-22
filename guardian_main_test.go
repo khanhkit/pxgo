@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/guardian"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/guardian"
 )
 
 func TestTCGUARDPARENT026OneShotClassification(t *testing.T) {

@@ -17,13 +17,13 @@ import { join, basename } from "path";
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const TOOL      = "pxgo";
-const REPO_URL  = "https://github.com/pavelsimo/pxgo";
+const REPO_URL  = "https://github.com/khanhkit/pxgo";
 const DESC      = "single-binary HTTP/HTTPS proxy for NTLM and Kerberos corporate networks";
 const HERO_COPY = "Run a local proxy that lets browsers, package managers, CLIs, and build tools authenticate cleanly through enterprise upstream proxies.";
 const INSTALL_CMD = "make build && ./bin/pxgo";
 const SITE_BASE = existsSync("docs/CNAME")
   ? `https://${readFileSync("docs/CNAME","utf8").trim()}`
-  : `https://pavelsimo.github.io/pxgo`;
+  : `https://khanhkit.github.io/pxgo`;
 
 const SRC = "docs";
 const OUT = join("dist", "docs-site");

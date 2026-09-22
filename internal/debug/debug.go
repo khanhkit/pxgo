@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/diagnostic"
+	"github.com/khanhkit/pxgo/internal/diagnostic"
 )
 
 const (

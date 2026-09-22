@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/diagnostic"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/diagnostic"
 )
 
 func configForHTTPServer(t *testing.T, server *httptest.Server) config.Config {

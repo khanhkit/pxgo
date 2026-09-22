@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/supervisor"
-	"github.com/pavelsimo/pxgo/internal/wproxy"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/supervisor"
+	"github.com/khanhkit/pxgo/internal/wproxy"
 )
 
 func serverFromURL(t *testing.T, raw string) wproxy.Server {

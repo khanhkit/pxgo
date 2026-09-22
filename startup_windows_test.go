@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/winstartup"
+	"github.com/khanhkit/pxgo/internal/winstartup"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )

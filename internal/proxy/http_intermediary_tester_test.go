@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestAuthNonePreservesParentProxyChallenge(t *testing.T) {

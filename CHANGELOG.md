@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-22
+
 ### Added
 - Handle SIGINT/SIGTERM with a graceful, bounded shutdown that drains in-flight requests
 - Add a benchmark harness: `make bench`, `scripts/bench-e2e.sh` (vs Python px), and `docs/benchmarking.md`
 
 ### Changed
+- Migrate the authoritative repository and Go module identity to `github.com/khanhkit/pxgo`
+- Use `khanhkit/tap/pxgo` for Homebrew installation and fork-owned release URLs throughout the docs and generated site
 - Reuse upstream connections via cached keep-alive transports keyed by proxy candidate
 - Compile PAC scripts once and evaluate them on a pooled set of JavaScript VMs, removing the global PAC lock
 - Cache DNS lookups used by `--noproxy` matching and PAC `dnsResolve()` (new `internal/dnscache`)
@@ -19,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rewrite the CONNECT relay to preserve the kernel `splice(2)` fast path and half-close each direction independently
 - Run proxy reload and Kerberos ticket checks on a background ticker instead of per request; a failed reload now keeps the previous proxy config and logs the error instead of returning 502
 - Reload the proxy configuration outside the routing lock and keep warm connections unless the routing actually changed
+
+### Removed
+- Retire the inherited WinGet package metadata and installation command until a fork-owned package identity is validated and published
 
 ### Fixed
 - Forward client bytes pipelined behind a CONNECT request (fixes stalled TLS handshakes)
@@ -33,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.4.0] - 2026-05-23
 
 ### Added
-- Add WinGet release publishing so Windows users can install pxgo with `winget install pavelsimo.pxgo`
+- Add the initial WinGet manifest generation for Windows distribution
 
 ## [0.3.0] - 2026-05-23
 
@@ -75,8 +82,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker support
 - Multi-platform builds: Linux, macOS, Windows (amd64, arm64)
 
-[Unreleased]: https://github.com/pavelsimo/pxgo/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/pavelsimo/pxgo/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/pavelsimo/pxgo/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/pavelsimo/pxgo/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/pavelsimo/pxgo/releases/tag/v0.1.0
+[Unreleased]: https://github.com/khanhkit/pxgo/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/khanhkit/pxgo/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/khanhkit/pxgo/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/khanhkit/pxgo/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/khanhkit/pxgo/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/khanhkit/pxgo/releases/tag/v0.1.0

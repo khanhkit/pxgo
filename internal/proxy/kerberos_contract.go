@@ -3,8 +3,8 @@ package proxy
 import (
 	"runtime"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/kerberos"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/kerberos"
 )
 
 func validateKerberosFeature(cfg config.Config) error {

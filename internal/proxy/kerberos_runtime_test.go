@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/kerberos"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/kerberos"
 )
 
 func TestAPISS0019NewRejectsUnsupportedKerberosBeforePACLoad(t *testing.T) {

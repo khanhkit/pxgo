@@ -13,7 +13,6 @@ These items are intentionally deferred external validation/governance work. They
 
 ## Authoritative upstream governance
 
-- [ ] Obtain admin/maintainer permission on `pavelsimo/pxgo`.
 - [ ] Apply the repository-appropriate `main` branch protection policy on the authoritative upstream repository: strict Linux/Windows checks always; `0` required approvals for a solo-maintained repository, or a distinct approval when multi-maintainer governance requires it.
 - [ ] Apply release-tag protection for `v*` on the authoritative upstream repository.
 - [ ] If the manual real-AD workflow is enabled upstream, configure `pxgo-ad` for the repository ownership model: solo repositories may allow self-approval; multi-maintainer upstreams should require a distinct reviewer and keep self-review disabled.

@@ -8,7 +8,7 @@ import (
 
 	"github.com/alexbrainman/sspi/negotiate"
 	"github.com/alexbrainman/sspi/ntlm"
-	"github.com/pavelsimo/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 type ntlmSSPIContext struct {

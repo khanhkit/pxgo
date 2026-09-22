@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pavelsimo/pxgo/internal/config"
-	"github.com/pavelsimo/pxgo/internal/debug"
-	"github.com/pavelsimo/pxgo/internal/supervisor"
-	"github.com/pavelsimo/pxgo/internal/wproxy"
+	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/debug"
+	"github.com/khanhkit/pxgo/internal/supervisor"
+	"github.com/khanhkit/pxgo/internal/wproxy"
 )
 
 // connectTarget defaults the port to 443 when the CONNECT host has none,
