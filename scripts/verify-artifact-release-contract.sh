@@ -17,6 +17,9 @@ grep -q 'inject_verifier_failure:' "$release" || bad 'manual dry-run lacks verif
 grep -Fq 'v0.0.0-ap0030-dryrun-' "$release" || bad 'manual dry-run does not create a local-only release-like tag'
 grep -Fq "github.event_name == 'push'" "$release" || bad 'promotion is not explicitly push-only'
 grep -Fq 'needs.verify-release-artifacts.result' "$release" || bad 'dry-run does not report promotion eligibility from verifier result'
+grep -Fq 'AP-ISS-0030 intentional checksum corruption' "$release" || bad 'failure injection does not corrupt the downloaded candidate copy'
+grep -Fq 'continue-on-error:' "$release" || bad 'expected dry-run verifier failure would still make the workflow red'
+grep -Fq 'steps.artifact_verify.outcome' "$release" || bad 'dry-run does not assert the real verifier rejected the corrupted candidate'
 
 grep -Eq 'release --clean .*--skip=publish|release .*--skip=publish.*--clean' "$release" || bad 'candidate GoReleaser run does not skip publish'
 grep -Fq 'release-candidate-${{ steps.tag.outputs.sha }}' "$release" || bad 'candidate upload is not keyed to exact checked-out SHA'
