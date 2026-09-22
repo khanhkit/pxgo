@@ -36,7 +36,12 @@ grep -Eq 'needs:.*release-candidate.*verify-release-artifacts|needs:.*verify-rel
 grep -Fq 'sha256sum --check checksums.txt' "$release" || bad 'promotion does not re-verify staged checksums'
 grep -Fq '.type == "Archive" or .type == "SBOM" or .type == "Checksum"' "$release" || bad 'promotion asset set is not derived from GoReleaser publishable artifact metadata'
 grep -Fq -- '--notes-file dist/CHANGELOG.md' "$release" || bad 'promotion does not preserve GoReleaser changelog notes'
-grep -Fq 'gh release create' "$release" || bad 'promotion does not create release from staged artifacts'
+grep -Fq 'gh release create "$TAG" "${assets[@]}"' "$release" || bad 'production promotion does not create the draft with exact staged assets in one operation'
+if grep -Fq 'gh release upload "$TAG"' "$release"; then
+  bad 'production promotion uploads to a draft by tag, which is not resolvable reliably'
+fi
+grep -Fq 'releases?per_page=100' "$release" || bad 'production promotion does not resolve draft release id from the authenticated release list'
+grep -Fq '.draft == true' "$release" || bad 'production promotion does not constrain release-id lookup to the draft record'
 grep -Fq -- '--draft' "$release" || bad 'dry-run promotion does not use a draft release'
 grep -Fq -- '--latest=false' "$release" || bad 'dry-run draft could affect latest release state'
 grep -Fq -- '--target "$SHA"' "$release" || bad 'dry-run draft is not bound to exact candidate SHA'
