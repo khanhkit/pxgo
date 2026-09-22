@@ -277,20 +277,26 @@ jobs:
             exit 1
           fi
 
-          mapfile -t assets < <(find dist -maxdepth 1 -type f \
-            ! -name artifacts.json \
-            ! -name metadata.json \
-            -print | sort)
+          mapfile -t assets < <(
+            jq -r '.[] | select(.type == "Archive" or .type == "SBOM" or .type == "Checksum") | .path' dist/artifacts.json | sort
+          )
           if (( ${#assets[@]} == 0 )); then
-            echo "no release assets found in staged candidate" >&2
+            echo "no publishable release assets found in staged candidate metadata" >&2
             exit 1
           fi
+          for asset in "${assets[@]}"; do
+            [[ "$asset" == dist/* && -f "$asset" ]] || {
+              echo "invalid staged release asset: $asset" >&2
+              exit 1
+            }
+          done
+          test -s dist/CHANGELOG.md
 
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --draft \
             --title "$TAG" \
-            --generate-notes
+            --notes-file dist/CHANGELOG.md
 
           cleanup_draft() {
             gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true

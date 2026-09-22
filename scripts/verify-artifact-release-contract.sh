@@ -31,6 +31,8 @@ grep -Fq 'go run ./scripts/verify-release-artifact.go' "$release" || bad 'exact 
 
 grep -Eq 'needs:.*release-candidate.*verify-release-artifacts|needs:.*verify-release-artifacts.*release-candidate' "$release" || bad 'promotion is not gated on candidate plus native verification'
 grep -Fq 'sha256sum --check checksums.txt' "$release" || bad 'promotion does not re-verify staged checksums'
+grep -Fq '.type == "Archive" or .type == "SBOM" or .type == "Checksum"' "$release" || bad 'promotion asset set is not derived from GoReleaser publishable artifact metadata'
+grep -Fq -- '--notes-file dist/CHANGELOG.md' "$release" || bad 'promotion does not preserve GoReleaser changelog notes'
 grep -Fq 'gh release create' "$release" || bad 'promotion does not create release from staged artifacts'
 
 count=$(grep -c 'goreleaser/goreleaser-action@' "$release" || true)
