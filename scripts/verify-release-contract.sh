@@ -132,16 +132,16 @@ fi
 # security fixes currently required by the project.
 required_go_major=1
 required_go_minor=25
-required_go_patch=13
+required_go_patch=14
 go_version="$(awk '$1 == "go" { print $2; exit }' go.mod)"
 IFS=. read -r go_major go_minor go_patch <<<"$go_version"
 go_patch="${go_patch:-0}"
 if (( go_major < required_go_major ||
       (go_major == required_go_major && go_minor < required_go_minor) ||
       (go_major == required_go_major && go_minor == required_go_minor && go_patch < required_go_patch) )); then
-  bad "Go toolchain minimum ${go_version} is below security floor 1.25.13"
+  bad "Go toolchain minimum ${go_version} is below security floor 1.25.14"
 else
-  ok "Go toolchain minimum satisfies security floor 1.25.13"
+  ok "Go toolchain minimum satisfies security floor 1.25.14"
 fi
 
 # Distribution identity contract.
