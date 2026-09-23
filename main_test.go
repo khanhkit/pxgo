@@ -306,6 +306,26 @@ func TestCLISelfTestAgainstLocalHTTP(t *testing.T) {
 	}
 }
 
+func TestCLISelfTestRejectsUntrustedHTTPSCertificate(t *testing.T) {
+	bin := buildPx(t)
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	port := freePort(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "--port="+fmt.Sprint(port), "--test="+upstream.URL)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("self-test accepted an untrusted HTTPS certificate:\n%s", out)
+	}
+	if !strings.Contains(string(out), "certificate") {
+		t.Fatalf("self-test failed for an unexpected reason: %v\n%s", err, out)
+	}
+}
+
 func TestCLISelfTestSingleURLUsesGETOnly(t *testing.T) {
 	bin := buildPx(t)
 	var methods []string

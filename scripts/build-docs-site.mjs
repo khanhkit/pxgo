@@ -35,6 +35,10 @@ function esc(s) {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
+function escAttr(s) {
+  return esc(s).replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+
 function stash(s, buf) { const k=`\x00${buf.length}\x00`; buf.push(s); return k; }
 function unstash(s, buf) { return s.replace(/\x00(\d+)\x00/g,(_,i)=>buf[+i]); }
 
@@ -107,7 +111,7 @@ function inline(text, buf) {
   text=text.replace(/\*(.+?)\*/g,"<em>$1</em>");
   text=text.replace(/\[([^\]]+)\]\(([^)]+)\)/g,(_,label,href)=>{
     const ext=href.startsWith("http")?` target="_blank" rel="noopener"`:"";
-    return stash(`<a href="${href}"${ext}>${label}</a>`,buf);
+    return stash(`<a href="${escAttr(href)}"${ext}>${label}</a>`,buf);
   });
   return text;
 }
@@ -157,7 +161,7 @@ function parse(src) {
       const id=slugify(rawText);
       const text=unstash(inline(rawText,buf),buf);
       if(lvl<=3) toc.push({level:lvl,id,text:rawText});
-      out.push(`<h${lvl} id="${id}"><a class="anchor" href="#${id}">#</a>${text}</h${lvl}>`);
+      out.push(`<h${lvl} id="${escAttr(id)}"><a class="anchor" href="#${escAttr(id)}">#</a>${text}</h${lvl}>`);
       continue;
     }
 
@@ -237,7 +241,7 @@ function sidebarHtml(pages, currentSlug) {
       lastSection = sec;
     }
     const active = slug === currentSlug ? ' class="active"' : "";
-    items += `<li data-nav-item><a href="${slug}.html"${active} data-search-text="${esc(`${label} ${sec} ${PAGE_KEYWORDS[slug] || ""}`)}">${esc(label)}</a></li>\n`;
+    items += `<li data-nav-item><a href="${escAttr(slug)}.html"${active} data-search-text="${escAttr(`${label} ${sec} ${PAGE_KEYWORDS[slug] || ""}`)}">${esc(label)}</a></li>\n`;
   }
 
   return `<aside class="sidebar" id="sidebar" aria-label="Site navigation">
@@ -290,7 +294,7 @@ function sidebarHtml(pages, currentSlug) {
   </label>
   <ul class="sidebar-nav">${items}</ul>
   <div class="sidebar-footer">
-    <a href="${REPO_URL}" target="_blank" rel="noopener" class="gh-link">
+    <a href="${escAttr(REPO_URL)}" target="_blank" rel="noopener" class="gh-link">
       <svg height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       GitHub
     </a>
@@ -309,7 +313,7 @@ function heroHtml() {
     <div class="home-install" aria-label="Build and run pxgo">
       <span class="prompt" aria-hidden="true">$</span>
       <code>${esc(INSTALL_CMD)}</code>
-      <button class="install-copy" type="button" data-copy="${esc(INSTALL_CMD)}">Copy</button>
+      <button class="install-copy" type="button" data-copy="${escAttr(INSTALL_CMD)}">Copy</button>
     </div>
   </div>
   <p class="muted">Go 1.24+ • local default 127.0.0.1:3128 • Docker-ready runtime</p>
@@ -348,11 +352,11 @@ function renderPage({slug, title, bodyHtml, toc, pages, isIndex}) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${pageTitle}</title>
-<meta name="description" content="${esc(DESC)}">
+<meta name="description" content="${escAttr(DESC)}">
 <meta property="og:type" content="website">
-<meta property="og:title" content="${pageTitle}">
-<meta property="og:description" content="${esc(DESC)}">
-<meta property="og:url" content="${SITE_BASE}/${slug === "index" ? "" : slug + ".html"}">
+<meta property="og:title" content="${escAttr(pageTitle)}">
+<meta property="og:description" content="${escAttr(DESC)}">
+<meta property="og:url" content="${escAttr(`${SITE_BASE}/${slug === "index" ? "" : slug + ".html"}`)}">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">

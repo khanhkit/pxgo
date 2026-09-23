@@ -1,12 +1,15 @@
 package proxy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -356,6 +359,20 @@ func TestAPISS0003AuthIdentityFingerprintSeparatesCredentials(t *testing.T) {
 		}
 	} else if anonymous != "" {
 		t.Fatalf("non-Windows anonymous identity=%q want empty", anonymous)
+	}
+}
+
+func TestAuthIdentityFingerprintIsNotRawCredentialSHA256(t *testing.T) {
+	cfg := config.Default()
+	cfg.Username = "DOMAIN\\alice"
+	cfg.Password = "one"
+
+	got := upstreamConnectionAuthIdentity(cfg, "")
+	authMode := strings.ToUpper(strings.TrimSpace(effectiveUpstreamAuth(cfg)))
+	sum := sha256.Sum256([]byte("explicit\x00" + cfg.Username + "\x00" + cfg.Password + "\x00" + authMode))
+	raw := "explicit:" + hex.EncodeToString(sum[:])
+	if got == raw {
+		t.Fatal("credential pool identity is an unkeyed SHA-256 hash of password-bearing data")
 	}
 }
 

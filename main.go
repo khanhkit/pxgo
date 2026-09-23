@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -548,10 +547,7 @@ func runSelfTest(cfg config.Config) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("self-test proxy URL: %w", err)
 	}
-	tr := &http.Transport{
-		Proxy:           http.ProxyURL(proxyURL),
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- self-test intentionally accepts arbitrary test endpoints.
-	}
+	tr := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 	defer tr.CloseIdleConnections()
 	client := &http.Client{Transport: tr, Timeout: 30 * time.Second}
 	methods := []string{http.MethodGet}

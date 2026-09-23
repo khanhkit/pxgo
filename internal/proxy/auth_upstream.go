@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -357,14 +359,23 @@ func hasConnectionAuthMode(auth string) bool {
 	return false
 }
 
+var upstreamAuthIdentityKey = func() [32]byte {
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		panic(fmt.Sprintf("generate upstream auth identity key: %v", err))
+	}
+	return key
+}()
+
 func upstreamConnectionAuthIdentity(cfg config.Config, _ string) string {
 	if !hasConnectionAuthMode(effectiveUpstreamAuth(cfg)) {
 		return ""
 	}
 	if cfg.Username != "" && cfg.Password != "" {
 		authMode := strings.ToUpper(strings.TrimSpace(effectiveUpstreamAuth(cfg)))
-		sum := sha256.Sum256([]byte("explicit\x00" + cfg.Username + "\x00" + cfg.Password + "\x00" + authMode))
-		return "explicit:" + hex.EncodeToString(sum[:])
+		mac := hmac.New(sha256.New, upstreamAuthIdentityKey[:])
+		_, _ = mac.Write([]byte("explicit\x00" + cfg.Username + "\x00" + cfg.Password + "\x00" + authMode))
+		return "explicit:" + hex.EncodeToString(mac.Sum(nil))
 	}
 	if cfg.Username != "" || cfg.Password != "" {
 		return ""

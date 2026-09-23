@@ -9,6 +9,9 @@ on:
         type: string
         default: main
 
+permissions:
+  contents: read
+
 concurrency:
   group: real-ad-verification-${{ inputs.verification_ref }}
   cancel-in-progress: true
