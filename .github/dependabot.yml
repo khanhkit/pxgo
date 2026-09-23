@@ -5,6 +5,15 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+    # Keep automated updates within the repository's Go 1.25 security/toolchain contract.
+    # Newer ranges below require Go 1.26 and are handled only with an explicit toolchain bump.
+    ignore:
+      - dependency-name: "golang.org/x/crypto"
+        versions: [">= 0.56.0"]
+      - dependency-name: "golang.org/x/sys"
+        versions: [">= 0.48.0"]
+      - dependency-name: "golang.org/x/term"
+        versions: [">= 0.46.0"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -17,3 +26,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+    # Docker builder must stay aligned with go.mod / verify-container-runtime.sh.
+    ignore:
+      - dependency-name: "golang"
+        versions: [">= 1.26.0"]
