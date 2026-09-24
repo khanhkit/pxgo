@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Publish the official `khanhkit/scoop-bucket` and automate stable-release updates from the exact staged Scoop manifest
+- Add native macOS Guardian lifecycle smoke coverage for crash/recycle/stop/orphan behavior
+- Add real Unix syscall coverage proving `RLIMIT_NOFILE` soft-limit raising on Linux and macOS
+
+### Changed
+- Match upstream Px v0.12 PAC encoding behavior: default to auto-detection, honor HTTP `Content-Type` charset, support UTF-32 BOMs, and fall back through Windows-1252/Windows-1251/Latin-1
+- Raise the Unix file-descriptor soft limit toward `min(hard, 65536)` at Guardian startup with macOS-compatible fallback limits
+- Extend behavior-oriented CLI/self-test coverage, bringing root package statement coverage above 50%
+- Run release/artifact contract checks during normal pull-request CI
+
+### Fixed
+- Include generated Scoop manifests in future release checksum/provenance sets
+- Select Homebrew archive checksums by exact filename so SBOM entries cannot contaminate formula hashes
+- Preserve actionable OS keyring backend errors when storing credentials and document Linux Secret Service/D-Bus requirements
+
 ## [0.6.0] - 2026-09-24
 
 ### Added
