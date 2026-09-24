@@ -27,6 +27,12 @@ if grep -Eq 't\.Skip(f)?\(' "$krb"; then
 fi
 
 [[ -x "$runner" ]] || fail "Kerberos integration runner missing or not executable"
+grep -Fq 'service_principal=HTTP/$proxy_host@$realm' "$runner" ||
+  fail "live Kerberos fixture does not provision the HTTP/<proxy-host> service principal"
+grep -Fq 'PXGO_KERBEROS_PROXY_HOST' "$runner" ||
+  fail "live Kerberos fixture does not expose the proxy host to the SPNEGO test"
+grep -Fq 'PXGO_KERBEROS_PROXY_HOST' "$krb" ||
+  fail "Kerberos integration suite does not require the SPNEGO proxy-host fixture"
 bash -n "$runner"
 
 echo "native-ci-contract: PASS"
