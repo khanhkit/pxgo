@@ -464,10 +464,21 @@ jobs:
 
           curl --fail --silent --show-error --location "${BASE_URL}/checksums.txt" -o /tmp/checksums.txt
 
-          SHA_DARWIN_ARM64=$(grep "pxgo_darwin_arm64.tar.gz" /tmp/checksums.txt | awk '{print $1}')
-          SHA_DARWIN_AMD64=$(grep "pxgo_darwin_amd64.tar.gz" /tmp/checksums.txt | awk '{print $1}')
-          SHA_LINUX_ARM64=$(grep  "pxgo_linux_arm64.tar.gz"  /tmp/checksums.txt | awk '{print $1}')
-          SHA_LINUX_AMD64=$(grep  "pxgo_linux_amd64.tar.gz"  /tmp/checksums.txt | awk '{print $1}')
+          checksum_for() {
+            local file="$1"
+            local sha
+            sha=$(awk -v file="$file" '$2 == file { value=$1; count++ } END { if (count != 1) exit 1; print value }' /tmp/checksums.txt)
+            [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || {
+              echo "invalid checksum for $file: $sha" >&2
+              return 1
+            }
+            printf '%s\n' "$sha"
+          }
+
+          SHA_DARWIN_ARM64=$(checksum_for "pxgo_darwin_arm64.tar.gz")
+          SHA_DARWIN_AMD64=$(checksum_for "pxgo_darwin_amd64.tar.gz")
+          SHA_LINUX_ARM64=$(checksum_for "pxgo_linux_arm64.tar.gz")
+          SHA_LINUX_AMD64=$(checksum_for "pxgo_linux_amd64.tar.gz")
 
           git clone "git@github.com:khanhkit/homebrew-tap.git" /tmp/tap
           mkdir -p /tmp/tap/Formula
