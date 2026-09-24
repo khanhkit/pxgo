@@ -261,3 +261,213 @@ func TestQuitSucceedsWhenListenerCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func runWithMutedIO(t *testing.T, args ...string) int {
+	t.Helper()
+	oldArgs, oldStdout, oldStderr := os.Args, os.Stdout, os.Stderr
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.Args = oldArgs
+		os.Stdout = oldStdout
+		os.Stderr = oldStderr
+		_ = devNull.Close()
+	}()
+	t.Setenv("PXGOINT_GUARDIAN_ADDR", "")
+	t.Setenv("PXGOINT_GUARDIAN_TOKEN", "")
+	os.Args = append([]string{oldArgs[0]}, args...)
+	os.Stdout, os.Stderr = devNull, devNull
+	return run()
+}
+
+func TestRunOneShotDispatchContracts(t *testing.T) {
+	if code := runWithMutedIO(t, "--definitely-unknown-option"); code != 2 {
+		t.Fatalf("parse-error exit=%d want 2", code)
+	}
+	if code := runWithMutedIO(t, "--help"); code != 0 {
+		t.Fatalf("help exit=%d want 0", code)
+	}
+	if code := runWithMutedIO(t, "--version"); code != 0 {
+		t.Fatalf("version exit=%d want 0", code)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "saved.ini")
+	if code := runWithMutedIO(t, "--save", "--config="+configPath, "--port=43211"); code != 0 {
+		t.Fatalf("save exit=%d want 0", code)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "port = 43211") {
+		t.Fatalf("saved config missing requested port:\n%s", data)
+	}
+}
+
+func TestRunInstallDispatchUsesPreparedStartupCommand(t *testing.T) {
+	oldInstall := installStartupFunc
+	defer func() { installStartupFunc = oldInstall }()
+
+	calls := 0
+	installStartupFunc = func(cmd string, force bool) error {
+		calls++
+		if !force {
+			t.Fatal("install did not propagate --force")
+		}
+		if !strings.Contains(cmd, "--config") {
+			t.Fatalf("startup command missing config argument: %q", cmd)
+		}
+		return nil
+	}
+	configPath := filepath.Join(t.TempDir(), "install.ini")
+	if code := runWithMutedIO(t, "--install", "--force", "--config="+configPath); code != 0 {
+		t.Fatalf("install exit=%d want 0", code)
+	}
+	if calls != 1 {
+		t.Fatalf("install calls=%d want 1", calls)
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("install did not persist startup config: %v", err)
+	}
+}
+
+func TestRunDoctorQuitAndRestartDispatch(t *testing.T) {
+	t.Run("doctor", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != diagnostic.DoctorControlPath {
+				t.Errorf("doctor path=%q", r.URL.Path)
+			}
+			_ = json.NewEncoder(w).Encode(diagnostic.Snapshot{Ready: true})
+		}))
+		defer server.Close()
+		cfg := configForHTTPTestServer(t, server.URL)
+		if code := runWithMutedIO(t, "--doctor", "--listen="+cfg.Listen, "--port="+strconv.Itoa(cfg.Port)); code != 0 {
+			t.Fatalf("doctor exit=%d want 0", code)
+		}
+	})
+
+	for _, tc := range []struct {
+		name    string
+		restart bool
+	}{
+		{name: "quit"},
+		{name: "restart", restart: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldParent := runGuardianParentFunc
+			defer func() { runGuardianParentFunc = oldParent }()
+			parentCalls := 0
+			runGuardianParentFunc = func(config.Config) int {
+				parentCalls++
+				return 0
+			}
+
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/PxgoQuit" {
+					t.Errorf("quit path=%q", r.URL.Path)
+				}
+				w.WriteHeader(http.StatusOK)
+				go server.Close()
+			}))
+			cfg := configForHTTPTestServer(t, server.URL)
+			args := []string{"--quit", "--listen=" + cfg.Listen, "--port=" + strconv.Itoa(cfg.Port)}
+			if tc.restart {
+				args[0] = "--restart"
+			}
+			if code := runWithMutedIO(t, args...); code != 0 {
+				server.Close()
+				t.Fatalf("%s exit=%d want 0", tc.name, code)
+			}
+			if tc.restart && parentCalls != 1 {
+				t.Fatalf("restart parent calls=%d want 1", parentCalls)
+			}
+			if !tc.restart && parentCalls != 0 {
+				t.Fatalf("quit parent calls=%d want 0", parentCalls)
+			}
+		})
+	}
+}
+
+func TestDoSelfTestRequestAuthRetryReplaysBody(t *testing.T) {
+	nilResp, err := doSelfTestRequest(http.DefaultClient, nil, config.Default(), false)
+	if nilResp != nil {
+		_ = nilResp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("nil self-test request unexpectedly succeeded")
+	}
+
+	var attempts int
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		if !strings.HasPrefix(r.Header.Get("Proxy-Authorization"), "Basic ") {
+			w.Header().Set("Proxy-Authenticate", `Basic realm="self-test"`)
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := config.Default()
+	cfg.Auth = "BASIC"
+	cfg.Username = "self-test-user"
+	cfg.Password = "self-test-secret"
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/resource", strings.NewReader("replay-body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := doSelfTestRequest(server.Client(), req, cfg, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%s want 200", resp.Status)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts=%d want 2", attempts)
+	}
+	if len(bodies) != 2 || bodies[0] != "replay-body" || bodies[1] != "replay-body" {
+		t.Fatalf("request body was not replayed: %#v", bodies)
+	}
+}
+
+func TestDoSelfTestRequestStopsAfterBoundedAuthRetries(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.Header().Set("Proxy-Authenticate", `Basic realm="self-test"`)
+		w.WriteHeader(http.StatusProxyAuthRequired)
+	}))
+	defer server.Close()
+
+	cfg := config.Default()
+	cfg.Auth = "BASIC"
+	cfg.Username = "bounded-user"
+	cfg.Password = "bounded-secret"
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/bounded", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := doSelfTestRequest(server.Client(), req, cfg, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatal("bounded retry returned nil response")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusProxyAuthRequired {
+		t.Fatalf("status=%s want 407", resp.Status)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts=%d want 3", attempts)
+	}
+}
