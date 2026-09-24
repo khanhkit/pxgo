@@ -6,7 +6,7 @@ PxGo is published and maintained from `khanhkit/pxgo`.
 
 - GitHub repository: `https://github.com/khanhkit/pxgo`
 - Go module path: `github.com/khanhkit/pxgo`
-- Planned Homebrew tap target: `khanhkit/homebrew-tap` (release automation exists, but the external tap repository/token are not currently provisioned)
+- Homebrew tap: `khanhkit/homebrew-tap` (published and updated by a tap-scoped write deploy key)
 
 The Go module/import path was migrated with the v0.5.0 ownership cleanup so source,
 build metadata, documentation, and release contracts use the same fork identity.
@@ -25,6 +25,7 @@ separately validated and published through the external WinGet repository.
 
 GitHub Releases target `khanhkit/pxgo`. Homebrew publication targets
 `khanhkit/homebrew-tap` and remains guarded by the repository variable
-`PXGO_HOMEBREW_TAP_ENABLED=true` plus its configured token.
+`PXGO_HOMEBREW_TAP_ENABLED=true`; cross-repository writes use a deploy key scoped
+only to the tap repository rather than an account-wide token.
 
 Historical copyright and attribution remain unchanged.

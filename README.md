@@ -15,6 +15,13 @@ By default pxgo listens on `127.0.0.1:3128`.
 Install a prebuilt binary by downloading the archive matching your platform
 from the [GitHub Releases](https://github.com/khanhkit/pxgo/releases) page.
 
+Homebrew users can install from the official PxGo tap:
+
+```bash
+brew tap khanhkit/tap
+brew install pxgo
+```
+
 On Windows, each release also publishes a checksum-pinned Scoop manifest, so a
 release can be installed directly without a separate bucket:
 
