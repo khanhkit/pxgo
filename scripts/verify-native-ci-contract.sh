@@ -13,6 +13,10 @@ runner=scripts/run-kerberos-integration.sh
 grep -Fq 'windows-latest' "$ci" || fail "Windows native gate missing"
 grep -Fq 'ubuntu-24.04-arm' "$ci" || fail "Linux arm64 native runner missing"
 grep -Fq 'macos-15' "$ci" || fail "macOS native runner missing"
+grep -Fq 'Guardian process lifecycle smoke' "$ci" || fail "macOS Guardian process smoke missing"
+grep -Fq "runner.os == 'macOS'" "$ci" || fail "Guardian process smoke is not macOS-scoped"
+grep -Fq 'TCGUARDPARENT(027|028|029|030|031)|TCGUARDSOAKRepeatedReadyCrashRecycle' "$ci" ||
+  fail "macOS Guardian smoke does not cover lifecycle/recycle/orphan fixtures"
 
 grep -Fq 'Large transfer integrity' "$ci" || fail "dedicated large-transfer gate missing"
 grep -Fq 'Test(LargeHTTPAndHTTPS|LargeDataMultipleSizes|MixedConcurrentLargeTransfers)' "$ci" ||

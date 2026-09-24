@@ -194,6 +194,15 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Guardian process lifecycle smoke
+        if: runner.os == 'macOS'
+        env:
+          PXGO_GUARDIAN_SOAK: "20"
+        run: |
+          go test ./internal/guardian \
+            -run 'TCGUARDPARENT(027|028|029|030|031)|TCGUARDSOAKRepeatedReadyCrashRecycle' \
+            -count=1 -v
+
       - name: Build
         run: go build ./...
 
