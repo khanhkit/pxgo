@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -647,5 +648,18 @@ func TestDefaultPACEncodingTracksUpstreamAutoDetection(t *testing.T) {
 	cfg := Default()
 	if cfg.PACEncoding != "auto" {
 		t.Fatalf("default PAC encoding=%q want auto", cfg.PACEncoding)
+	}
+}
+
+func TestOSKeyringStoreBackendErrorIsActionable(t *testing.T) {
+	oldSet := keyringSet
+	t.Cleanup(func() { keyringSet = oldSet })
+	t.Setenv("PXGO_KEYRING_PLAINTEXT", "")
+
+	backendErr := errors.New("secret service unavailable")
+	keyringSet = func(string, string, string) error { return backendErr }
+	err := StorePassword(Realm, "user", "secret")
+	if err == nil || !strings.Contains(err.Error(), "secret service unavailable") || !strings.Contains(err.Error(), "PXGO_KEYRING_PLAINTEXT") {
+		t.Fatalf("StorePassword backend error=%v", err)
 	}
 }

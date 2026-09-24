@@ -98,6 +98,7 @@ var Defaults = map[string]string{
 var (
 	executablePath = os.Executable
 	userHomeDir    = os.UserHomeDir
+	keyringSet     = keyring.Set
 )
 
 const (
@@ -885,10 +886,10 @@ func StorePassword(realm, username, password string) error {
 	if os.Getenv(envPrefix+"KEYRING_PLAINTEXT") == "1" {
 		return storePlaintext(realm, username, password)
 	}
-	if err := keyring.Set(realm, username, password); err == nil {
-		return nil
+	if err := keyringSet(realm, username, password); err != nil {
+		return fmt.Errorf("store password in OS keyring: %w; verify the OS keyring service or set PXGO_KEYRING_PLAINTEXT=1 for plaintext storage", err)
 	}
-	return errors.New("no keyring backend available; set PXGO_KEYRING_PLAINTEXT=1 for plaintext storage")
+	return nil
 }
 
 func GetPassword(realm, username string) (string, bool) {
