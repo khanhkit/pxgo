@@ -3,11 +3,13 @@ package proxy
 import (
 	"bufio"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,6 +33,15 @@ func TestAPISS0019NewRequiresKerberosPrincipalBeforePACLoad(t *testing.T) {
 	s, err := New(cfg)
 	if s != nil {
 		t.Fatal("kerberos mode without principal returned a server")
+	}
+	if runtime.GOOS == goosWindows {
+		if !errors.Is(err, kerberos.ErrProxyAuthUnsupported) {
+			t.Fatalf("Windows err=%v, want ErrProxyAuthUnsupported", err)
+		}
+		if got := hits.Load(); got != 0 {
+			t.Fatalf("Windows PAC fetches=%d want 0 before unsupported-mode rejection", got)
+		}
+		return
 	}
 	if err == nil || !strings.Contains(err.Error(), "--kerberos requires --username") {
 		t.Fatalf("err=%v, want missing Kerberos username error", err)

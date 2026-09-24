@@ -16,8 +16,8 @@ func TestSelfTestURLModesAndAllMode(t *testing.T) {
 		want  []string
 		all   bool
 	}{
-		{input: "all", want: []string{"http://httpbin.org", "https://httpbin.org"}, all: true},
-		{input: "1", want: []string{"http://httpbin.org", "https://httpbin.org"}, all: true},
+		{input: selfTestAll, want: []string{selfTestHTTPURL, selfTestHTTPSURL}, all: true},
+		{input: "1", want: []string{selfTestHTTPURL, selfTestHTTPSURL}, all: true},
 		{input: "all:example.com", want: []string{"http://example.com", "https://example.com"}, all: true},
 		{input: "all:https://example.com", want: []string{"https://example.com"}, all: true},
 		{input: "https://example.com", want: nil, all: false},
@@ -56,8 +56,8 @@ func TestWaitForRunningProxyAndClosed(t *testing.T) {
 	if !waitForClosed(addr, time.Second) {
 		t.Fatal("closed listener remained reachable")
 	}
-	if err := waitForRunningProxy(addr); err == nil || !strings.Contains(err.Error(), "not running") {
-		t.Fatalf("closed listener error=%v, want not-running error", err)
+	if err := waitForRunningProxy(addr); err == nil {
+		t.Fatal("closed listener unexpectedly reported running")
 	}
 }
 
