@@ -20,9 +20,9 @@ from the GitHub Release without provisioning a separate Scoop bucket.
 WinGet metadata inherited from the previous repository identity is retired.
 PxGo does not claim an official WinGet package until a fork-owned package ID is
 published through the external WinGet repository. Candidate package
-`KhanhKit.PxGo` v0.5.1 is under upstream review in `microsoft/winget-pkgs#440461`;
-all technical validation stages pass, while publication still depends on the
-account owner's Microsoft CLA acceptance and moderator review.
+`KhanhKit.PxGo` tracks the current v0.6.0 release in `microsoft/winget-pkgs#440461`.
+It must not be advertised as published until that upstream PR is accepted;
+Microsoft CLA acceptance and moderator review remain external requirements.
 
 ## Publication policy
 
