@@ -1090,12 +1090,12 @@ levels 0–4 are covered — see `PARITY.md`. px v0.11's asyncio rework, `pxw.ex
 GUI launcher, and Docker `IPC_LOCK` requirement are Python-specific and N/A to
 Go (goroutines already provide the concurrency model px moved to).
 
-### F1. Optional: px drop-in migration aids
+### F1. px drop-in migration aids
 
-**Status: ❌ skipped for now (nice-to-have; revisit if px-migration demand
-shows up).** Note: underscore CLI spellings already work — the parser
-normalizes `-`/`_` (`config.go`), so only the `PX_*` env fallback and
-`px.ini` fallback remain.
+**Status: ✅ implemented.** Underscore CLI spellings already work, legacy
+`PX_*` variables are accepted when the corresponding `PXGO_*` variable is
+unset, and legacy `px.ini` is read only when no `pxgo.ini` exists in any normal
+search location. `--save` continues to write the native `pxgo.ini` format.
 
 **Why?** pxgo deliberately renames the namespace (`--pac-encoding`, `PXGO_*`,
 `pxgo.ini`) vs px (`--pac_encoding`, `PX_*`, `px.ini`). A user migrating an
@@ -1105,8 +1105,8 @@ though the keys are identical. Cheap to smooth over:
 - Accept underscore spellings as CLI aliases (`--pac_encoding`,
   `--client_username`, …) — px itself uses underscores.
 - On startup, if no `pxgo.ini` is found in any search location, fall back to
-  `px.ini` in the same locations (read-only; `--save` still writes `pxgo.ini`).
-- Optionally read `PX_*` env vars when the corresponding `PXGO_*` is unset.
+  `px.ini` in the same locations (read-only; `--save` still writes `pxgo.ini`). ✅
+- Read `PX_*` env vars when the corresponding `PXGO_*` is unset. ✅
 
 ```go
 // config.go flag normalization before parsing:

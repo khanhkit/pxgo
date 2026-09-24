@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/github/license/khanhkit/pxgo)](LICENSE)
 
 **pxgo** is a Go rewrite of [Px](https://github.com/genotrance/px) — a single binary that runs a local HTTP/HTTPS
-proxy so applications can authenticate through corporate upstream proxies. On Windows, current-user SSPI supports NTLM and Negotiate; Unix ticket management is not currently wired to end-to-end upstream GSSAPI proxy authentication.
+proxy so applications can authenticate through corporate upstream proxies. On Windows, current-user SSPI supports NTLM and Negotiate. On Linux and macOS, `--kerberos` acquires/refreshes a Kerberos credential cache and uses it for upstream HTTP `Negotiate`/SPNEGO authentication.
 
 By default pxgo listens on `127.0.0.1:3128`.
 
@@ -14,6 +14,13 @@ By default pxgo listens on `127.0.0.1:3128`.
 
 Install a prebuilt binary by downloading the archive matching your platform
 from the [GitHub Releases](https://github.com/khanhkit/pxgo/releases) page.
+
+On Windows, each release also publishes a checksum-pinned Scoop manifest, so a
+release can be installed directly without a separate bucket:
+
+```powershell
+scoop install https://github.com/khanhkit/pxgo/releases/latest/download/pxgo-scoop.json
+```
 
 > ☕ **Using the release binary?** If pxgo saves you time, you can support ongoing
 > development via [GitHub Sponsors](https://github.com/sponsors/khanhkit).
@@ -66,11 +73,12 @@ pxgo --quit
 
 ## Configuration
 
-pxgo accepts command-line flags, `PXGO_*` environment variables, explicitly
-selected dotenv files, and `pxgo.ini`. Precedence is:
+pxgo accepts command-line flags, `PXGO_*` environment variables, legacy `PX_*`
+variables for Px migration, explicitly selected dotenv files, and `pxgo.ini`.
+`PXGO_*` wins over the corresponding `PX_*` fallback. Precedence is:
 
 ```text
-command line > environment > explicit dotenv > pxgo.ini > defaults
+command line > PXGO_ environment > PX_ environment > explicit dotenv > pxgo.ini/px.ini > defaults
 ```
 
 Current-working-directory `.env` files are not trusted implicitly. Use
@@ -117,7 +125,9 @@ user's SSPI credentials. For explicit credentials, add `username = DOMAIN\\user`
 and store the password with the OS keyring rather than writing it into the INI.
 
 You can place `pxgo.ini` next to the binary, in the platform config directory,
-or anywhere you prefer when you pass its path explicitly:
+or anywhere you prefer when you pass its path explicitly. For migration from
+Python Px, if no `pxgo.ini` exists in any normal search location, pxgo also
+reads legacy `px.ini` from the same locations; `--save` still writes `pxgo.ini`:
 
 ```bash
 pxgo --config=/path/to/pxgo.ini
@@ -144,7 +154,7 @@ to choose where it lives — see [docs/configuration.md](docs/configuration.md).
 | `--noproxy=LIST` | Hosts or IP ranges that bypass the upstream proxy |
 | `--auth=TYPE` | Upstream auth mode: `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `NONE`; omitted auth with reusable credentials behaves as `ANYSAFE`, while explicit `ANY` opts into Basic fallback |
 | `--username=USER` | Explicit upstream proxy username |
-| `--kerberos` | Reserved/fail-closed: the ticket manager is not an upstream GSSAPI proxy-auth consumer; Windows SSPI works without this flag |
+| `--kerberos` | Linux/macOS: acquire/refresh a Kerberos ccache and use it for upstream HTTP `Negotiate`/SPNEGO (`HTTP/<proxy-host>`); Windows SSPI works without this flag |
 | `--client-auth=TYPE` | Require client auth: `NONE`, `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`; `BASIC`/`ANY` are loopback-only on plaintext listeners; downstream `NEGOTIATE` means NTLMSSP/NTLM-over-SPNEGO, not Kerberos/GSSAPI |
 | `--log=N` | Debug log destination: `1`=script dir (`--debug`), `2`=cwd, `3`=unique file (`--uniqlog`), `4`=stdout (`--verbose`) |
 

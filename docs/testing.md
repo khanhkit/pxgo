@@ -46,3 +46,12 @@ go vet ./...
 go build ./...
 ```
 
+
+## Recurring reliability evidence
+
+`.github/workflows/reliability.yml` runs weekly and on demand. The Linux job
+repeats race-enabled tunnel shutdown/scheduler stress with 256 simultaneous
+tunnels and a 100-generation Guardian recycle soak. The Windows job repeats the
+native SSPI NTLM roundtrip and handle-stability tests three times. This is
+continuous regression evidence; it does not substitute for the separately
+tracked domain-joined real-AD validation gate.

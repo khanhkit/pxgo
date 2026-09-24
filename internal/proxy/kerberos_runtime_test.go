@@ -3,11 +3,12 @@ package proxy
 import (
 	"bufio"
 	"encoding/base64"
-	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -15,7 +16,7 @@ import (
 	"github.com/khanhkit/pxgo/internal/kerberos"
 )
 
-func TestAPISS0019NewRejectsUnsupportedKerberosBeforePACLoad(t *testing.T) {
+func TestAPISS0019NewRequiresKerberosPrincipalBeforePACLoad(t *testing.T) {
 	var hits atomic.Int32
 	pacServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
@@ -29,13 +30,13 @@ func TestAPISS0019NewRejectsUnsupportedKerberosBeforePACLoad(t *testing.T) {
 
 	s, err := New(cfg)
 	if s != nil {
-		t.Fatal("unsupported kerberos mode returned a server")
+		t.Fatal("kerberos mode without principal returned a server")
 	}
-	if !errors.Is(err, kerberos.ErrProxyAuthUnsupported) {
-		t.Fatalf("err=%v, want ErrProxyAuthUnsupported", err)
+	if err == nil || !strings.Contains(err.Error(), "--kerberos requires --username") {
+		t.Fatalf("err=%v, want missing Kerberos username error", err)
 	}
-	if got := hits.Load(); got != 0 {
-		t.Fatalf("PAC fetches=%d, want zero before unsupported kerberos rejection", got)
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("PAC fetches=%d want 1 before principal validation", got)
 	}
 }
 
@@ -130,7 +131,6 @@ func TestAPISS0019HTTPAuthCommitsSelectedKerberosOnSuccess(t *testing.T) {
 		targetURL,
 		nil,
 		targetURL.String(),
-		"",
 		parentURL.Hostname(),
 		initialResp,
 	)
@@ -270,4 +270,131 @@ type connectAuthHeaderError struct {
 
 func (e *connectAuthHeaderError) Error() string {
 	return "Proxy-Authorization mismatch: got " + e.got + " want " + e.want
+}
+
+func TestAPISS0019UnixKerberosHTTPUsesSPNEGOSession(t *testing.T) {
+	oldCandidate := kerberosSessionCandidate
+	oldFactory := kerberosSessionFactory
+	t.Cleanup(func() {
+		kerberosSessionCandidate = oldCandidate
+		kerberosSessionFactory = oldFactory
+	})
+
+	initialHeader := apiss0019AdvertisedNegotiateHeader()
+	session := &fakeAuthSession{negotiateHeader: initialHeader}
+	kerberosSessionCandidate = func(cfg config.Config, challenge string) bool {
+		return cfg.Kerberos && authSchemeFromChallenge(challenge) == authNegotiate
+	}
+	kerberosSessionFactory = func(_ *kerberos.Manager, _ string) (authSession, error) {
+		return session, nil
+	}
+
+	var requests atomic.Int32
+	parent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch requests.Add(1) {
+		case 1:
+			if got := r.Header.Get("Proxy-Authorization"); got != initialHeader {
+				t.Errorf("Proxy-Authorization=%q want Kerberos SPNEGO token", got)
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer parent.Close()
+	parentURL, err := url.Parse(parent.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetURL, _ := url.Parse("http://kerberos.example.test/resource")
+	transport := &http.Transport{Proxy: http.ProxyURL(parentURL)}
+	t.Cleanup(transport.CloseIdleConnections)
+
+	cfg := config.Default()
+	cfg.Auth = authNegotiate
+	cfg.Kerberos = true
+	s := &Server{cfg: cfg}
+	req := &http.Request{Method: http.MethodGet, URL: targetURL, Header: make(http.Header), Body: http.NoBody}
+	initialResp := &http.Response{
+		StatusCode: http.StatusProxyAuthRequired,
+		Status:     "407 Proxy Authentication Required",
+		Header:     http.Header{"Proxy-Authenticate": {authSchemeNeg}},
+		Body:       http.NoBody,
+	}
+	resp, err := s.retryHTTPProxyAuth(transport, req, targetURL, nil, targetURL.String(), parentURL.Hostname(), initialResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%s", resp.Status)
+	}
+	if got := s.authMechanism.Snapshot(); got != authMechanismKerberos {
+		t.Fatalf("mechanism=%q want Kerberos", got)
+	}
+	if session.closeCount != 1 {
+		t.Fatalf("session close count=%d want 1", session.closeCount)
+	}
+}
+
+func TestAPISS0019UnixKerberosConnectUsesSPNEGOSession(t *testing.T) {
+	oldCandidate := kerberosSessionCandidate
+	oldFactory := kerberosSessionFactory
+	t.Cleanup(func() {
+		kerberosSessionCandidate = oldCandidate
+		kerberosSessionFactory = oldFactory
+	})
+
+	initialHeader := apiss0019AdvertisedNegotiateHeader()
+	session := &fakeAuthSession{negotiateHeader: initialHeader}
+	kerberosSessionCandidate = func(cfg config.Config, challenge string) bool {
+		return cfg.Kerberos && authSchemeFromChallenge(challenge) == authNegotiate
+	}
+	kerberosSessionFactory = func(_ *kerberos.Manager, _ string) (authSession, error) {
+		return session, nil
+	}
+
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	errCh := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(server)
+		for i, response := range []string{
+			"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Negotiate\r\nContent-Length: 0\r\n\r\n",
+			"HTTP/1.1 200 Connection Established\r\nContent-Length: 0\r\n\r\n",
+		} {
+			req, err := http.ReadRequest(reader)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if i == 1 && req.Header.Get("Proxy-Authorization") != initialHeader {
+				errCh <- fmt.Errorf("second CONNECT did not carry Kerberos SPNEGO header")
+				return
+			}
+			if _, err := server.Write([]byte(response)); err != nil {
+				errCh <- err
+				return
+			}
+		}
+		errCh <- nil
+	}()
+
+	cfg := config.Default()
+	cfg.Auth = authNegotiate
+	cfg.Kerberos = true
+	s := &Server{cfg: cfg}
+	if _, err := s.sendUpstreamConnect(client, "origin.example.test:443", "proxy.example.test", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+	if got := s.authMechanism.Snapshot(); got != authMechanismKerberos {
+		t.Fatalf("mechanism=%q want Kerberos", got)
+	}
+	if session.closeCount != 1 {
+		t.Fatalf("session close count=%d want 1", session.closeCount)
+	}
 }

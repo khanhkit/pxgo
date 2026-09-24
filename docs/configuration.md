@@ -3,11 +3,13 @@
 pxgo configuration sources are applied in this order:
 
 ```text
-defaults < pxgo.ini < explicitly selected dotenv < environment < command line
+defaults < pxgo.ini/px.ini < explicitly selected dotenv < PX_ environment < PXGO_ environment < command line
 ```
 
 Environment variables use the `PXGO_` prefix. For example, `--proxy` maps to
-`PXGO_PROXY`, and `--client-username` maps to `PXGO_CLIENT_USERNAME`.
+`PXGO_PROXY`, and `--client-username` maps to `PXGO_CLIENT_USERNAME`. For drop-in
+Px migration, the corresponding legacy `PX_*` name is accepted only when its
+`PXGO_*` counterpart is unset.
 
 Configuration is strict: malformed typed values, unsupported `PXGO_*` options,
 unknown INI keys, unreadable explicit config files, and missing explicit local
@@ -35,11 +37,14 @@ returns values such as `default`, `ini:/path/pxgo.ini`, `env:PXGO_PORT`, or
 
 When `--config` is provided, pxgo reads that exact file.
 
-Without `--config`, pxgo checks:
+Without `--config`, pxgo checks all native `pxgo.ini` locations first:
 
 1. `./pxgo.ini`
 2. the platform config directory
 3. `pxgo.ini` next to the executable
+
+If none exists, it checks legacy `px.ini` in those same three locations. The
+legacy file is a read-compatibility path only; `--save` still targets `pxgo.ini`.
 
 Platform config directories:
 
@@ -74,7 +79,7 @@ human-edited config with explanations.
 | `useragent` / `--useragent` | empty | Override or set `User-Agent` |
 | `username` / `--username` | empty | Explicit upstream auth username |
 | `auth` / `--auth` | empty | Upstream auth selector; empty + reusable credentials uses `ANYSAFE`, while explicit `ANY` includes Basic fallback |
-| `kerberos` / `--kerberos` | `0` | Reserved/fail-closed until an end-to-end Unix GSSAPI proxy-auth consumer exists; Windows current-user SSPI does not require this flag |
+| `kerberos` / `--kerberos` | `0` | Linux/macOS Kerberos ccache + upstream HTTP SPNEGO authentication; requires `username`; Windows current-user SSPI is separate and does not use this flag |
 
 ## Automatic Upstream Proxy Discovery
 

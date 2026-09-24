@@ -76,7 +76,7 @@ The published image defaults to UID/GID `65532:65532`. Its root filesystem does 
 
 `--gateway` is fail-closed: choose a restrictive client `--allow` range or configure downstream authentication. Replace the example subnet with the client network visible to the container. Plaintext remote listeners do not permit `BASIC` or `ANY` because those modes advertise Basic credentials.
 
-The runtime image retains Kerberos command-line tools for ticket-lifecycle integration tests and future GSSAPI work. The current user-facing `--kerberos` mode is fail-closed because those tickets are not yet consumed for upstream HTTP proxy authentication.
+The runtime image retains Kerberos command-line tools because Linux/macOS `--kerberos` uses `kinit`/`klist` for the managed ccache and consumes that cache for upstream HTTP Negotiate/SPNEGO authentication.
 
 ## Windows Startup
 

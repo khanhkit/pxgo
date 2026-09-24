@@ -1,0 +1,45 @@
+name: Reliability
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  linux-stress:
+    name: Linux tunnel and guardian stress
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Tunnel shutdown and scheduler stress
+        env:
+          PXGO_TUNNEL_STRESS: "256"
+        run: go test -race ./internal/proxy -run 'Test(TunnelShutdownStress|RelayOneWaySchedulerStress)$' -count=3
+      - name: Guardian recycle soak
+        env:
+          PXGO_GUARDIAN_SOAK: "100"
+        run: go test -race ./internal/guardian -run '^TestTCGUARDSOAKRepeatedReadyCrashRecycle$' -count=1
+
+  windows-native-auth:
+    name: Windows native SSPI repeated soak
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Repeated native NTLM roundtrip and handle stability
+        shell: pwsh
+        env:
+          PXGO_SSPI_NATIVE: "1"
+        run: go test ./internal/proxy -run 'TCSSPIWIN(INT008|SOAK009)' -count=3 -v

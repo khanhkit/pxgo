@@ -12,18 +12,20 @@ func TestValidateProxyAuthFeatureAllowsDisabledMode(t *testing.T) {
 	}
 }
 
-func TestValidateProxyAuthFeatureRejectsTicketOnlyUnix(t *testing.T) {
-	for _, goos := range []string{"linux", "darwin", "freebsd"} {
+func TestValidateProxyAuthFeatureAllowsUnixGSSAPI(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
 		t.Run(goos, func(t *testing.T) {
-			err := ValidateProxyAuthFeature(true, goos)
-			if !errors.Is(err, ErrProxyAuthUnsupported) {
-				t.Fatalf("err=%v, want ErrProxyAuthUnsupported", err)
-			}
-			msg := strings.ToLower(err.Error())
-			if !strings.Contains(msg, "gssapi") || !strings.Contains(msg, "ticket") {
-				t.Fatalf("error must explain ticket-only/GSSAPI gap: %q", err)
+			if err := ValidateProxyAuthFeature(true, goos); err != nil {
+				t.Fatalf("supported unix kerberos mode returned error: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateProxyAuthFeatureRejectsUnsupportedUnix(t *testing.T) {
+	err := ValidateProxyAuthFeature(true, "freebsd")
+	if !errors.Is(err, ErrProxyAuthUnsupported) {
+		t.Fatalf("err=%v, want ErrProxyAuthUnsupported", err)
 	}
 }
 

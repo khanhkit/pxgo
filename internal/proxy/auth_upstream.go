@@ -20,8 +20,8 @@ import (
 	"github.com/khanhkit/pxgo/internal/wproxy"
 )
 
-func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, resp *http.Response) (*http.Response, error) {
-	return s.retryHTTPProxyAuthWithPool(transport, req, u, body, targetURL, passthroughAuth, proxyHost, wproxy.Direct, "", nil, false, resp)
+func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, proxyHost string, resp *http.Response) (*http.Response, error) {
+	return s.retryHTTPProxyAuthWithPool(transport, req, u, body, targetURL, "", proxyHost, wproxy.Direct, "", nil, false, resp)
 }
 
 func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, authIdentity string, pooled *transportCacheEntry, pooledAlreadyLocked bool, resp *http.Response) (retResp *http.Response, retErr error) {
@@ -93,7 +93,7 @@ func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http
 				}
 				removePooled()
 				closeEphemeral()
-				retErr = fmt.Errorf("close SSPI session: %w", err)
+				retErr = fmt.Errorf("close upstream auth session: %w", err)
 			}
 		}
 		s.recordSuccessfulAuthMechanism(retResp, retErr, authAttempted, mechanism.Result())
@@ -173,24 +173,23 @@ func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http
 		}
 
 		var auth string
-		var err error
-		switch {
-		case session != nil:
+		if session != nil {
+			var err error
 			auth, err = sspiSessionAuth(session, challenge)
 			if err != nil {
-				return nil, failAuth(fmt.Errorf("continue SSPI proxy authentication: %w", err))
+				return nil, failAuth(fmt.Errorf("continue upstream proxy authentication: %w", err))
 			}
-		case sspiSessionCandidate(s.cfg, challenge):
-			session, err = sspiSessionFactory(challenge, proxyHost)
+		} else {
+			started, sessionAuth, handled, err := s.startUpstreamAuthSession(challenge, proxyHost, resp, &mechanism)
+			session = started
 			if err != nil {
-				return nil, failAuth(fmt.Errorf("start SSPI proxy authentication: %w", err))
+				return nil, failAuth(err)
 			}
-			auth, err = session.Negotiate()
-			if err != nil {
-				return nil, failAuth(fmt.Errorf("start SSPI proxy negotiation: %w", err))
+			if handled {
+				auth = sessionAuth
+			} else {
+				auth = upstreamProxyAuthHeader(s.cfg, req.Method, targetURL, challenge, passthroughAuth)
 			}
-		default:
-			auth = upstreamProxyAuthHeader(s.cfg, req.Method, targetURL, challenge, passthroughAuth)
 		}
 		if auth == "" {
 			s.forceKerberosReloadForUpstreamAuth(resp)
@@ -228,6 +227,34 @@ func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http
 		removePooled()
 	}
 	return finish(resp), nil
+}
+
+func (s *Server) startUpstreamAuthSession(challenge, proxyHost string, resp *http.Response, mechanism *authMechanismObservation) (authSession, string, bool, error) {
+	if kerberosSessionCandidate(s.cfg, challenge) {
+		mechanism.ObserveMechanism(authMechanismKerberos)
+		session, err := kerberosSessionFactory(s.krb, proxyHost)
+		if err != nil {
+			s.forceKerberosReloadForUpstreamAuth(resp)
+			return nil, "", true, fmt.Errorf("start Kerberos SPNEGO proxy authentication: %w", err)
+		}
+		auth, err := session.Negotiate()
+		if err != nil {
+			return session, "", true, fmt.Errorf("start Kerberos SPNEGO negotiation: %w", err)
+		}
+		return session, auth, true, nil
+	}
+	if sspiSessionCandidate(s.cfg, challenge) {
+		session, err := sspiSessionFactory(challenge, proxyHost)
+		if err != nil {
+			return nil, "", true, fmt.Errorf("start SSPI proxy authentication: %w", err)
+		}
+		auth, err := session.Negotiate()
+		if err != nil {
+			return session, "", true, fmt.Errorf("start SSPI proxy negotiation: %w", err)
+		}
+		return session, auth, true, nil
+	}
+	return nil, "", false, nil
 }
 
 const maxUpstream407Body = 64 << 10

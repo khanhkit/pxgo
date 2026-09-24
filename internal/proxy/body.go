@@ -79,9 +79,10 @@ type replayableBody struct {
 	path string
 	size int64
 
-	closed   bool
-	reserved int64
-	budget   *replayBudget
+	closed     bool
+	reserved   int64
+	budget     *replayBudget
+	removeFile func(string) error
 }
 
 type ownedReadCloser struct {
@@ -269,10 +270,11 @@ func newReplayableBodyWithLimits(ctx context.Context, src io.ReadCloser, content
 			)
 		}
 		return &replayableBody{
-			path:     path,
-			size:     total,
-			reserved: reserved,
-			budget:   budget,
+			path:       path,
+			size:       total,
+			reserved:   reserved,
+			budget:     budget,
+			removeFile: os.Remove,
 		}, nil
 	}
 
@@ -343,8 +345,12 @@ func (b *replayableBody) Close() error {
 	}
 
 	if b.path != "" {
+		removeFile := b.removeFile
+		if removeFile == nil {
+			removeFile = os.Remove
+		}
 		// #nosec G703 -- b.path is created exclusively by os.CreateTemp inside this replay owner.
-		if err := os.Remove(b.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := removeFile(b.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			b.mu.Unlock()
 			return fmt.Errorf("remove replay temp file %s: %w", b.path, err)
 		}

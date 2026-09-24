@@ -132,7 +132,7 @@ func TestAPISS0001RetryBuildFailureCloses407Body(t *testing.T) {
 		Body: trackedBody,
 	}
 
-	got, err := s.retryHTTPProxyAuth(&http.Transport{}, req, req.URL, body, req.URL.String(), "", "proxy.test", resp)
+	got, err := s.retryHTTPProxyAuth(&http.Transport{}, req, req.URL, body, req.URL.String(), "proxy.test", resp)
 	if got != nil && got.Body != nil {
 		defer got.Body.Close()
 	}

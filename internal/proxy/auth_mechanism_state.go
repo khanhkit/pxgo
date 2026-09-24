@@ -26,6 +26,16 @@ func (o *authMechanismObservation) ObserveHeader(header string) {
 	o.mechanism = next
 }
 
+func (o *authMechanismObservation) ObserveMechanism(mechanism string) {
+	if o == nil || authMechanismSpecificity(mechanism) == 0 {
+		return
+	}
+	if authMechanismSpecificity(mechanism) < authMechanismSpecificity(o.mechanism) {
+		return
+	}
+	o.mechanism = mechanism
+}
+
 func (o *authMechanismObservation) Result() string {
 	if o == nil {
 		return ""

@@ -240,15 +240,29 @@ threads = 4
 	}
 }
 
-func TestParseArgsIgnoresLegacyPXEnvironmentPrefix(t *testing.T) {
+func TestParseArgsAcceptsLegacyPXEnvironmentFallbackWithPXGOPrecedence(t *testing.T) {
 	t.Setenv("PX_PORT", "2222")
-	t.Setenv("PXGO_PORT", "3333")
 	cfg, err := ParseArgs(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if cfg.Port != 2222 {
+		t.Fatalf("legacy PX_ fallback port=%d want 2222", cfg.Port)
+	}
+	if got := cfg.SourceOf("port"); got != "env:PX_PORT" {
+		t.Fatalf("legacy PX_ source=%q", got)
+	}
+
+	t.Setenv("PXGO_PORT", "3333")
+	cfg, err = ParseArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Port != 3333 {
-		t.Fatalf("PXGO_ should be the only recognized application prefix, got port %d", cfg.Port)
+		t.Fatalf("PXGO_ must override legacy PX_, got port %d", cfg.Port)
+	}
+	if got := cfg.SourceOf("port"); got != "env:PXGO_PORT" {
+		t.Fatalf("PXGO_ source=%q", got)
 	}
 }
 
@@ -271,6 +285,43 @@ func TestParseArgsLoadsCWDConfig(t *testing.T) {
 	}
 	if cfg.Port != 4141 || cfg.Server != "cwd.proxy:80" {
 		t.Fatalf("cwd config not loaded: %#v", cfg)
+	}
+}
+
+func TestParseArgsFallsBackToLegacyPXIniOnlyWhenPXGoIniIsAbsent(t *testing.T) {
+	tmp := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile("px.ini", []byte("[proxy]\nport = 4242\nserver = legacy.proxy:80\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ParseArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Port != 4242 || cfg.Server != "legacy.proxy:80" {
+		t.Fatalf("legacy px.ini fallback not loaded: %#v", cfg)
+	}
+	if filepath.Base(cfg.ConfigPath) != "px.ini" {
+		t.Fatalf("config path=%q want px.ini", cfg.ConfigPath)
+	}
+
+	if err := os.WriteFile("pxgo.ini", []byte("[proxy]\nport = 4343\nserver = native.proxy:80\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = ParseArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Port != 4343 || cfg.Server != "native.proxy:80" {
+		t.Fatalf("pxgo.ini must take precedence over px.ini: %#v", cfg)
 	}
 }
 
