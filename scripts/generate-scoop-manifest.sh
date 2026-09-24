@@ -11,7 +11,13 @@ output="${dist_dir}/pxgo-scoop.json"
 
 checksum_for() {
   local asset="$1"
-  awk -v asset="$asset" '$2 == asset { print $1; found=1; exit } END { if (!found) exit 1 }' "${checksums}"
+  local sha
+  sha=$(awk -v asset="$asset" '$2 == asset { value=$1; count++ } END { if (count != 1) exit 1; print value }' "${checksums}")
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "invalid checksum for ${asset}: ${sha}" >&2
+    return 1
+  }
+  printf '%s\n' "$sha"
 }
 
 amd64_asset="pxgo_windows_amd64.zip"
@@ -46,5 +52,14 @@ jq -n   --arg version "${version}"   --arg base "${base_url}"   --arg amd64_asse
   }' > "${output}"
 
 jq -e '.version and .architecture["64bit"].hash and .architecture.arm64.hash and .bin == "pxgo.exe"' "${output}" >/dev/null
-printf '%s
-' "${output}"
+
+manifest_asset="$(basename "${output}")"
+manifest_sha="$(sha256sum "${output}" | awk '{print $1}')"
+checksum_tmp="$(mktemp "${checksums}.tmp.XXXXXX")"
+trap 'rm -f "${checksum_tmp}"' EXIT
+awk -v asset="${manifest_asset}" '$2 != asset' "${checksums}" > "${checksum_tmp}"
+printf '%s  %s\n' "${manifest_sha}" "${manifest_asset}" >> "${checksum_tmp}"
+mv "${checksum_tmp}" "${checksums}"
+trap - EXIT
+
+printf '%s\n' "${output}"
