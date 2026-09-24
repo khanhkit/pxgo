@@ -28,6 +28,6 @@ These items are intentionally deferred external validation/governance work. They
 
 - [ ] Run a real Windows sleep/resume cycle with the Guardian parent + worker and preserve evidence that the scheduler gap grants one fresh grace window instead of killing a healthy resumed worker.
 - [ ] Run the Guardian recycle soak for 24h+ and record parent RSS/handle/process/goroutine/log growth plus orphan-worker count.
-- [ ] Run a macOS Guardian smoke test when macOS CI/infrastructure is available.
+- [x] Run a macOS Guardian process-lifecycle smoke test on the native `macos-15` arm64 CI runner, covering startup failure, ready-crash recycle, heartbeat hang recycle, control-close recycle, graceful/forced stop, parent-death orphan cleanup, and a short recycle soak.
 
 These are extended platform/duration validation items. Deterministic scheduler-gap simulation, process fault injection, parent/child death handling, restart/backoff tests, local full race, and hosted Linux/Windows compile/test gates remain mandatory for canonical implementation completion.
