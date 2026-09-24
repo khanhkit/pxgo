@@ -22,8 +22,15 @@ brew tap khanhkit/tap
 brew install pxgo
 ```
 
-On Windows, each release also publishes a checksum-pinned Scoop manifest, so a
-release can be installed directly without a separate bucket:
+On Windows, install from the official PxGo Scoop bucket:
+
+```powershell
+scoop bucket add khanhkit https://github.com/khanhkit/scoop-bucket
+scoop install khanhkit/pxgo
+```
+
+Each release also publishes a checksum-pinned direct-install manifest as a
+bucket-independent fallback:
 
 ```powershell
 scoop install https://github.com/khanhkit/pxgo/releases/latest/download/pxgo-scoop.json

@@ -155,6 +155,12 @@ grep -Fq '$2 == file' .github/workflows/release.yml || bad "Homebrew checksum ex
 if grep -Eq 'grep .*pxgo_(darwin|linux)_' .github/workflows/release.yml; then
   bad "Homebrew checksum extraction still uses substring grep that can match SBOM entries"
 fi
+grep -q '^  update-scoop-bucket:' .github/workflows/release.yml || bad "official Scoop bucket publication job missing"
+grep -A8 '^  update-scoop-bucket:' .github/workflows/release.yml | grep -Eq 'needs:.*promote-release' || bad "Scoop bucket update is not downstream of release promotion"
+grep -q "vars.PXGO_SCOOP_BUCKET_ENABLED == 'true'" .github/workflows/release.yml || bad "Scoop bucket publication lacks explicit opt-in gate"
+grep -q 'secrets.SCOOP_BUCKET_DEPLOY_KEY' .github/workflows/release.yml || bad "Scoop bucket publication is not using the bucket-scoped deploy key"
+grep -q 'khanhkit/scoop-bucket.git' .github/workflows/release.yml || bad "Scoop bucket target is not fork-owned"
+grep -Fq 'cp dist/pxgo-scoop.json /tmp/scoop-bucket/bucket/pxgo.json' .github/workflows/release.yml || bad "Scoop bucket does not publish the exact staged release manifest"
 [[ "$(awk '$1 == "module" {print $2; exit}' go.mod)" == 'github.com/khanhkit/pxgo' ]] || bad "Go module identity is not the authoritative fork"
 grep -q '^winget:' .goreleaser.yaml && bad "legacy WinGet publication config must remain retired"
 grep -q 'WINGET_TOKEN' .github/workflows/release.yml && bad "release workflow still references retired WinGet credentials"
