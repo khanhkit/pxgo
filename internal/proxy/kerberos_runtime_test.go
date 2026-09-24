@@ -348,6 +348,89 @@ func TestAPISS0019UnixKerberosHTTPUsesSPNEGOSession(t *testing.T) {
 	}
 }
 
+func TestAPISS0019UnixKerberosHTTPOverHTTPSProxyUsesSPNEGOSession(t *testing.T) {
+	oldCandidate := kerberosSessionCandidate
+	oldFactory := kerberosSessionFactory
+	t.Cleanup(func() {
+		kerberosSessionCandidate = oldCandidate
+		kerberosSessionFactory = oldFactory
+	})
+
+	initialHeader := apiss0019AdvertisedNegotiateHeader()
+	session := &fakeAuthSession{negotiateHeader: initialHeader}
+	kerberosSessionCandidate = func(cfg config.Config, challenge string) bool {
+		return cfg.Kerberos && authSchemeFromChallenge(challenge) == authNegotiate
+	}
+	kerberosSessionFactory = func(_ *kerberos.Manager, _ string) (authSession, error) {
+		return session, nil
+	}
+
+	var requests atomic.Int32
+	parent := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		switch got := r.Header.Get("Proxy-Authorization"); got {
+		case "":
+			w.Header().Set("Proxy-Authenticate", authSchemeNeg)
+			w.WriteHeader(http.StatusProxyAuthRequired)
+		case initialHeader:
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("Proxy-Authorization=%q want empty or Kerberos SPNEGO token", got)
+			w.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer parent.Close()
+	parentURL, err := url.Parse(parent.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetURL, err := url.Parse("http://kerberos.example.test/resource")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentTransport, ok := parent.Client().Transport.(*http.Transport)
+	if !ok || parentTransport.TLSClientConfig == nil {
+		t.Fatal("TLS test parent did not expose a client trust configuration")
+	}
+	transport := &http.Transport{
+		Proxy:           http.ProxyURL(parentURL),
+		TLSClientConfig: parentTransport.TLSClientConfig.Clone(),
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+
+	cfg := config.Default()
+	cfg.Auth = authNegotiate
+	cfg.Kerberos = true
+	srv := &Server{cfg: cfg}
+	req := &http.Request{Method: http.MethodGet, URL: targetURL, Header: make(http.Header), Body: http.NoBody}
+	initialResp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialResp.StatusCode != http.StatusProxyAuthRequired {
+		_ = initialResp.Body.Close()
+		t.Fatalf("initial status=%s want 407", initialResp.Status)
+	}
+
+	resp, err := srv.retryHTTPProxyAuth(transport, req, targetURL, nil, targetURL.String(), parentURL.Hostname(), initialResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%s", resp.Status)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("HTTPS parent requests=%d want 2", got)
+	}
+	if got := srv.authMechanism.Snapshot(); got != authMechanismKerberos {
+		t.Fatalf("mechanism=%q want Kerberos", got)
+	}
+	if session.closeCount != 1 {
+		t.Fatalf("session close count=%d want 1", session.closeCount)
+	}
+}
+
 func TestAPISS0019UnixKerberosConnectUsesSPNEGOSession(t *testing.T) {
 	oldCandidate := kerberosSessionCandidate
 	oldFactory := kerberosSessionFactory
