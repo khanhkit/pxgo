@@ -115,11 +115,11 @@ Go now prints a save confirmation and echoes the written config after `--save`. 
 
 ## Intentional Differences
 
-### ✓ workers / threads / foreground — INTENTIONAL COMPATIBILITY SETTINGS
+### ✓ workers / threads / foreground — COMPATIBLE INPUTS, GO-NATIVE RUNTIME
 
 Python's `workers=N` spawns N−1 child processes (`main.py:166-182`), each running a full asyncio event loop. `threads=N` sets the `ThreadPoolExecutor` size per process. `foreground=0` detaches the console on Windows for compiled/pythonw background launches.
 
-Go parses, stores, and round-trips these settings for config compatibility, but it does not use Python's process/thread pool model. pxgo uses one goroutine per connection and Go's runtime scheduler for concurrency, so `workers` and `threads` would add operational complexity without improving feature parity. The Go binary runs as a normal foreground console process unless launched by the user's service/startup manager; Windows startup install remains covered separately.
+pxgo deliberately does not reproduce that process/thread-pool topology: each accepted connection is handled with Go's goroutine/runtime scheduler. The numeric settings are nevertheless runtime-significant: `workers × threads` is the global accepted-connection admission budget shared by all listeners. This preserves familiar Px tuning inputs while bounding sockets/goroutines without spawning Python-style worker processes or thread pools. `foreground` remains a launch/service compatibility setting rather than a Go scheduler control. The admission contract is covered by `TestConnectionAdmissionUsesWorkersTimesThreads`.
 
 ---
 
@@ -136,12 +136,12 @@ Feature parity is substantially covered, and the remaining px-python test areas 
 
 px-python has real MIT and Heimdal KDC integration coverage in `tests/test_kerberos.py`, including raw `kinit`, manager acquisition, expiry parsing, renewal, ccache cleanup, wrong password, bad principal, klist validity, forced retry, and Heimdal-specific variants.
 
-This harness validates ticket acquisition/renewal/cleanup only; it is not evidence of Unix upstream GSSAPI proxy authentication.
+The harness validates ticket acquisition/renewal/cleanup, and the optional `PXGO_KERBEROS_PROXY_HOST` case additionally obtains a real `HTTP/<proxy-host>` service ticket and builds the upstream SPNEGO token from the managed ccache.
 
 pxgo now has:
 - default unit coverage for Kerberos state transitions and command handling
 - Unix PTY coverage for password-based `kinit`
-- env-gated KDC integration tests behind the `kerberos_integration` build tag
+- env-gated KDC integration tests behind the `kerberos_integration` build tag, including optional real `HTTP/<proxy-host>` SPNEGO token acquisition
 - a `test-kerberos-integration` make target
 - a CI compile/skip gate for the build-tagged integration suite
 
@@ -152,6 +152,7 @@ PXGO_KERBEROS_PRINCIPAL=user@REALM \
 PXGO_KERBEROS_PASSWORD=secret \
 KRB5_CONFIG=/path/to/krb5.conf \
 PXGO_KERBEROS_FLAVOR=mit \
+PXGO_KERBEROS_PROXY_HOST=proxy.company.example \
 go test -tags=kerberos_integration ./internal/kerberos
 ```
 
@@ -245,7 +246,7 @@ pxgo CI now runs the normal test suite on both `ubuntu-latest` and `windows-late
 | PAC file execution | Same helper functions (`dnsResolve`, `myIpAddress`, `alert`); same return-value parsing |
 | HTTPS upstream proxy | Both support `https://` upstream proxy URLs |
 | noproxy / allow rules | CIDR, wildcard, IP range, domain |
-| Kerberos ticket lifecycle | Same check/renewal/retry intervals; Heimdal and MIT detection; Unix password `kinit` runs through a PTY |
+| Kerberos upstream auth | Linux/macOS managed ccache, Heimdal/MIT ticket lifecycle, PTY password `kinit`, and HTTP/CONNECT SPNEGO for `HTTP/<proxy-host>`; Windows uses current-user SSPI |
 | Proxy reload for PAC/system proxy | HTTP(S) PAC sources and Windows system proxy settings reloaded on `proxyreload` interval |
 | CONNECT tunneling | Idle timeout, bidirectional relay |
 | Log levels 0-4 | `--verbose`, `--debug`, `--uniqlog`, `--log=N`, `PXGO_LOG=`, `settings:log=` |

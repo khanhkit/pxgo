@@ -96,19 +96,27 @@ Upstream Digest supports legacy MD5 without qop and MD5 with `qop=auth`. Unsuppo
 
 ## Kerberos
 
-The current Unix Kerberos manager can acquire and refresh a per-process credential
-cache with `kinit`/`klist`, but pxgo does **not** have a Unix GSSAPI/SPNEGO consumer
-that turns that cache into upstream HTTP proxy authentication. Therefore the
-user-facing `--kerberos` mode is fail-closed rather than pretending ticket
-acquisition is end-to-end proxy authentication.
+On Linux and macOS, `--kerberos` uses the existing ticket manager to acquire and
+refresh a per-process `FILE:` credential cache with `kinit`/`klist`. When an
+upstream proxy answers with `407 Proxy Authentication Required` and a `Negotiate`
+challenge, pxgo consumes that ccache to obtain a service ticket for
+`HTTP/<proxy-host>` and emits an RFC 4178 SPNEGO token. Both ordinary HTTP proxy
+requests and CONNECT tunnels use the same Kerberos-only path; a rejected Kerberos
+exchange is not silently downgraded to NTLM.
+
+`--kerberos` requires `--username`. `KRB5_CONFIG` may be set explicitly; standard
+Linux/macOS Kerberos config locations are used when available. The first proxy-auth
+attempt waits only for an already-running initial ticket refresh, with a bounded
+wait, rather than starting a second `kinit`.
 
 On Windows, upstream `Negotiate`/`NTLM` is handled separately through current-user
 SSPI. Omit `--kerberos` and explicit upstream username/password credentials to use
-that path. `Negotiate` is reported as Kerberos only when the authentication token
-provides Kerberos mechanism evidence; otherwise it remains `Negotiate` or `NTLM`.
+that path. `Negotiate` is reported as Kerberos only when mechanism evidence is
+available; otherwise it remains `Negotiate` or `NTLM`.
 
-The `internal/kerberos` package and its MIT/Heimdal integration harness remain for
-ticket lifecycle testing and future GSSAPI integration.
+The build-tagged MIT/Heimdal integration harness covers ticket lifecycle and can
+also exercise real `HTTP/<proxy-host>` SPNEGO acquisition by setting
+`PXGO_KERBEROS_PROXY_HOST`.
 
 ## Client Authentication
 
@@ -124,8 +132,8 @@ Supported client auth modes are `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `ANY`,
 `ANYSAFE`, and `NONE`. For **downstream client authentication**, `NEGOTIATE` is
 a compatibility mode for NTLMSSP carried directly under the Negotiate scheme or
 wrapped in SPNEGO. It does **not** accept Kerberos/GSSAPI tokens. This downstream
-compatibility mode is separate from Windows upstream SSPI; Unix end-to-end Kerberos
-proxy authentication is currently unsupported.
+compatibility mode is separate from Windows upstream SSPI and from Linux/macOS
+**upstream** Kerberos/SPNEGO authentication.
 
 ## Remote Clients
 

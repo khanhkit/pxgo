@@ -16,18 +16,14 @@ func TestAPISS0019KerberosProxyFeatureDisabledIsValid(t *testing.T) {
 	}
 }
 
-func TestAPISS0019KerberosProxyFeatureRejectsUnixTicketOnlyMode(t *testing.T) {
+func TestAPISS0019KerberosProxyFeatureAllowsUnixSPNEGO(t *testing.T) {
 	cfg := config.Default()
 	cfg.Kerberos = true
 
 	for _, goos := range []string{"linux", "darwin"} {
 		t.Run(goos, func(t *testing.T) {
-			err := validateKerberosFeatureForOS(cfg, goos)
-			if !errors.Is(err, kerberos.ErrProxyAuthUnsupported) {
-				t.Fatalf("err=%v, want ErrProxyAuthUnsupported", err)
-			}
-			if !strings.Contains(strings.ToLower(err.Error()), "gssapi") {
-				t.Fatalf("error must explain missing GSSAPI consumer: %q", err)
+			if err := validateKerberosFeatureForOS(cfg, goos); err != nil {
+				t.Fatalf("supported Unix Kerberos SPNEGO mode rejected: %v", err)
 			}
 		})
 	}

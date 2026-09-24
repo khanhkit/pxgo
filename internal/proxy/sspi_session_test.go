@@ -170,7 +170,7 @@ func TestAPISS0002HTTPSSPIStartFailureIsExplicitAndCloses407(t *testing.T) {
 	req := &http.Request{Method: http.MethodGet, URL: &url.URL{Scheme: "http", Host: "example.test", Path: "/"}, Header: make(http.Header), Body: http.NoBody}
 	s := &Server{cfg: config.Default()}
 
-	got, err := s.retryHTTPProxyAuth(&http.Transport{}, req, req.URL, nil, req.URL.String(), "", "proxy.corp.example", resp)
+	got, err := s.retryHTTPProxyAuth(&http.Transport{}, req, req.URL, nil, req.URL.String(), "proxy.corp.example", resp)
 	if got != nil && got.Body != nil {
 		defer got.Body.Close()
 	}

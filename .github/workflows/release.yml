@@ -192,6 +192,12 @@ jobs:
           fi
           test -s dist/RELEASE_NOTES.md
 
+      - name: Generate direct-install Scoop manifest
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: scripts/generate-scoop-manifest.sh "$TAG" dist
+
       - name: Stage immutable release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -306,7 +312,10 @@ jobs:
           fi
 
           mapfile -t assets < <(
-            jq -r '.[] | select(.type == "Archive" or .type == "SBOM" or .type == "Checksum") | .path' dist/artifacts.json | sort
+            {
+              jq -r '.[] | select(.type == "Archive" or .type == "SBOM" or .type == "Checksum") | .path' dist/artifacts.json
+              printf '%s\n' dist/pxgo-scoop.json
+            } | sort
           )
           if (( ${#assets[@]} == 0 )); then
             echo "no publishable release assets found in staged candidate metadata" >&2
@@ -396,7 +405,10 @@ jobs:
           (cd dist && sha256sum --check checksums.txt)
 
           mapfile -t assets < <(
-            jq -r '.[] | select(.type == "Archive" or .type == "SBOM" or .type == "Checksum") | .path' dist/artifacts.json | sort
+            {
+              jq -r '.[] | select(.type == "Archive" or .type == "SBOM" or .type == "Checksum") | .path' dist/artifacts.json
+              printf '%s\n' dist/pxgo-scoop.json
+            } | sort
           )
           test "${#assets[@]}" -gt 0
           for asset in "${assets[@]}"; do
@@ -437,9 +449,16 @@ jobs:
     steps:
       - name: Update formula
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           TAG: ${{ needs.release-candidate.outputs.tag }}
         run: |
+          test -n "$HOMEBREW_DEPLOY_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$HOMEBREW_DEPLOY_KEY" > ~/.ssh/pxgo-homebrew-tap
+          chmod 600 ~/.ssh/pxgo-homebrew-tap
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/pxgo-homebrew-tap -o IdentitiesOnly=yes'
+
           VERSION="${TAG#v}"
           BASE_URL="https://github.com/khanhkit/pxgo/releases/download/${TAG}"
 
@@ -450,7 +469,7 @@ jobs:
           SHA_LINUX_ARM64=$(grep  "pxgo_linux_arm64.tar.gz"  /tmp/checksums.txt | awk '{print $1}')
           SHA_LINUX_AMD64=$(grep  "pxgo_linux_amd64.tar.gz"  /tmp/checksums.txt | awk '{print $1}')
 
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/khanhkit/homebrew-tap.git" /tmp/tap
+          git clone "git@github.com:khanhkit/homebrew-tap.git" /tmp/tap
           mkdir -p /tmp/tap/Formula
 
           cat > /tmp/tap/Formula/pxgo.rb << FORMULA

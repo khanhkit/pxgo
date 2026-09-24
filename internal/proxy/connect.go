@@ -15,6 +15,7 @@ import (
 
 	"github.com/khanhkit/pxgo/internal/config"
 	"github.com/khanhkit/pxgo/internal/debug"
+	"github.com/khanhkit/pxgo/internal/kerberos"
 	"github.com/khanhkit/pxgo/internal/supervisor"
 	"github.com/khanhkit/pxgo/internal/wproxy"
 )
@@ -193,13 +194,14 @@ func (s *Server) sendUpstreamConnectBounded(ctx context.Context, conn net.Conn, 
 }
 
 func (s *Server) sendUpstreamConnect(conn net.Conn, target, proxyHost, passthroughAuth string) ([]byte, error) {
-	return sendUpstreamConnectWithAuthObserved(
+	return sendUpstreamConnectWithAuthObservedKerberos(
 		conn,
 		target,
 		proxyHost,
 		s.cfg,
 		"",
 		passthroughAuth,
+		s.krb,
 		s.forceKerberosReloadForUpstreamAuth,
 		s.authMechanism.Record,
 	)
@@ -223,11 +225,15 @@ func sendUpstreamConnectWithAuth(conn net.Conn, target, proxyHost string, cfg co
 }
 
 func sendUpstreamConnectWithAuthObserved(conn net.Conn, target, proxyHost string, cfg config.Config, challenge, passthroughAuth string, onAuthFailure func(*http.Response), onAuthSuccess func(string)) ([]byte, error) {
+	return sendUpstreamConnectWithAuthObservedKerberos(conn, target, proxyHost, cfg, challenge, passthroughAuth, nil, onAuthFailure, onAuthSuccess)
+}
+
+func sendUpstreamConnectWithAuthObservedKerberos(conn net.Conn, target, proxyHost string, cfg config.Config, challenge, passthroughAuth string, manager *kerberos.Manager, onAuthFailure func(*http.Response), onAuthSuccess func(string)) ([]byte, error) {
 	// One reader for all auth retry attempts: bytes buffered behind an
 	// intermediate 407 must not be stranded in a discarded reader.
 	reader := bufio.NewReader(conn)
 	var mechanism authMechanismObservation
-	if err := sendUpstreamConnectAttemptObserved(
+	if err := sendUpstreamConnectAttemptObservedKerberos(
 		conn,
 		reader,
 		target,
@@ -237,6 +243,7 @@ func sendUpstreamConnectWithAuthObserved(conn net.Conn, target, proxyHost string
 		passthroughAuth,
 		0,
 		nil,
+		manager,
 		onAuthFailure,
 		&mechanism,
 	); err != nil {
@@ -255,7 +262,7 @@ func sendUpstreamConnectWithAuthObserved(conn net.Conn, target, proxyHost string
 }
 
 func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target, proxyHost string, cfg config.Config, challenge, passthroughAuth string, attempts int, session authSession, onAuthFailure func(*http.Response)) error {
-	return sendUpstreamConnectAttemptObserved(
+	return sendUpstreamConnectAttemptObservedKerberos(
 		conn,
 		reader,
 		target,
@@ -265,12 +272,13 @@ func sendUpstreamConnectAttempt(conn net.Conn, reader *bufio.Reader, target, pro
 		passthroughAuth,
 		attempts,
 		session,
+		nil,
 		onAuthFailure,
 		nil,
 	)
 }
 
-func sendUpstreamConnectAttemptObserved(conn net.Conn, reader *bufio.Reader, target, proxyHost string, cfg config.Config, challenge, passthroughAuth string, attempts int, session authSession, onAuthFailure func(*http.Response), mechanism *authMechanismObservation) error {
+func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Reader, target, proxyHost string, cfg config.Config, challenge, passthroughAuth string, attempts int, session authSession, manager *kerberos.Manager, onAuthFailure func(*http.Response), mechanism *authMechanismObservation) error {
 	if mechanism != nil {
 		mechanism.ObserveHeader(challenge)
 	}
@@ -282,7 +290,7 @@ func sendUpstreamConnectAttemptObserved(conn net.Conn, reader *bufio.Reader, tar
 		var err error
 		auth, err = sspiSessionAuth(session, challenge)
 		if err != nil {
-			return fmt.Errorf("continue SSPI CONNECT authentication: %w", err)
+			return fmt.Errorf("continue upstream CONNECT authentication: %w", err)
 		}
 	} else {
 		auth = upstreamProxyAuthHeader(cfg, http.MethodConnect, target, challenge, passthroughAuth)
@@ -311,7 +319,19 @@ func sendUpstreamConnectAttemptObserved(conn net.Conn, reader *bufio.Reader, tar
 		}
 		nextSession := session
 		createdSession := false
-		if nextSession == nil && sspiSessionCandidate(cfg, nextChallenge) {
+		if nextSession == nil && kerberosSessionCandidate(cfg, nextChallenge) {
+			if mechanism != nil {
+				mechanism.ObserveMechanism(authMechanismKerberos)
+			}
+			nextSession, err = kerberosSessionFactory(manager, proxyHost)
+			if err != nil {
+				if onAuthFailure != nil {
+					onAuthFailure(resp)
+				}
+				return fmt.Errorf("start Kerberos SPNEGO CONNECT authentication: %w", err)
+			}
+			createdSession = true
+		} else if nextSession == nil && sspiSessionCandidate(cfg, nextChallenge) {
 			nextSession, err = sspiSessionFactory(nextChallenge, proxyHost)
 			if err != nil {
 				return fmt.Errorf("start SSPI CONNECT authentication: %w", err)
@@ -319,16 +339,16 @@ func sendUpstreamConnectAttemptObserved(conn net.Conn, reader *bufio.Reader, tar
 			createdSession = true
 		}
 		if nextSession != nil {
-			err = sendUpstreamConnectAttemptObserved(conn, reader, target, proxyHost, cfg, nextChallenge, passthroughAuth, attempts+1, nextSession, onAuthFailure, mechanism)
+			err = sendUpstreamConnectAttemptObservedKerberos(conn, reader, target, proxyHost, cfg, nextChallenge, passthroughAuth, attempts+1, nextSession, manager, onAuthFailure, mechanism)
 			if createdSession {
 				if closeErr := nextSession.Close(); closeErr != nil && err == nil {
-					err = fmt.Errorf("close SSPI CONNECT session: %w", closeErr)
+					err = fmt.Errorf("close upstream CONNECT auth session: %w", closeErr)
 				}
 			}
 			return err
 		}
 		if auth := upstreamProxyAuthHeader(cfg, http.MethodConnect, target, nextChallenge, passthroughAuth); auth != "" {
-			return sendUpstreamConnectAttemptObserved(conn, reader, target, proxyHost, cfg, nextChallenge, passthroughAuth, attempts+1, nil, onAuthFailure, mechanism)
+			return sendUpstreamConnectAttemptObservedKerberos(conn, reader, target, proxyHost, cfg, nextChallenge, passthroughAuth, attempts+1, nil, manager, onAuthFailure, mechanism)
 		}
 	}
 	if resp.StatusCode/100 != 2 {

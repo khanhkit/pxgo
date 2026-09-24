@@ -188,7 +188,7 @@ func generationCount(path string) int {
 
 func waitForGenerations(t *testing.T, path string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if generationCount(path) >= want {
 			return

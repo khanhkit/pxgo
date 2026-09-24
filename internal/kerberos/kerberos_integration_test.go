@@ -39,6 +39,30 @@ func TestKerberosIntegrationKDC(t *testing.T) {
 	}
 }
 
+func TestKerberosIntegrationSPNEGOToken(t *testing.T) {
+	requireIntegrationEnv(t, "PXGO_KERBEROS_PRINCIPAL", "PXGO_KERBEROS_PASSWORD", "KRB5_CONFIG")
+	proxyHost := strings.TrimSpace(os.Getenv("PXGO_KERBEROS_PROXY_HOST"))
+	if proxyHost == "" {
+		t.Skip("PXGO_KERBEROS_PROXY_HOST is required to exercise HTTP/<host> service-ticket SPNEGO")
+	}
+	principal := os.Getenv("PXGO_KERBEROS_PRINCIPAL")
+	password := os.Getenv("PXGO_KERBEROS_PASSWORD")
+	isHeimdal := strings.EqualFold(os.Getenv("PXGO_KERBEROS_FLAVOR"), "heimdal")
+	mgr := New(principal, func() *string { return &password }, isHeimdal)
+	t.Cleanup(mgr.Cleanup)
+
+	if ok := mgr.KinitWithPassword(); !ok {
+		t.Fatalf("kinit failed before SPNEGO token acquisition; backoff=%s", mgr.Backoff)
+	}
+	token, err := mgr.SPNEGOToken(proxyHost)
+	if err != nil {
+		t.Fatalf("SPNEGOToken(%q): %v", proxyHost, err)
+	}
+	if len(token) == 0 {
+		t.Fatal("SPNEGOToken returned an empty token")
+	}
+}
+
 func requireIntegrationEnv(t *testing.T, names ...string) {
 	t.Helper()
 	for _, name := range names {

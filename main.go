@@ -36,6 +36,12 @@ var (
 )
 
 const (
+	selfTestAll      = "all"
+	selfTestHTTPURL  = "http://httpbin.org"
+	selfTestHTTPSURL = "https://httpbin.org"
+)
+
+const (
 	authNone               = "NONE"
 	localhostIP            = "127.0.0.1"
 	controlShutdownTimeout = 5 * time.Second
@@ -351,7 +357,7 @@ Options:
   --useragent=VALUE               Override forwarded User-Agent
   --auth=TYPE                     Upstream auth: ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC, NONE
   --username=USER                 Upstream auth username
-  --kerberos                      Fail-closed: Unix ticket cache is not upstream GSSAPI auth; Windows SSPI does not use this flag
+  --kerberos                      Use Kerberos/SPNEGO upstream auth on Linux/macOS; Windows SSPI does not use this flag
   --client-auth=TYPE              Client auth: NONE, ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC (Basic-capable modes are loopback-only)
   --client-username=USER          Downstream auth username
   --client-nosspi=0|1             Disable SSPI for downstream auth compatibility
@@ -640,11 +646,11 @@ func doSelfTestRequest(client *http.Client, req *http.Request, authCfg config.Co
 }
 
 func selfTestURLs(test string) []string {
-	if test == "all" || test == "1" {
-		return []string{"http://httpbin.org", "https://httpbin.org"}
+	if test == selfTestAll || test == "1" {
+		return []string{selfTestHTTPURL, selfTestHTTPSURL}
 	}
-	if strings.HasPrefix(test, "all:") {
-		base := strings.TrimPrefix(test, "all:")
+	if strings.HasPrefix(test, selfTestAll+":") {
+		base := strings.TrimPrefix(test, selfTestAll+":")
 		if strings.Contains(base, "://") {
 			return []string{base}
 		}
@@ -654,7 +660,7 @@ func selfTestURLs(test string) []string {
 }
 
 func selfTestAllMode(test string) bool {
-	return test == "all" || test == "1" || strings.HasPrefix(test, "all:")
+	return test == selfTestAll || test == "1" || strings.HasPrefix(test, selfTestAll+":")
 }
 
 func waitSelfTestReady(s *proxy.Server, errc <-chan error, timeout time.Duration) error {

@@ -89,3 +89,34 @@ func TestTOBSEVT010RingRedactsBeforeStorage(t *testing.T) {
 		t.Fatalf("event leaked secret: %+v", got[0])
 	}
 }
+
+func TestProcessMetricsReturnsUsableSnapshot(t *testing.T) {
+	snapshot := ProcessMetrics()
+	if snapshot.Goroutines <= 0 {
+		t.Fatalf("goroutines=%d want positive", snapshot.Goroutines)
+	}
+	if snapshot.CPUSeconds < 0 {
+		t.Fatalf("cpu seconds=%f want non-negative", snapshot.CPUSeconds)
+	}
+	if snapshot.Error == "" && snapshot.RSSBytes == 0 {
+		t.Fatal("successful process metrics returned zero RSS")
+	}
+}
+
+func TestRedactQueryFallbackAndBoundTextEdges(t *testing.T) {
+	if got := RedactQueryFallback("/path?token=secret"); got != "/path?REDACTED" {
+		t.Fatalf("query fallback=%q", got)
+	}
+	if got := RedactQueryFallback("/path"); got != "/path" {
+		t.Fatalf("plain fallback=%q", got)
+	}
+	if got := boundText("abcdef", 3); got != "abc" {
+		t.Fatalf("short bound=%q", got)
+	}
+	if got := boundText("abcdef", 5); got != "ab..." {
+		t.Fatalf("ellipsis bound=%q", got)
+	}
+	if got := boundText("abc", 5); got != "abc" {
+		t.Fatalf("unbounded short=%q", got)
+	}
+}

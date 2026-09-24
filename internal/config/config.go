@@ -31,7 +31,8 @@ const LogStdoutTarget = "<stdout>"
 const goosWindows = "windows"
 
 const (
-	envPrefix = "PXGO_"
+	envPrefix       = "PXGO_"
+	legacyEnvPrefix = "PX_"
 
 	keyServer         = "server"
 	keyPAC            = "pac"
@@ -331,10 +332,10 @@ func ParseArgs(args []string) (Config, error) {
 		}
 		isSave = value
 	}
-	if raw, ok := os.LookupEnv(envPrefix + "SAVE"); ok {
+	if raw, source, ok := lookupCompatEnv("SAVE"); ok {
 		value, err := parseBoolValue(raw)
 		if err != nil {
-			return cfg, fmt.Errorf("environment %sSAVE: %w", envPrefix, err)
+			return cfg, fmt.Errorf("environment %s: %w", source, err)
 		}
 		isSave = value
 	}
@@ -348,9 +349,9 @@ func ParseArgs(args []string) (Config, error) {
 	configPathSource := ""
 	if configPath != "" {
 		configPathSource = "cli"
-	} else if raw, ok := os.LookupEnv(envPrefix + "CONFIG"); ok {
+	} else if raw, source, ok := lookupCompatEnv("CONFIG"); ok {
 		configPath = raw
-		configPathSource = "env:" + envPrefix + "CONFIG"
+		configPathSource = "env:" + source
 	} else if raw, ok := dotenv[keyConfig]; ok {
 		configPath = raw
 		configPathSource = dotenvSource
@@ -510,18 +511,46 @@ func hasBareArg(args []string, name string) bool {
 	return false
 }
 
+func lookupCompatEnv(name string) (string, string, bool) {
+	if value, ok := os.LookupEnv(envPrefix + name); ok {
+		return value, envPrefix + name, true
+	}
+	if value, ok := os.LookupEnv(legacyEnvPrefix + name); ok {
+		return value, legacyEnvPrefix + name, true
+	}
+	return "", "", false
+}
+
 func applyEnv(cfg *Config) error {
-	for _, item := range os.Environ() {
-		key, val, ok := strings.Cut(item, "=")
-		if !ok || !strings.HasPrefix(key, envPrefix) || len(key) <= len(envPrefix) {
-			continue
+	values := map[string]struct {
+		value  string
+		source string
+	}{}
+	for _, prefix := range []string{legacyEnvPrefix, envPrefix} {
+		for _, item := range os.Environ() {
+			key, val, ok := strings.Cut(item, "=")
+			if !ok || !strings.HasPrefix(key, prefix) || len(key) <= len(prefix) {
+				continue
+			}
+			name := strings.ToLower(key[len(prefix):])
+			if isAuxiliaryEnvKey(name) {
+				continue
+			}
+			values[name] = struct {
+				value  string
+				source string
+			}{value: val, source: "env:" + key}
 		}
-		name := strings.ToLower(key[len(envPrefix):])
-		if isAuxiliaryEnvKey(name) {
-			continue
-		}
-		if err := applyValueFrom(cfg, name, val, "env:"+key); err != nil {
-			return fmt.Errorf("environment %s: %w", key, err)
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, name := range keys {
+		entry := values[name]
+		if err := applyValueFrom(cfg, name, entry.value, entry.source); err != nil {
+			return fmt.Errorf("environment %s: %w", strings.TrimPrefix(entry.source, "env:"), err)
 		}
 	}
 	return nil
@@ -555,7 +584,7 @@ func isAuxiliaryEnvKey(name string) bool {
 
 func loadDotenv() (map[string]string, string, error) {
 	values := map[string]string{}
-	if explicit, ok := os.LookupEnv(envPrefix + "DOTENV"); ok {
+	if explicit, _, ok := lookupCompatEnv("DOTENV"); ok {
 		explicit = strings.TrimSpace(explicit)
 		if explicit == "" {
 			return values, "", nil
@@ -593,6 +622,7 @@ func loadDotenvFile(path string, values map[string]string) (bool, error) {
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 4096), maxConfigLineBytes)
+	priorities := map[string]int{}
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
@@ -608,15 +638,31 @@ func loadDotenvFile(path string, values map[string]string) (bool, error) {
 			return false, fmt.Errorf("line %d: expected KEY=VALUE", lineNo)
 		}
 		key = strings.TrimSpace(key)
-		if !strings.HasPrefix(key, envPrefix) {
+		prefix := ""
+		priority := 0
+		switch {
+		case strings.HasPrefix(key, envPrefix) && len(key) > len(envPrefix):
+			prefix, priority = envPrefix, 2
+		case strings.HasPrefix(key, legacyEnvPrefix) && len(key) > len(legacyEnvPrefix):
+			prefix, priority = legacyEnvPrefix, 1
+		default:
 			continue
 		}
-		if _, present := os.LookupEnv(key); present {
+		name := strings.ToLower(key[len(prefix):])
+		suffix := strings.ToUpper(key[len(prefix):])
+		if _, present := os.LookupEnv(envPrefix + suffix); present {
+			continue
+		}
+		if _, present := os.LookupEnv(legacyEnvPrefix + suffix); present {
+			continue
+		}
+		if priorities[name] > priority {
 			continue
 		}
 		val = strings.TrimSpace(val)
 		val = strings.Trim(val, `"'`)
-		values[strings.ToLower(key[len(envPrefix):])] = val
+		values[name] = val
+		priorities[name] = priority
 	}
 	if err := scanner.Err(); err != nil {
 		return false, err
@@ -956,26 +1002,26 @@ func configPathStrict(explicit string) (string, error) {
 	if explicit != "" {
 		return normalizePath(explicit), nil
 	}
-	if _, err := os.Stat("pxgo.ini"); err == nil {
-		abs, absErr := filepath.Abs("pxgo.ini")
-		if absErr != nil {
-			return "", absErr
-		}
-		return abs, nil
-	}
 	configDir, err := getConfigDirStrict()
 	if err != nil {
 		return "", err
 	}
-	configPath := filepath.Join(configDir, "pxgo.ini")
-	if _, err := os.Stat(configPath); err == nil {
-		return configPath, nil
+	for _, name := range []string{"pxgo.ini", "px.ini"} {
+		cwdPath, absErr := filepath.Abs(name)
+		if absErr != nil {
+			return "", absErr
+		}
+		for _, candidate := range []string{
+			cwdPath,
+			filepath.Join(configDir, name),
+			filepath.Join(GetScriptDir(), name),
+		} {
+			if _, statErr := os.Stat(candidate); statErr == nil {
+				return candidate, nil
+			}
+		}
 	}
-	scriptPath := filepath.Join(GetScriptDir(), "pxgo.ini")
-	if _, err := os.Stat(scriptPath); err == nil {
-		return scriptPath, nil
-	}
-	return configPath, nil
+	return filepath.Join(configDir, "pxgo.ini"), nil
 }
 
 func ConfigPathForSave(explicit string) string {

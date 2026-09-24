@@ -150,8 +150,8 @@ func TestCLIHelpAndVersion(t *testing.T) {
 		if !strings.Contains(text, "Usage:") || !strings.Contains(text, "--proxy") {
 			t.Fatalf("unexpected help:\n%s", out)
 		}
-		if !strings.Contains(text, "--kerberos") || !strings.Contains(strings.ToLower(text), "fail-closed") {
-			t.Fatalf("help must describe --kerberos as fail-closed:\n%s", out)
+		if !strings.Contains(text, "--kerberos") || !strings.Contains(strings.ToLower(text), "kerberos/spnego") {
+			t.Fatalf("help must describe Unix Kerberos/SPNEGO support:\n%s", out)
 		}
 	}
 	cmd := exec.Command(bin, "--version")
@@ -164,28 +164,27 @@ func TestCLIHelpAndVersion(t *testing.T) {
 	}
 }
 
-func TestCLIKerberosModeFailsClosed(t *testing.T) {
+func TestCLIKerberosModeContract(t *testing.T) {
 	bin := buildPx(t)
 	cmd := exec.Command(bin, "--kerberos")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("--kerberos unexpectedly succeeded:\n%s", out)
+		t.Fatalf("--kerberos without principal unexpectedly succeeded:\n%s", out)
 	}
 	text := strings.ToLower(string(out))
-	if !strings.Contains(text, "unsupported") {
-		t.Fatalf("unexpected --kerberos error:\n%s", out)
-	}
 	if runtime.GOOS == "windows" {
-		for _, want := range []string{"sspi", "omit --kerberos", "current-user"} {
+		for _, want := range []string{"unsupported", "sspi", "omit --kerberos", "current-user"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("windows --kerberos error missing %q:\n%s", want, out)
 			}
 		}
-	} else if !strings.Contains(text, "gssapi") {
-		t.Fatalf("unix --kerberos error must explain missing GSSAPI consumer:\n%s", out)
+		return
 	}
-	if strings.Contains(text, "requires --username") {
-		t.Fatalf("legacy misleading kerberos error leaked:\n%s", out)
+	if !strings.Contains(text, "requires --username") {
+		t.Fatalf("Unix --kerberos without principal must require --username:\n%s", out)
+	}
+	if strings.Contains(text, "unsupported") || strings.Contains(text, "missing gssapi") {
+		t.Fatalf("Unix --kerberos still reports the removed fail-closed contract:\n%s", out)
 	}
 }
 

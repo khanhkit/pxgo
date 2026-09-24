@@ -147,8 +147,10 @@ fi
 # Distribution identity contract.
 grep -A4 '^release:' .goreleaser.yaml | grep -q 'owner: khanhkit' || bad "GitHub release owner is not khanhkit"
 grep -q 'BASE_URL="https://github.com/khanhkit/pxgo/releases/download/' .github/workflows/release.yml || bad "Homebrew release URL does not target fork"
-grep -q 'github.com/khanhkit/homebrew-tap.git' .github/workflows/release.yml || bad "Homebrew tap target is not fork-owned"
+grep -q 'khanhkit/homebrew-tap.git' .github/workflows/release.yml || bad "Homebrew tap target is not fork-owned"
 grep -q "vars.PXGO_HOMEBREW_TAP_ENABLED == 'true'" .github/workflows/release.yml || bad "Homebrew publication lacks explicit opt-in gate"
+grep -q 'secrets.HOMEBREW_TAP_DEPLOY_KEY' .github/workflows/release.yml || bad "Homebrew publication is not using the tap-scoped deploy key"
+grep -q 'HOMEBREW_TAP_TOKEN' .github/workflows/release.yml && bad "Homebrew publication still references account-token credentials"
 [[ "$(awk '$1 == "module" {print $2; exit}' go.mod)" == 'github.com/khanhkit/pxgo' ]] || bad "Go module identity is not the authoritative fork"
 grep -q '^winget:' .goreleaser.yaml && bad "legacy WinGet publication config must remain retired"
 grep -q 'WINGET_TOKEN' .github/workflows/release.yml && bad "release workflow still references retired WinGet credentials"

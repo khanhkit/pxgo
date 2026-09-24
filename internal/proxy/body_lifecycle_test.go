@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 
@@ -206,9 +205,6 @@ func TestAPISS0016CloseInvalidatesMemoryAndFileBodies(t *testing.T) {
 }
 
 func TestAPISS0016RemoveFailureRemainsRetryable(t *testing.T) {
-	if runtime.GOOS == goosWindows {
-		t.Skip("directory permission semantics differ on Windows")
-	}
 	dir := t.TempDir()
 	budget := newReplayBudget(64)
 	body, err := newReplayableBodyWithLimits(context.Background(), io.NopCloser(bytes.NewReader([]byte("12345678"))), 8, testReplayLimits(dir), budget)
@@ -216,10 +212,9 @@ func TestAPISS0016RemoveFailureRemainsRetryable(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := body.path
-	if err := os.Chmod(dir, 0o500); err != nil {
-		t.Fatal(err)
+	body.removeFile = func(string) error {
+		return errors.New("synthetic remove failure")
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
 	if err := body.Close(); err == nil {
 		t.Fatal("expected remove failure")
@@ -231,9 +226,7 @@ func TestAPISS0016RemoveFailureRemainsRetryable(t *testing.T) {
 		t.Fatal("failed Close released budget while temp data still exists")
 	}
 
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	body.removeFile = os.Remove
 	if err := body.Close(); err != nil {
 		t.Fatal(err)
 	}
