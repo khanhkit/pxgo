@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-24
+
+### Added
+- Add end-to-end Linux/macOS Kerberos/SPNEGO upstream proxy authentication backed by the managed FILE ccache for HTTP and CONNECT flows
+- Add live MIT KDC coverage that provisions `HTTP/proxy.pxgo.test` and requires real SPNEGO service-ticket acquisition
+- Publish and automate the official Homebrew tap at `khanhkit/homebrew-tap`
+- Publish a checksum-pinned direct-install Scoop manifest with release assets
+- Add legacy Python px migration fallbacks for `PX_*` environment variables and `px.ini`
+
+### Changed
+- Prefer `PXGO_*` over legacy `PX_*`, and native `pxgo.ini` over fallback `px.ini`
+- Raise the Go 1.25 patch floor and update security-sensitive dependencies and pinned GitHub Actions
+- Expand reliability, CLI doctor/quit, HTTPS-parent proxy, and authentication regression coverage
+
+### Fixed
+- Make replay-body remove-failure retry tests deterministic across root, container, Linux, and Windows environments
+- Keep Unix Kerberos authentication from silently falling back after a rejected SPNEGO exchange
+- Restore the non-skipping Kerberos CI contract so SPNEGO integration cannot green by omitting its service-principal fixture
+- Resolve the code-scanning findings present before the parity remediation
+
+## [0.5.1] - 2026-09-22
+
+### Added
+- Add curated release notes and fork-owned distribution metadata
+
+### Changed
+- Build release candidates once, verify exact candidate archives on native runtimes, and promote unchanged verified bytes
+- Align release, Homebrew, documentation, and module identity with `khanhkit/pxgo`
+- Fix tagged-commit dry-run verification to use the existing tag version
+
 ## [0.5.0] - 2026-09-22
 
 ### Added
@@ -82,7 +112,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker support
 - Multi-platform builds: Linux, macOS, Windows (amd64, arm64)
 
-[Unreleased]: https://github.com/khanhkit/pxgo/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/khanhkit/pxgo/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/khanhkit/pxgo/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/khanhkit/pxgo/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/khanhkit/pxgo/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/khanhkit/pxgo/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/khanhkit/pxgo/compare/v0.2.0...v0.3.0
