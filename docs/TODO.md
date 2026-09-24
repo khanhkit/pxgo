@@ -13,9 +13,9 @@ These items are intentionally deferred external validation/governance work. They
 
 ## Authoritative upstream governance
 
-- [ ] Apply the repository-appropriate `main` branch protection policy on the authoritative upstream repository: strict Linux/Windows checks always; `0` required approvals for a solo-maintained repository, or a distinct approval when multi-maintainer governance requires it.
-- [ ] Apply release-tag protection for `v*` on the authoritative upstream repository.
-- [ ] If the manual real-AD workflow is enabled upstream, configure `pxgo-ad` for the repository ownership model: solo repositories may allow self-approval; multi-maintainer upstreams should require a distinct reviewer and keep self-review disabled.
+- [x] Apply the repository-appropriate `main` branch protection policy on the authoritative upstream repository: strict Linux/Windows checks always; `0` required approvals for a solo-maintained repository, or a distinct approval when multi-maintainer governance requires it. (`main` currently requires strict `Test (ubuntu-latest)` + `Test (windows-latest)` checks with admin enforcement.)
+- [x] Apply release-tag protection for `v*` on the authoritative upstream repository. (`Protect release tags v*` ruleset is active.)
+- [x] Configure the `pxgo-ad` protected environment for the repository ownership model. The current solo-maintainer environment requires the repository owner as reviewer and permits self-approval; runtime execution still waits on the external domain-joined runner below.
 
 ## Policy
 

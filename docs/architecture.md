@@ -16,9 +16,10 @@ The Go port is organized around one main binary and small internal packages.
 8. HTTPS `CONNECT` requests create a tunnel between client and target or client
    and upstream proxy.
 9. Optional upstream and client authentication is handled in `internal/proxy`.
-10. Kerberos ticket lifecycle utilities live in `internal/kerberos`; they do not
-    currently constitute Unix upstream GSSAPI proxy authentication. Windows
-    upstream Negotiate/NTLM is owned separately by SSPI code in `internal/proxy`.
+10. Kerberos ticket lifecycle and Unix SPNEGO token generation live in
+    `internal/kerberos`; Linux/macOS upstream `Negotiate` uses the manager-owned
+    FILE ccache to obtain `HTTP/<proxy-host>` service tickets. Windows upstream
+    Negotiate/NTLM remains a separate current-user SSPI path in `internal/proxy`.
 
 ## Packages
 
@@ -31,7 +32,7 @@ The Go port is organized around one main binary and small internal packages.
 | `internal/wproxy` | Proxy discovery model, manual proxy parsing, bypass rules |
 | `internal/pac` | PAC loading, JavaScript execution, Mozilla PAC helper functions |
 | `internal/dnscache` | TTL cache in front of `net.LookupIP` (60 s hits, 5 s misses, 4096-entry cap), shared by noproxy matching and PAC `dnsResolve()` |
-| `internal/kerberos` | `kinit`/`klist` orchestration and ticket refresh state; no upstream GSSAPI token consumer |
+| `internal/kerberos` | `kinit`/`klist` orchestration, bounded ticket refresh state, FILE-ccache readiness, and Linux/macOS Kerberos/SPNEGO token generation for upstream proxy auth |
 | `internal/debug` | Debug logging |
 | `internal/diagnostic` | Bounded/redacted operational snapshots and doctor state |
 | `internal/supervisor` | In-worker runtime progress/outcome classification and owner-scoped recovery coordination |
