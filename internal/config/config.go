@@ -72,7 +72,7 @@ const maxConfigLineBytes = 1 << 20
 var Defaults = map[string]string{
 	keyServer:         "",
 	keyPAC:            "",
-	keyPACEncoding:    "utf-8",
+	keyPACEncoding:    "auto",
 	keyPort:           "3128",
 	keyListen:         localhostIP,
 	keyGateway:        "0",

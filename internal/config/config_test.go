@@ -642,3 +642,10 @@ func TestParseArgsBareActions(t *testing.T) {
 		t.Fatalf("bare config flags should use value 1: %#v", cfg)
 	}
 }
+
+func TestDefaultPACEncodingTracksUpstreamAutoDetection(t *testing.T) {
+	cfg := Default()
+	if cfg.PACEncoding != "auto" {
+		t.Fatalf("default PAC encoding=%q want auto", cfg.PACEncoding)
+	}
+}

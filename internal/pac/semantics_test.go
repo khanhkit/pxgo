@@ -3,6 +3,8 @@ package pac
 import (
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -296,5 +298,78 @@ func TestAPISS0005PACDirectiveMappingIsTokenAware(t *testing.T) {
 	want := "http-proxy.example.test:80,https://secure.example.test:443,socks4://s4.example.test:1080,socks5://s5.example.test:1080,socks5://socks.example.test:1080,DIRECT"
 	if got != want {
 		t.Fatalf("normalized=%q want=%q", got, want)
+	}
+}
+
+func TestPXV012DefaultEncodingAutoDetectsLegacyPAC(t *testing.T) {
+	prefix := []byte("function FindProxyForURL(url, host) { var marker = '")
+	suffix := []byte("'; return marker.charCodeAt(0) === 8364 ? 'PROXY auto.default:8080' : 'DIRECT'; }")
+	content := append(append(prefix, byte(0x80)), suffix...)
+	p := New(writeSemanticPAC(t, content), "")
+	got, err := p.FindProxyForURLWithError("http://example.test", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "auto.default:8080" {
+		t.Fatalf("default auto result=%q", got)
+	}
+}
+
+func TestPXV012AutoEncodingHonorsHTTPContentTypeCharset(t *testing.T) {
+	prefix := []byte("function FindProxyForURL(url, host) { var marker = '")
+	suffix := []byte("'; return marker.charCodeAt(0) === 1040 ? 'PROXY charset.ok:8080' : 'DIRECT'; }")
+	content := append(append(prefix, byte(0xc0)), suffix...)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", `application/x-ns-proxy-autoconfig; charset="cp1251"`)
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	p := New(server.URL, "auto")
+	got, err := p.FindProxyForURLWithError("http://example.test", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "charset.ok:8080" {
+		t.Fatalf("content-type charset result=%q", got)
+	}
+}
+
+func TestPXV012AutoEncodingDetectsUTF32BOM(t *testing.T) {
+	const script = "function FindProxyForURL(url, host) { return 'PROXY utf32.ok:8080'; }"
+	for _, tc := range []struct {
+		name string
+		bom  []byte
+		put  func([]byte, rune) []byte
+	}{
+		{
+			name: "little endian",
+			bom:  []byte{0xff, 0xfe, 0x00, 0x00},
+			put: func(dst []byte, r rune) []byte {
+				return append(dst, byte(r), byte(r>>8), byte(r>>16), byte(r>>24))
+			},
+		},
+		{
+			name: "big endian",
+			bom:  []byte{0x00, 0x00, 0xfe, 0xff},
+			put: func(dst []byte, r rune) []byte {
+				return append(dst, byte(r>>24), byte(r>>16), byte(r>>8), byte(r))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := append([]byte(nil), tc.bom...)
+			for _, r := range script {
+				data = tc.put(data, r)
+			}
+			p := New(writeSemanticPAC(t, data), "auto")
+			got, err := p.FindProxyForURLWithError("http://example.test", "example.test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != "utf32.ok:8080" {
+				t.Fatalf("utf32 result=%q", got)
+			}
+		})
 	}
 }

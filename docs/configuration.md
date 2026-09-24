@@ -69,7 +69,7 @@ human-edited config with explanations.
 | --- | --- | --- |
 | `server`, `proxy` / `--proxy` | empty | Upstream proxy server list |
 | `pac` / `--pac` | empty | PAC URL or local file |
-| `pac_encoding` / `--pac-encoding` | `utf-8` | PAC source encoding: `utf-8`/`utf8`, `latin1`/`latin-1`, `cp1252`/`windows-1252`, `cp1251`/`windows-1251`, `utf-16`, `utf-16le`, `utf-16be`, or `auto` |
+| `pac_encoding` / `--pac-encoding` | `auto` | PAC source encoding: `auto`, `utf-8`/`utf8`, `latin1`/`latin-1`, `cp1252`/`windows-1252`, `cp1251`/`windows-1251`, `utf-16`, `utf-16le`, `utf-16be`, `utf-32`, `utf-32le`, or `utf-32be` |
 | `port` / `--port` | `3128` | Local listen port |
 | `listen` / `--listen` | `127.0.0.1` | Local listen address list |
 | `gateway` / `--gateway` | `0` | Bind all interfaces; requires restrictive `allow`, `hostonly`, or strong downstream auth |
@@ -104,10 +104,11 @@ Native system-proxy discovery is currently implemented only on Windows. On macOS
 
 ## PAC Semantics
 
-PAC source decoding is explicit. The default remains `utf-8`; `latin1` is an
-alias for ISO-8859-1, and Windows-1252/Windows-1251 plus UTF-16 variants are
-supported when selected. `auto` recognizes UTF BOMs, otherwise accepts valid
-UTF-8 and falls back to Windows-1252.
+PAC source decoding defaults to `auto`, matching current upstream Px behavior.
+For HTTP PAC sources, a valid `Content-Type` charset takes priority. Otherwise
+`auto` recognizes UTF-8/UTF-16/UTF-32 BOMs, accepts valid UTF-8, then tries
+Windows-1252 and Windows-1251 before the Latin-1 fallback. An explicit
+`--pac-encoding` continues to override detection.
 
 One loaded PAC generation owns one JavaScript global state. Calls are
 serialized at that generation boundary, so unusual PAC files that intentionally

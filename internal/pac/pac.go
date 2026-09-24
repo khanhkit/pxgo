@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -26,6 +27,7 @@ const (
 	directProxy       = "DIRECT"
 	localhostIP       = "127.0.0.1"
 	utf8Encoding      = "utf-8"
+	autoEncoding      = "auto"
 	maxPACBytes       = 4 << 20
 	maxPACResultBytes = 16 << 10
 	maxPACCandidates  = 32
@@ -77,8 +79,8 @@ type pacVM struct {
 }
 
 func New(location, encoding string) *Pac {
-	if encoding == "" {
-		encoding = utf8Encoding
+	if strings.TrimSpace(encoding) == "" {
+		encoding = autoEncoding
 	}
 	return &Pac{location: location, encoding: encoding}
 }
@@ -183,11 +185,36 @@ var windows1251High = [...]rune{
 	0x0451, 0x2116, 0x0454, 0x00bb, 0x0458, 0x0405, 0x0455, 0x0457,
 }
 
-func decodePAC(data []byte, name string) (string, error) {
+func decodePAC(data []byte, name, contentType string) (string, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = strings.ReplaceAll(name, "_", "-")
 	if name == "" {
-		name = utf8Encoding
+		name = autoEncoding
+	}
+
+	if name == autoEncoding {
+		if charset := contentTypeCharset(contentType); charset != "" {
+			return decodePAC(data, charset, "")
+		}
+		switch {
+		case bytes.HasPrefix(data, []byte{0x00, 0x00, 0xfe, 0xff}):
+			return decodeUTF32(data[4:], binary.BigEndian)
+		case bytes.HasPrefix(data, []byte{0xff, 0xfe, 0x00, 0x00}):
+			return decodeUTF32(data[4:], binary.LittleEndian)
+		case bytes.HasPrefix(data, []byte{0xef, 0xbb, 0xbf}):
+			return string(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})), nil
+		case bytes.HasPrefix(data, []byte{0xff, 0xfe}), bytes.HasPrefix(data, []byte{0xfe, 0xff}):
+			return decodeUTF16(data, nil, true)
+		case utf8.Valid(data):
+			return string(data), nil
+		}
+		if out, ok := decodeSingleByteStrict(data, cp1252Encoding); ok {
+			return out, nil
+		}
+		if out, ok := decodeSingleByteStrict(data, cp1251Encoding); ok {
+			return out, nil
+		}
+		return decodeSingleByte(data, latin1Encoding), nil
 	}
 
 	switch name {
@@ -209,20 +236,49 @@ func decodePAC(data []byte, name string) (string, error) {
 		return decodeUTF16(data, binary.LittleEndian, false)
 	case "utf-16be", "utf16be":
 		return decodeUTF16(data, binary.BigEndian, false)
-	case "auto":
+	case "utf-32", "utf32":
 		switch {
-		case bytes.HasPrefix(data, []byte{0xef, 0xbb, 0xbf}):
-			return string(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})), nil
-		case bytes.HasPrefix(data, []byte{0xff, 0xfe}), bytes.HasPrefix(data, []byte{0xfe, 0xff}):
-			return decodeUTF16(data, nil, true)
-		case utf8.Valid(data):
-			return string(data), nil
+		case bytes.HasPrefix(data, []byte{0x00, 0x00, 0xfe, 0xff}):
+			return decodeUTF32(data[4:], binary.BigEndian)
+		case bytes.HasPrefix(data, []byte{0xff, 0xfe, 0x00, 0x00}):
+			return decodeUTF32(data[4:], binary.LittleEndian)
 		default:
-			return decodeSingleByte(data, cp1252Encoding), nil
+			return "", errors.New("PAC UTF-32 source is missing BOM")
 		}
+	case "utf-32le", "utf32le":
+		return decodeUTF32(bytes.TrimPrefix(data, []byte{0xff, 0xfe, 0x00, 0x00}), binary.LittleEndian)
+	case "utf-32be", "utf32be":
+		return decodeUTF32(bytes.TrimPrefix(data, []byte{0x00, 0x00, 0xfe, 0xff}), binary.BigEndian)
 	default:
 		return "", fmt.Errorf("unsupported PAC encoding %q", name)
 	}
+}
+
+func contentTypeCharset(contentType string) string {
+	if strings.TrimSpace(contentType) == "" {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(params["charset"])
+}
+
+func decodeSingleByteStrict(data []byte, name string) (string, bool) {
+	for _, b := range data {
+		switch name {
+		case cp1252Encoding:
+			if b == 0x81 || b == 0x8d || b == 0x8f || b == 0x90 || b == 0x9d {
+				return "", false
+			}
+		case cp1251Encoding:
+			if b == 0x98 {
+				return "", false
+			}
+		}
+	}
+	return decodeSingleByte(data, name), true
 }
 
 func decodeSingleByte(data []byte, name string) string {
@@ -292,12 +348,27 @@ func decodeUTF16(data []byte, order binary.ByteOrder, requireBOM bool) (string, 
 	return string(runes), nil
 }
 
+func decodeUTF32(data []byte, order binary.ByteOrder) (string, error) {
+	if len(data)%4 != 0 {
+		return "", errors.New("PAC UTF-32 source has invalid byte length")
+	}
+	runes := make([]rune, 0, len(data)/4)
+	for i := 0; i < len(data); i += 4 {
+		value := order.Uint32(data[i:])
+		if value > utf8.MaxRune || 0xd800 <= value && value <= 0xdfff {
+			return "", errors.New("PAC UTF-32 source contains invalid code point")
+		}
+		runes = append(runes, rune(value))
+	}
+	return string(runes), nil
+}
+
 func (p *Pac) load() (*pacRuntime, error) {
-	data, err := p.readPACData()
+	source, err := p.readPACSource()
 	if err != nil {
 		return nil, fmt.Errorf("read PAC: %w", err)
 	}
-	text, err := decodePAC(data, p.encoding)
+	text, err := decodePAC(source.data, p.encoding, source.contentType)
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +424,17 @@ func runPACBounded(vm *goja.Runtime, run func() (goja.Value, error)) (goja.Value
 	return run()
 }
 
+type pacSource struct {
+	data        []byte
+	contentType string
+}
+
 func (p *Pac) readPACData() ([]byte, error) {
+	source, err := p.readPACSource()
+	return source.data, err
+}
+
+func (p *Pac) readPACSource() (pacSource, error) {
 	loc := strings.ToLower(p.location)
 	if strings.HasPrefix(loc, "http://") || strings.HasPrefix(loc, "https://") {
 		client := http.Client{
@@ -365,22 +446,26 @@ func (p *Pac) readPACData() ([]byte, error) {
 		}
 		resp, err := client.Get(p.location)
 		if err != nil {
-			return nil, err
+			return pacSource{}, err
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			return nil, fmt.Errorf("PAC URL returned %s", resp.Status)
+			return pacSource{}, fmt.Errorf("PAC URL returned %s", resp.Status)
 		}
 		data, err := io.ReadAll(io.LimitReader(resp.Body, maxPACBytes+1))
 		if err != nil {
-			return nil, err
+			return pacSource{}, err
 		}
 		if len(data) > maxPACBytes {
-			return nil, fmt.Errorf("PAC body exceeds %d bytes", maxPACBytes)
+			return pacSource{}, fmt.Errorf("PAC body exceeds %d bytes", maxPACBytes)
 		}
-		return data, nil
+		return pacSource{data: data, contentType: resp.Header.Get("Content-Type")}, nil
 	}
-	return os.ReadFile(p.location)
+	data, err := os.ReadFile(p.location)
+	if err != nil {
+		return pacSource{}, err
+	}
+	return pacSource{data: data}, nil
 }
 
 // FindProxyForURLWithError evaluates the active PAC generation and surfaces
