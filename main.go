@@ -222,6 +222,7 @@ func isOneShotConfig(cfg config.Config) bool {
 }
 
 func runGuardianParent(config.Config) int {
+	raiseNofileLimitBestEffort()
 	executable, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -257,6 +258,7 @@ func runGuardianParent(config.Config) int {
 }
 
 func runGuardianWorker(cfg config.Config, control guardian.WorkerControl) int {
+	raiseNofileLimitBestEffort()
 	setupDebugBestEffort(cfg)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
