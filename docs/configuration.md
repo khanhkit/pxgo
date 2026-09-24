@@ -157,8 +157,18 @@ Store credentials interactively (prompts with no echo, saves to OS keyring):
 ```
 
 On Windows this uses Credential Manager; on macOS, Keychain; on Linux,
-libsecret. Once stored, pxgo loads the password automatically when the
-matching username is supplied.
+the Secret Service D-Bus interface (typically GNOME Keyring). Once stored,
+pxgo loads the password automatically when the matching username is supplied.
+
+On headless Linux, a working session D-Bus plus a Secret Service provider is
+required. `gnome-keyring-daemon` 48+ also expects `~/.local/share/keyrings` to
+be owned by the current user with mode `0700`; incorrect ownership or
+permissions can surface as a dismissed prompt or unavailable keyring. Password
+store operations surface the backend error with the explicit plaintext fallback
+option. Optional startup lookup remains best-effort so an unavailable keyring
+does not block flows that already have usable credentials (for example, an
+existing Kerberos ticket cache). If no OS keyring is available, use the
+explicit plaintext fallback below.
 
 For non-interactive runs (Docker, CI), use environment variables instead:
 

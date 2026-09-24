@@ -150,9 +150,12 @@ pxgo --config=/path/to/pxgo.ini
 The repository includes a fully commented sample config at [pxgo.ini](pxgo.ini).
 
 Passwords stored with `--password`/`--client-password` go to the OS keyring
-(Credential Manager, Keychain, or libsecret). Set `PXGO_KEYRING_PLAINTEXT=1`
-to use a plaintext file instead (for Docker/CI), and `PXGO_KEYRING_FILE=PATH`
-to choose where it lives — see [docs/configuration.md](docs/configuration.md).
+(Credential Manager, Keychain, or the Linux Secret Service D-Bus interface).
+Headless Linux requires a working Secret Service session; backend failures are
+reported instead of being mistaken for a missing password. Set
+`PXGO_KEYRING_PLAINTEXT=1` to use a plaintext file instead (for Docker/CI), and
+`PXGO_KEYRING_FILE=PATH` to choose where it lives — see
+[docs/configuration.md](docs/configuration.md).
 
 ## Common Flags
 
