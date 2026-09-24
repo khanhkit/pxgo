@@ -66,6 +66,13 @@ jobs:
         with:
           version: v2.12.2
 
+      - name: Verify release contracts
+        if: runner.os == 'Linux'
+        run: |
+          bash -n scripts/generate-scoop-manifest.sh
+          ./scripts/verify-release-contract.sh
+          ./scripts/verify-artifact-release-contract.sh
+
       - name: Vulnerability scan
         if: runner.os == 'Linux'
         run: |

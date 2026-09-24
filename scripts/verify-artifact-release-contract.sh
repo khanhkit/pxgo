@@ -31,6 +31,9 @@ for runner in ubuntu-latest ubuntu-24.04-arm windows-latest macos-15; do
   grep -Fq "runner: ${runner}" "$release" || bad "native artifact runner missing: ${runner}"
 done
 grep -Fq 'go run ./scripts/verify-release-artifact.go' "$release" || bad 'exact archive verifier is not executed'
+grep -Fq 'scripts/generate-scoop-manifest.sh "$TAG" dist' "$release" || bad 'Scoop manifest generator is not part of the immutable candidate build'
+grep -Fq 'manifest_sha="$(sha256sum "${output}"' scripts/generate-scoop-manifest.sh || bad 'Scoop manifest is not added to the release checksum set'
+grep -Fq 'subject-checksums:' "$release" || bad 'release attestation does not consume the final checksum set'
 
 grep -Eq 'needs:.*release-candidate.*verify-release-artifacts|needs:.*verify-release-artifacts.*release-candidate' "$release" || bad 'promotion is not gated on candidate plus native verification'
 grep -Fq 'sha256sum --check checksums.txt' "$release" || bad 'promotion does not re-verify staged checksums'
