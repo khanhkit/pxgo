@@ -11,6 +11,8 @@ done
 realm=PXGO.TEST
 principal=pxgo-ci@PXGO.TEST
 password=pxgo-ci-password
+proxy_host=proxy.pxgo.test
+service_principal=HTTP/$proxy_host@$realm
 root=$(mktemp -d)
 kdc_pid=
 
@@ -61,6 +63,7 @@ export KRB5CCNAME="FILE:$root/ready.ccache"
 
 kdb5_util create -s -P pxgo-master-password -r "$realm" >/dev/null
 kadmin.local -r "$realm" -q "addprinc -pw $password $principal" >/dev/null
+kadmin.local -r "$realm" -q "addprinc -randkey $service_principal" >/dev/null
 
 krb5kdc -n -r "$realm" >"$root/kdc.log" 2>&1 &
 kdc_pid=$!
@@ -83,6 +86,7 @@ fi
 
 export PXGO_KERBEROS_PRINCIPAL="$principal"
 export PXGO_KERBEROS_PASSWORD="$password"
+export PXGO_KERBEROS_PROXY_HOST="$proxy_host"
 export PXGO_KERBEROS_FLAVOR=mit
 unset KRB5CCNAME
 

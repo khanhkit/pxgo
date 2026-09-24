@@ -40,11 +40,8 @@ func TestKerberosIntegrationKDC(t *testing.T) {
 }
 
 func TestKerberosIntegrationSPNEGOToken(t *testing.T) {
-	requireIntegrationEnv(t, "PXGO_KERBEROS_PRINCIPAL", "PXGO_KERBEROS_PASSWORD", "KRB5_CONFIG")
+	requireIntegrationEnv(t, "PXGO_KERBEROS_PRINCIPAL", "PXGO_KERBEROS_PASSWORD", "KRB5_CONFIG", "PXGO_KERBEROS_PROXY_HOST")
 	proxyHost := strings.TrimSpace(os.Getenv("PXGO_KERBEROS_PROXY_HOST"))
-	if proxyHost == "" {
-		t.Skip("PXGO_KERBEROS_PROXY_HOST is required to exercise HTTP/<host> service-ticket SPNEGO")
-	}
 	principal := os.Getenv("PXGO_KERBEROS_PRINCIPAL")
 	password := os.Getenv("PXGO_KERBEROS_PASSWORD")
 	isHeimdal := strings.EqualFold(os.Getenv("PXGO_KERBEROS_FLAVOR"), "heimdal")
