@@ -46,6 +46,19 @@ grep -q 'verify-exact-sha' .github/workflows/release.yml || bad "release missing
 grep -q 'needs:.*verify-exact-sha' .github/workflows/release.yml || bad "GoReleaser is not gated on verify-exact-sha"
 grep -q 'github.sha' .github/workflows/release.yml || bad "exact-SHA verification does not reference github.sha"
 
+# TC-CI-REG-003B: Release accepts an exact SHA via workflow_dispatch, so no
+# persistent setup-go cache may be restored/saved from code at that SHA. This
+# prevents untrusted/manual verification refs from poisoning caches consumed by
+# a later privileged tag release.
+release_setup_go_count=$(grep -c 'uses: actions/setup-go@' .github/workflows/release.yml || true)
+release_cache_disabled_count=$(grep -c 'cache:[[:space:]]*false' .github/workflows/release.yml || true)
+[[ "$release_setup_go_count" -gt 0 ]] || bad "release workflow has no setup-go sites to audit"
+[[ "$release_cache_disabled_count" -eq "$release_setup_go_count" ]] || bad "every release setup-go site must explicitly disable persistent caching"
+if grep -q 'cache:[[:space:]]*true' .github/workflows/release.yml; then
+  bad "release workflow enables persistent Go caching on exact-ref execution"
+fi
+[[ "$fail" -eq 0 ]] && ok "release exact-ref jobs cannot poison persistent Go caches"
+
 # TC-CI-REG-004: vulnerability scan is a required CI/release command.
 grep -Rq 'govulncheck' .github/workflows/ci.yml .github/workflows/release.yml Makefile || bad "govulncheck gate missing"
 
