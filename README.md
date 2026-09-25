@@ -22,7 +22,13 @@ brew tap khanhkit/tap
 brew install pxgo
 ```
 
-On Windows, install from the official PxGo Scoop bucket:
+On Windows, install from the official WinGet catalog:
+
+```powershell
+winget install --id KhanhKit.PxGo --exact
+```
+
+Or install from the official PxGo Scoop bucket:
 
 ```powershell
 scoop bucket add khanhkit https://github.com/khanhkit/scoop-bucket

@@ -21,11 +21,14 @@ remains available as a bucket-independent direct-install fallback.
 
 WinGet metadata inherited from the previous repository identity is retired.
 Fork-owned package `KhanhKit.PxGo` v0.7.1 was moderator-approved and merged in
-`microsoft/winget-pkgs#440461` on 2026-09-25; the manifests are present on the
-upstream `master` branch. Microsoft catalog publication is asynchronous after
-merge. Until `Publish-Pipeline-Succeeded` is observed and the official WinGet
-CDN/catalog index contains `KhanhKit.PxGo` v0.7.1, do not yet advertise
-`winget install KhanhKit.PxGo` as a live install path.
+`microsoft/winget-pkgs#440461` on 2026-09-25. The manifests are present on the
+upstream `master` branch and the official WinGet CDN `source2.msix` index now
+contains `KhanhKit.PxGo` with `latest_version=0.7.1`. WinGet is therefore a live
+official distribution channel:
+
+```powershell
+winget install --id KhanhKit.PxGo --exact
+```
 
 ## Publication policy
 
