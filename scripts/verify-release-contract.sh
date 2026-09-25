@@ -152,6 +152,21 @@ grep -q "vars.PXGO_HOMEBREW_TAP_ENABLED == 'true'" .github/workflows/release.yml
 grep -q 'secrets.HOMEBREW_TAP_DEPLOY_KEY' .github/workflows/release.yml || bad "Homebrew publication is not using the tap-scoped deploy key"
 grep -q 'HOMEBREW_TAP_TOKEN' .github/workflows/release.yml && bad "Homebrew publication still references account-token credentials"
 grep -Fq '$2 == file' .github/workflows/release.yml || bad "Homebrew checksum extraction is not exact-filename matched"
+workflow_permissions=$(awk '/^permissions:$/ {capture=1; next} capture && /^[^ ]/ {exit} capture {print}' .github/workflows/release.yml)
+grep -Fqx '  contents: read' <<<"$workflow_permissions" || bad "release workflow default permissions are not read-only"
+if grep -Eq 'write' <<<"$workflow_permissions"; then
+  bad "release workflow grants write permissions globally instead of only to publishing jobs"
+fi
+promote_header=$(sed -n '/^  promote-release:/,/^    steps:/p' .github/workflows/release.yml)
+for permission in 'contents: write' 'id-token: write' 'attestations: write' 'artifact-metadata: write'; do
+  grep -Fq "$permission" <<<"$promote_header" || bad "promote-release missing required $permission permission"
+done
+dry_run_header=$(sed -n '/^  dry-run-promotion-proof:/,/^    steps:/p' .github/workflows/release.yml)
+grep -Fq 'contents: write' <<<"$dry_run_header" || bad "dry-run promotion proof lacks scoped contents: write permission"
+if grep -Eq 'id-token: write|attestations: write|artifact-metadata: write' <<<"$dry_run_header"; then
+  bad "dry-run promotion proof has unnecessary attestation/write permissions"
+fi
+[[ "$fail" -eq 0 ]] && ok "release write permissions are scoped to promotion/dry-run jobs"
 if grep -Eq 'git push([^[:alnum:]_]|$).*(--force-with-lease|--force|-f([[:space:]]|$))|git push[[:space:]]+-f([[:space:]]|$)' .github/workflows/release.yml; then
   bad "distribution publication must not force-push protected downstream main branches"
 else
