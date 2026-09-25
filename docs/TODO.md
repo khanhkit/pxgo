@@ -4,14 +4,11 @@ These items are intentionally deferred external validation/publication work. The
 
 ## Real AD / Kerberos runtime validation
 
-Current GitHub-side state is complete: the protected `pxgo-ad` environment is configured and `PXGO_SSPI_AD_PROXY_HOST=proxy.pxgo.test` is present. The remaining prerequisite is an actual domain-joined Windows x64 runner plus reachable AD/KDC/SPN fixture. Current self-hosted runner inventory is 0.
+- [x] Owner manually validated the real AD / Kerberos SSPI scenario successfully on 2026-09-25 and closed GitHub issue #31 as completed.
+- [x] Protected `pxgo-ad` workflow/environment and hosted main-history source preflight remain available for future reproducible reruns.
+- [x] Manual validation is recorded as owner-confirmed external evidence; it is not represented as a new GitHub Actions protected-runner execution.
 
-- [ ] Provision one disposable Windows Server x64 VM for the `pxgo-ad` lab.
-- [ ] Run `scripts/bootstrap-pxgo-ad.ps1 -Stage Promote -RebootAfterPromote`.
-- [ ] After reboot, configure the domain runner with a one-time GitHub runner token and run `-Stage Configure` then `-Stage Validate`.
-- [ ] Confirm the runner is online with labels `self-hosted`, `windows`, `x64`, `pxgo-ad`.
-- [ ] Dispatch `.github/workflows/real-ad-verification.yml` against stable v0.7.1 exact SHA `8a592c647efe6eee7f566a077466222678e169fa` to execute `TCSSPIWINAD010RealADNegotiateUsesKerberos` through the protected workflow.
-- [ ] Preserve `klist` plus `HTTP/<proxy-host>` service-ticket evidence showing Negotiate obtains Kerberos and does not silently fall back to direct NTLMSSP.
+The real-AD validation blocker is closed. A domain-joined self-hosted runner is now optional reproducibility infrastructure, not a release or issue-completion requirement.
 
 ## Repository governance
 
@@ -39,6 +36,6 @@ Current submission: `microsoft/winget-pkgs#440461`, `KhanhKit.PxGo` v0.7.1, head
 
 - Normal CI remains gated by required hosted Ubuntu + Windows verification plus native Linux arm64/macOS arm64 execution.
 - Release remains gated by exact-tag-SHA verification, native Windows SSPI verification, candidate execution, and immutable promotion.
-- Real AD/Kerberos validation is manual-only until the disposable domain-joined lab exists.
+- Real AD/Kerberos validation is owner-confirmed complete; the protected workflow remains available for future reproducible reruns.
 - Windows sleep/resume and continuous 24h+ Guardian soak remain extended external validation and must not be represented as complete using deterministic short tests.
 - These TODOs must not be silently reintroduced as mandatory release blockers without an explicit project decision.
