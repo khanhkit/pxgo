@@ -20,11 +20,12 @@ exact staged manifest into the official `khanhkit/scoop-bucket`; the release ass
 remains available as a bucket-independent direct-install fallback.
 
 WinGet metadata inherited from the previous repository identity is retired.
-PxGo does not claim an official WinGet package until a fork-owned package ID is
-published through the external WinGet repository. Candidate package
-`KhanhKit.PxGo` tracks the current v0.7.1 release in `microsoft/winget-pkgs#440461`.
-It must not be advertised as published until that upstream PR is accepted;
-Microsoft CLA acceptance is complete; moderator review/merge and public catalog publication remain external requirements.
+Fork-owned package `KhanhKit.PxGo` v0.7.1 was moderator-approved and merged in
+`microsoft/winget-pkgs#440461` on 2026-09-25; the manifests are present on the
+upstream `master` branch. Microsoft catalog publication is asynchronous after
+merge. Until `Publish-Pipeline-Succeeded` is observed and the official WinGet
+CDN/catalog index contains `KhanhKit.PxGo` v0.7.1, do not yet advertise
+`winget install KhanhKit.PxGo` as a live install path.
 
 ## Publication policy
 
