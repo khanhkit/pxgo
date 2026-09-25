@@ -15,7 +15,10 @@ grep -q 'workflow_dispatch:' "$release" || bad 'manual hosted dry-run trigger mi
 if grep -q 'verification_ref:' "$release"; then
   bad 'Release manual dry-run accepts an arbitrary verification_ref instead of trusted dispatch github.sha'
 fi
-grep -Fq 'ref: ${{ github.sha }}' "$release" || bad 'Release checkout is not bound to the trusted dispatch/tag github.sha'
+[[ "$(grep -Fc 'ref: ${{ github.sha }}' "$release")" -eq 4 ]] || bad 'every Release checkout must be bound directly to trusted github.sha'
+if grep -Fq 'ref: ${{ needs.release-candidate.outputs.sha }}' "$release"; then
+  bad 'artifact verifier checkout trusts a tainted release-candidate job output'
+fi
 grep -Fq 'EXPECTED_SHA: ${{ github.sha }}' "$release" || bad 'manual dry-run does not verify the exact trusted dispatch SHA'
 grep -q 'inject_verifier_failure:' "$release" || bad 'manual dry-run lacks verifier failure-injection input'
 grep -Fq 'v0.0.0-ap0030-dryrun-' "$release" || bad 'manual dry-run does not create a local-only release-like tag'
