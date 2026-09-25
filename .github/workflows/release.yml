@@ -6,10 +6,6 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      verification_ref:
-        description: "Exact 40-character commit SHA to verify without publishing"
-        required: true
-        type: string
       inject_verifier_failure:
         description: "Dry-run only: force linux-amd64 artifact verification to fail"
         required: false
@@ -34,7 +30,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -51,10 +47,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git rev-list -n 1 "$TAG_NAME")" = "$EXPECTED_SHA"
 
-      - name: Verify manual exact SHA
+      - name: Verify manual dispatch SHA
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
-          EXPECTED_SHA: ${{ inputs.verification_ref }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
@@ -106,7 +102,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -140,7 +136,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5

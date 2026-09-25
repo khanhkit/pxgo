@@ -46,10 +46,14 @@ grep -q 'verify-exact-sha' .github/workflows/release.yml || bad "release missing
 grep -q 'needs:.*verify-exact-sha' .github/workflows/release.yml || bad "GoReleaser is not gated on verify-exact-sha"
 grep -q 'github.sha' .github/workflows/release.yml || bad "exact-SHA verification does not reference github.sha"
 
-# TC-CI-REG-003B: Release accepts an exact SHA via workflow_dispatch, so no
-# persistent setup-go cache may be restored/saved from code at that SHA. This
-# prevents untrusted/manual verification refs from poisoning caches consumed by
-# a later privileged tag release.
+# TC-CI-REG-003B: Release manual dispatch is bound to GitHub's dispatch SHA; it
+# must never accept an arbitrary verification_ref input that can run untrusted
+# code in the default-branch cache/security context. Persistent setup-go caching
+# is also disabled throughout Release as defense in depth.
+if grep -q 'verification_ref:' .github/workflows/release.yml; then
+  bad "Release workflow accepts arbitrary verification_ref input"
+fi
+grep -Fq 'ref: ${{ github.sha }}' .github/workflows/release.yml || bad "Release checkout is not bound to github.sha"
 release_setup_go_count=$(grep -c 'uses: actions/setup-go@' .github/workflows/release.yml || true)
 release_cache_disabled_count=$(grep -c 'cache:[[:space:]]*false' .github/workflows/release.yml || true)
 [[ "$release_setup_go_count" -gt 0 ]] || bad "release workflow has no setup-go sites to audit"
