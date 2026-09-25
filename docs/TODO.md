@@ -19,12 +19,12 @@ The real-AD validation blocker is closed. A domain-joined self-hosted runner is 
 
 ## WinGet publication
 
-Current submission: `microsoft/winget-pkgs#440461`, `KhanhKit.PxGo` v0.7.1, head `2ddc5fe5acc6ea25e884acfc427cedac8422d9cd`.
+Current upstream package: `microsoft/winget-pkgs#440461`, `KhanhKit.PxGo` v0.7.1. PR merged on 2026-09-25 as `f93e24c1b1a1775ca8328e8e891113f09c4c337c`; manifests are present on upstream `master`.
 
 - [x] Microsoft technical validation stages 01-10 pass (`Azure-Pipeline-Passed`, `Validation-Completed`).
 - [x] Account owner accepted the Microsoft Contributor License Agreement on 2026-09-25; `license/cla` is SUCCESS.
-- [ ] Microsoft/community moderator reviews and merges the upstream PR.
-- [ ] Verify `KhanhKit.PxGo` is visible in the public WinGet catalog before advertising `winget install KhanhKit.PxGo` as an official install path.
+- [x] Microsoft/community moderator approved and merged the upstream PR (`Moderator-Approved`).
+- [ ] Wait for Microsoft publish pipeline completion (`Publish-Pipeline-Succeeded`) and verify `KhanhKit.PxGo` v0.7.1 appears in the official WinGet CDN/catalog before advertising `winget install KhanhKit.PxGo`.
 
 ## Optional extended Guardian evidence (non-blocking)
 
