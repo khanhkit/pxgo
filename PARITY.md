@@ -196,9 +196,21 @@ Covered by `TestCLIQuitStopsRunningProxy`, `TestCLINetworkListenSpecificIP`, `Te
 
 px-python's `tests/test_pac.py` includes resource cleanup checks such as `del` releasing PAC resources and safe deletion when not loaded, in addition to PAC parsing and helper behavior.
 
-pxgo now covers direct/proxy/multiple/SOCKS PAC outputs, unknown hosts, broken PAC fallback, encodings, DNS and IP helper functions, safe close before load, reload-after-close, and malformed PAC return handling through `wproxy`. Python destructor-only behavior is not applicable to Go.
+pxgo now covers direct/proxy/multiple/SOCKS PAC outputs, unknown hosts, broken PAC fallback, DNS and IP helper functions, safe close before load, reload-after-close, and malformed PAC return handling through `wproxy`. Python destructor-only behavior is not applicable to Go.
+
+Current upstream Px v0.12 PAC encoding behavior is also covered: default auto-detection, HTTP `Content-Type` charset priority, UTF-8/UTF-16/UTF-32 BOMs, valid UTF-8, Windows-1252 -> Windows-1251 -> Latin-1 fallback, strict `ascii`/`us-ascii`, explicit-encoding priority over HTTP charset, and failure on unknown declared charsets.
 
 Covered by `internal/pac` tests and `TestWproxyConfigPACMalformedReturnFallsBackDirect`.
+
+---
+
+### ✓ Unix file-descriptor startup capacity — COVERED
+
+Upstream Px v0.12 raises the Unix/macOS `RLIMIT_NOFILE` soft limit toward 65,536 and steps down through conservative fallback values when the platform rejects the target. Windows is a no-op.
+
+PxGo implements the same observable capacity behavior with Go-native process semantics: the Guardian parent raises the limit before worker spawn so the child inherits it, the worker repeats the best-effort check for direct entry, and startup remains non-fatal if the OS refuses the change. Deterministic tests cover target/hard-limit/fallback/failure paths; a subprocess integration test exercises real `getrlimit`/`setrlimit` syscalls on hosted Linux arm64 and macOS arm64, while hosted Windows verifies the no-op implementation.
+
+Covered by `nofile_test.go`, `nofile_unix_integration_test.go`, and `nofile_windows_test.go`.
 
 ---
 
@@ -219,7 +231,9 @@ pxgo CI now runs the normal test suite on both `ubuntu-latest` and `windows-late
 | `test_kerberos.py` | `internal/kerberos/*_test.go`, `internal/proxy/proxy_test.go`, `kerberos_integration` tag | covered; live KDC env-gated |
 | `test_large_data.py` | `internal/proxy/proxy_test.go` large transfer tests | covered |
 | `test_network.py` | `main_test.go`, `internal/proxy/proxy_test.go` | covered |
-| `test_pac.py` | `internal/pac/pac_test.go`, `internal/wproxy/wproxy_test.go` | covered |
+| `test_pac.py` | `internal/pac/pac_test.go`, `internal/pac/semantics_test.go`, `internal/wproxy/wproxy_test.go` | covered, including v0.12 encoding/charset cases |
+| `test_nofile_limit.py` | `nofile_test.go`, `nofile_unix_integration_test.go`, `nofile_windows_test.go` | covered on Linux/macOS/Windows semantics |
+| `test_multiprocessing.py` | connection-admission/runtime tests | behavioral equivalent via Go-native `workers × threads` admission; Python multiprocess topology is not copied |
 | `test_proxy.py` | `internal/proxy/proxy_test.go`, `main_test.go` | covered |
 | `test_wproxy.py` | `internal/wproxy/wproxy_test.go`, `internal/systemproxy/systemproxy_test.go` | covered |
 | `test_benchmark.py` | `internal/proxy/proxy_test.go` resource tests and benchmarks | covered |
@@ -243,7 +257,7 @@ pxgo CI now runs the normal test suite on both `ubuntu-latest` and `windows-late
 | --- | --- |
 | Upstream auth schemes | NEGOTIATE, NTLM, DIGEST, BASIC, ANY, ANYSAFE, NO/SAFENO/ONLY prefixes |
 | Client (downstream) auth | Same schemes; equivalent NTLM state machine |
-| PAC file execution | Same helper functions (`dnsResolve`, `myIpAddress`, `alert`); same return-value parsing |
+| PAC file execution | Same helper functions (`dnsResolve`, `myIpAddress`, `alert`), return-value parsing, and current v0.12 auto/explicit encoding behavior |
 | HTTPS upstream proxy | Both support `https://` upstream proxy URLs |
 | noproxy / allow rules | CIDR, wildcard, IP range, domain |
 | Kerberos upstream auth | Linux/macOS managed ccache, Heimdal/MIT ticket lifecycle, PTY password `kinit`, and HTTP/CONNECT SPNEGO for `HTTP/<proxy-host>`; Windows uses current-user SSPI |
@@ -255,4 +269,5 @@ pxgo CI now runs the normal test suite on both `ubuntu-latest` and `windows-late
 | Config INI save/load | All keys round-trip correctly |
 | Quit / restart | Functionally equivalent, including allow validation and shutdown polling |
 | Windows SSPI | Transparent SSO via `github.com/alexbrainman/sspi`; NTLM/Negotiate without explicit credentials |
-| OS keyring + interactive password | `golang.org/x/term` for no-echo prompt; `github.com/zalando/go-keyring` for Credential Manager / Keychain / libsecret |
+| OS keyring + interactive password | `golang.org/x/term` for no-echo prompt; `github.com/zalando/go-keyring` for Credential Manager / Keychain / Linux Secret Service |
+| Unix `RLIMIT_NOFILE` startup hardening | Go-native parent/worker implementation matches upstream v0.12 capacity behavior; real Linux/macOS syscall proof plus Windows no-op coverage |
