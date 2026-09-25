@@ -218,6 +218,13 @@ func decodePAC(data []byte, name, contentType string) (string, error) {
 	}
 
 	switch name {
+	case "ascii", "us-ascii":
+		for _, b := range data {
+			if b > 0x7f {
+				return "", errors.New("PAC source is not valid ASCII")
+			}
+		}
+		return string(data), nil
 	case utf8Encoding, "utf8", "utf-8-sig":
 		data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
 		if !utf8.Valid(data) {

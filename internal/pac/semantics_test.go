@@ -373,3 +373,42 @@ func TestPXV012AutoEncodingDetectsUTF32BOM(t *testing.T) {
 		})
 	}
 }
+
+func TestPXV012ExplicitASCIIEncoding(t *testing.T) {
+	content := []byte(`function FindProxyForURL(url, host) { return "PROXY ascii.ok:8080"; }`)
+	for _, encoding := range []string{"ascii", "us-ascii"} {
+		t.Run(encoding, func(t *testing.T) {
+			p := New(writeSemanticPAC(t, content), encoding)
+			got, err := p.FindProxyForURLWithError("http://example.test", "example.test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != "ascii.ok:8080" {
+				t.Fatalf("ascii result=%q", got)
+			}
+		})
+	}
+}
+
+func TestPXV012ExplicitASCIIRejectsNonASCII(t *testing.T) {
+	content := append([]byte(`function FindProxyForURL(url, host) { /* `), byte(0x80))
+	content = append(content, []byte(` */ return "DIRECT"; }`)...)
+	p := New(writeSemanticPAC(t, content), "ascii")
+	if _, err := p.FindProxyForURLWithError("http://example.test", "example.test"); err == nil || !strings.Contains(err.Error(), "not valid ASCII") {
+		t.Fatalf("explicit ASCII error=%v", err)
+	}
+}
+
+func TestPXV012ContentTypeASCIIOverridesBOMDetection(t *testing.T) {
+	content := append([]byte{0xef, 0xbb, 0xbf}, []byte(`function FindProxyForURL(url, host) { return "DIRECT"; }`)...)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=ascii")
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	p := New(server.URL, "auto")
+	if _, err := p.FindProxyForURLWithError("http://example.test", "example.test"); err == nil || !strings.Contains(err.Error(), "not valid ASCII") {
+		t.Fatalf("Content-Type ASCII override error=%v", err)
+	}
+}
