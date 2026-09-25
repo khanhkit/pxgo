@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-25
+
 ### Added
 - Publish the official `khanhkit/scoop-bucket` and automate stable-release updates from the exact staged Scoop manifest
 - Add native macOS Guardian lifecycle smoke coverage for crash/recycle/stop/orphan behavior
@@ -128,7 +130,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker support
 - Multi-platform builds: Linux, macOS, Windows (amd64, arm64)
 
-[Unreleased]: https://github.com/khanhkit/pxgo/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/khanhkit/pxgo/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/khanhkit/pxgo/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/khanhkit/pxgo/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/khanhkit/pxgo/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/khanhkit/pxgo/compare/v0.4.0...v0.5.0
