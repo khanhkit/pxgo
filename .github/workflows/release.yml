@@ -454,13 +454,15 @@ jobs:
       - name: Update formula
         env:
           HOMEBREW_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release-candidate.outputs.tag }}
         run: |
           test -n "$HOMEBREW_DEPLOY_KEY"
           install -m 700 -d ~/.ssh
           printf '%s\n' "$HOMEBREW_DEPLOY_KEY" > ~/.ssh/pxgo-homebrew-tap
           chmod 600 ~/.ssh/pxgo-homebrew-tap
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > ~/.ssh/known_hosts
+          test -s ~/.ssh/known_hosts
           export GIT_SSH_COMMAND='ssh -i ~/.ssh/pxgo-homebrew-tap -o IdentitiesOnly=yes'
 
           VERSION="${TAG#v}"
@@ -556,6 +558,7 @@ jobs:
       - name: Update bucket manifest
         env:
           SCOOP_DEPLOY_KEY: ${{ secrets.SCOOP_BUCKET_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release-candidate.outputs.tag }}
         run: |
           test -n "$SCOOP_DEPLOY_KEY"
@@ -572,7 +575,8 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SCOOP_DEPLOY_KEY" > ~/.ssh/pxgo-scoop-bucket
           chmod 600 ~/.ssh/pxgo-scoop-bucket
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > ~/.ssh/known_hosts
+          test -s ~/.ssh/known_hosts
           export GIT_SSH_COMMAND='ssh -i ~/.ssh/pxgo-scoop-bucket -o IdentitiesOnly=yes'
 
           git clone "git@github.com:khanhkit/scoop-bucket.git" /tmp/scoop-bucket
