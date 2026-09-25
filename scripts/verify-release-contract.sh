@@ -54,6 +54,8 @@ if grep -q 'verification_ref:' .github/workflows/release.yml; then
   bad "Release workflow accepts arbitrary verification_ref input"
 fi
 [[ "$(grep -Fc 'ref: ${{ github.sha }}' .github/workflows/release.yml)" -eq 4 ]] || bad "every Release checkout must be bound directly to trusted github.sha"
+grep -Fq 'git fetch --no-tags origin main' .github/workflows/release.yml || bad "production release does not fetch canonical main for ancestry verification"
+grep -Fq 'git merge-base --is-ancestor "$EXPECTED_SHA" origin/main' .github/workflows/release.yml || bad "production release does not require tagged SHA to belong to main history"
 if grep -Fq 'ref: ${{ needs.release-candidate.outputs.sha }}' .github/workflows/release.yml; then
   bad "Release verifier checkout is tainted by release-candidate job output instead of trusted github.sha"
 fi

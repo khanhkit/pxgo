@@ -23,6 +23,7 @@ grep -Fq 'EXPECTED_SHA: ${{ github.sha }}' "$release" || bad 'manual dry-run doe
 grep -q 'inject_verifier_failure:' "$release" || bad 'manual dry-run lacks verifier failure-injection input'
 grep -Fq 'v0.0.0-ap0030-dryrun-' "$release" || bad 'manual dry-run does not create a local-only release-like tag'
 grep -Fq "github.event_name == 'push'" "$release" || bad 'promotion is not explicitly push-only'
+grep -Fq 'git merge-base --is-ancestor "$EXPECTED_SHA" origin/main' "$release" || bad 'production release tag is not constrained to main history'
 grep -Fq 'needs.verify-release-artifacts.result' "$release" || bad 'dry-run does not report promotion eligibility from verifier result'
 grep -Fq 'AP-ISS-0030 intentional checksum corruption' "$release" || bad 'failure injection does not corrupt the downloaded candidate copy'
 grep -Fq 'continue-on-error:' "$release" || bad 'expected dry-run verifier failure would still make the workflow red'
