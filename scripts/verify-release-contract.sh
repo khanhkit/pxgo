@@ -18,6 +18,20 @@ while IFS= read -r line; do
 done < <(grep -RhE '^[[:space:]]*-[[:space:]]+uses:[[:space:]]+[^./][^@[:space:]]+/[^@[:space:]]+@' .github/workflows || true)
 [[ "$fail" -eq 0 ]] && ok "GitHub Actions use immutable SHA refs"
 
+# TC-CI-REG-001B: checkout credentials are fetch-only. No workflow writes back
+# through the token persisted by actions/checkout; release publication uses
+# explicit API tokens or repository-scoped deploy keys instead.
+checkout_count=0
+while IFS=: read -r file line _; do
+  [[ -n "$file" && -n "$line" ]] || continue
+  checkout_count=$((checkout_count + 1))
+  if ! sed -n "${line},$((line + 7))p" "$file" | grep -Eq 'persist-credentials:[[:space:]]*false'; then
+    bad "actions/checkout persists credentials: $file:$line"
+  fi
+done < <(grep -RnE 'uses:[[:space:]]+actions/checkout@' .github/workflows || true)
+[[ "$checkout_count" -gt 0 ]] || bad "no actions/checkout sites found for credential-persistence audit"
+[[ "$fail" -eq 0 ]] && ok "actions/checkout credentials are not persisted in workflow git configs"
+
 # TC-CI-REG-002: the artifact-producing GoReleaser step must consume reviewed
 # module metadata. An isolated pre-release verify job may run tidy + diff because
 # that workspace is not reused by the build/publish job.
