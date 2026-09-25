@@ -2,10 +2,15 @@
 set -euo pipefail
 
 repo="${PXGO_GH_REPO:-khanhkit/pxgo}"
-ref="${1:-verify/ap0002-ap0024}"
+ref="${1:-}"
 workflow="${PXGO_AD_WORKFLOW:-real-ad-verification.yml}"
 environment="${PXGO_AD_ENVIRONMENT:-pxgo-ad}"
 proxy_var="${PXGO_AD_PROXY_VAR:-PXGO_SSPI_AD_PROXY_HOST}"
+
+if [[ -z "$ref" || ! "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "usage: $0 <exact-40-character-main-history-sha>" >&2
+  exit 2
+fi
 
 command -v gh >/dev/null 2>&1 || {
   echo "gh CLI is required" >&2
@@ -48,7 +53,7 @@ echo "PASS: ${proxy_var}=${proxy_host}"
 before_epoch="$(date +%s)"
 gh workflow run "$workflow" \
   --repo "$repo" \
-  --ref "$ref" \
+  --ref main \
   -f "verification_ref=${ref}"
 
 run_id=""
@@ -57,7 +62,7 @@ for _ in $(seq 1 30); do
     gh run list \
       --repo "$repo" \
       --workflow "$workflow" \
-      --branch "$ref" \
+      --branch main \
       --event workflow_dispatch \
       --limit 10 \
       --json databaseId,createdAt \
@@ -110,4 +115,4 @@ done
 
 gh run watch "$run_id" --repo "$repo" --exit-status
 
-echo "PASS: exact-ref protected real-AD verification succeeded"
+echo "PASS: exact main-history SHA protected real-AD verification succeeded"

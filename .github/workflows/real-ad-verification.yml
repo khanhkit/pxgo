@@ -4,10 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       verification_ref:
-        description: Exact branch, tag, or SHA to verify
+        description: Exact 40-character commit SHA from main history to verify
         required: true
         type: string
-        default: main
 
 permissions:
   contents: read
@@ -17,25 +16,84 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  real-ad:
-    name: Protected Windows AD/SSPI
-    runs-on: [self-hosted, windows, x64, pxgo-ad]
-    environment: pxgo-ad
-    timeout-minutes: 20
+  validate-ref:
+    name: Validate protected AD verification SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ inputs.verification_ref }}
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Require workflow dispatch from canonical main
+        shell: bash
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          test "$DISPATCH_REF" = "refs/heads/main"
+
+      - name: Validate exact main-history SHA
+        id: ref
+        shell: bash
+        env:
+          INPUT_SHA: ${{ inputs.verification_ref }}
+        run: |
+          [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin main
+          git cat-file -e "$INPUT_SHA^{commit}"
+          git merge-base --is-ancestor "$INPUT_SHA" origin/main
+          echo "sha=$INPUT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Stage canonical source snapshot
+        shell: bash
+        env:
+          VERIFIED_SHA: ${{ steps.ref.outputs.sha }}
+        run: git archive --format=tar --output=real-ad-source.tar "$VERIFIED_SHA"
+
+      - name: Upload canonical source snapshot
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-ad-source-${{ steps.ref.outputs.sha }}
+          path: real-ad-source.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  real-ad:
+    name: Protected Windows AD/SSPI
+    needs: validate-ref
+    runs-on: [self-hosted, windows, x64, pxgo-ad]
+    environment: pxgo-ad
+    timeout-minutes: 20
+    steps:
+      - name: Download canonical source snapshot
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: real-ad-source-${{ needs.validate-ref.outputs.sha }}
+          path: staged-source
+
+      - name: Extract canonical source snapshot
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path source | Out-Null
+          tar -xf staged-source/real-ad-source.tar -C source
+          if (-not (Test-Path source/go.mod)) {
+            throw 'canonical real-AD source snapshot is missing go.mod'
+          }
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
-          cache: true
+          go-version-file: source/go.mod
+          cache: false
 
       - name: Run protected real-AD Kerberos verification
         shell: pwsh
+        working-directory: source
         env:
           PXGO_SSPI_AD: "1"
           PXGO_SSPI_AD_PROXY_HOST: ${{ vars.PXGO_SSPI_AD_PROXY_HOST }}
@@ -45,6 +103,6 @@ jobs:
           }
           $listed = (go test ./internal/proxy -list 'TCSSPIWINAD010' | Out-String)
           if ($listed -notmatch 'TestTCSSPIWINAD010') {
-            throw 'verification_ref does not contain the required real-AD Kerberos testcase TCSSPIWINAD010'
+            throw 'verified main-history SHA does not contain the required real-AD Kerberos testcase TCSSPIWINAD010'
           }
           go test ./internal/proxy -run 'TCSSPIWINAD010' -count=1 -v

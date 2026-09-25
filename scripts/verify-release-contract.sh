@@ -154,11 +154,32 @@ if [[ -f "$ad_bootstrap" ]]; then
   [[ "$fail" -eq 0 ]] && ok "single-VM protected AD bootstrap contract present"
 fi
 
+ad_workflow=".github/workflows/real-ad-verification.yml"
+[[ -f "$ad_workflow" ]] || bad "real AD workflow missing"
+if [[ -f "$ad_workflow" ]]; then
+  grep -q '^  validate-ref:' "$ad_workflow" || bad "real AD workflow lacks hosted ref-validation job"
+  grep -Fq 'test "$DISPATCH_REF" = "refs/heads/main"' "$ad_workflow" || bad "real AD workflow can dispatch protected execution from a non-main workflow ref"
+  grep -Fq '[[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]' "$ad_workflow" || bad "real AD workflow does not require exact SHA input"
+  grep -Fq 'git merge-base --is-ancestor "$INPUT_SHA" origin/main' "$ad_workflow" || bad "real AD workflow does not constrain verification SHA to main history"
+  grep -Fq 'git archive --format=tar --output=real-ad-source.tar "$VERIFIED_SHA"' "$ad_workflow" || bad "real AD source is not staged from the validated SHA"
+  grep -Fq 'real-ad-source-${{ needs.validate-ref.outputs.sha }}' "$ad_workflow" || bad "protected AD job does not consume the validated source artifact"
+  if grep -Fq 'ref: ${{ inputs.verification_ref }}' "$ad_workflow"; then
+    bad "protected AD runner directly checks out arbitrary workflow input"
+  fi
+  if grep -q 'cache:[[:space:]]*true' "$ad_workflow"; then
+    bad "protected AD workflow enables persistent setup-go caching"
+  fi
+  grep -q 'cache:[[:space:]]*false' "$ad_workflow" || bad "protected AD setup-go cache policy is not explicit"
+  [[ "$fail" -eq 0 ]] && ok "protected AD source trust boundary is hosted-validated and cache-isolated"
+fi
+
 ad_dispatch="scripts/dispatch-real-ad-verification.sh"
 [[ -f "$ad_dispatch" && -x "$ad_dispatch" ]] || bad "real AD dispatch helper missing or not executable"
 if [[ -f "$ad_dispatch" ]]; then
   bash -n "$ad_dispatch" || bad "real AD dispatch helper has invalid shell syntax"
   grep -Fq 'real-ad-verification.yml' "$ad_dispatch" || bad "real AD dispatch helper does not use manual AD workflow"
+  grep -Fq -- '--ref main' "$ad_dispatch" || bad "real AD helper does not dispatch the canonical workflow from main"
+  grep -Fq '^\[0-9a-f\]{40}$' "$ad_dispatch" || grep -Fq '^[0-9a-f]{40}$' "$ad_dispatch" || bad "real AD helper does not require an exact commit SHA"
   grep -Fq 'pending_deployments' "$ad_dispatch" || bad "protected environment approval orchestration missing"
   grep -Fq 'pxgo-ad' "$ad_dispatch" || bad "dispatch helper does not verify pxgo-ad runner label"
   [[ "$fail" -eq 0 ]] && ok "protected AD dispatch orchestration present"
