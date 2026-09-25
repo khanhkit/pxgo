@@ -60,3 +60,54 @@ func TestRaiseNofileLimitNoopWhenSufficient(t *testing.T) {
 		t.Fatalf("got=%d err=%v sets=%d", got, err, sets)
 	}
 }
+
+func TestRaiseNofileLimitInitialGetFailure(t *testing.T) {
+	want := errors.New("getrlimit failed")
+	got, err := raiseNofileLimitWith(nofileOps{
+		get: func() (uint64, uint64, error) { return 0, 0, want },
+		set: func(uint64, uint64) error {
+			t.Fatal("set must not be called after initial get failure")
+			return nil
+		},
+	})
+	if got != 0 || !errors.Is(err, want) {
+		t.Fatalf("got=%d err=%v want error=%v", got, err, want)
+	}
+}
+
+func TestRaiseNofileLimitAllFallbacksFailPreservesSoftLimit(t *testing.T) {
+	gets := 0
+	var calls []uint64
+	got, err := raiseNofileLimitWith(nofileOps{
+		get: func() (uint64, uint64, error) {
+			gets++
+			return 512, 100000, nil
+		},
+		set: func(soft, _ uint64) error {
+			calls = append(calls, soft)
+			return errors.New("rejected")
+		},
+	})
+	wantCalls := []uint64{65536, 8192, 4096, 2048, 1024}
+	if err != nil || got != 512 || gets != 2 || !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("got=%d err=%v gets=%d calls=%v want=%v", got, err, gets, calls, wantCalls)
+	}
+}
+
+func TestRaiseNofileLimitFinalGetFailureIsSurfaced(t *testing.T) {
+	finalErr := errors.New("final getrlimit failed")
+	gets := 0
+	got, err := raiseNofileLimitWith(nofileOps{
+		get: func() (uint64, uint64, error) {
+			gets++
+			if gets == 1 {
+				return 512, 100000, nil
+			}
+			return 0, 0, finalErr
+		},
+		set: func(uint64, uint64) error { return errors.New("rejected") },
+	})
+	if got != 512 || !errors.Is(err, finalErr) {
+		t.Fatalf("got=%d err=%v want soft=512 err=%v", got, err, finalErr)
+	}
+}
