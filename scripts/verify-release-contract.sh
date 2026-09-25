@@ -162,7 +162,12 @@ grep -Fq 'cancel-in-progress: false' .github/workflows/release.yml || bad "relea
 [[ "$(grep -Fc 'version_is_newer()' .github/workflows/release.yml)" -eq 2 ]] || bad "Homebrew/Scoop monotonic version guards are missing"
 grep -Fq 'skip stale Homebrew publication:' .github/workflows/release.yml || bad "Homebrew stale-run downgrade guard missing"
 grep -Fq 'skip stale Scoop publication:' .github/workflows/release.yml || bad "Scoop stale-run downgrade guard missing"
-[[ "$fail" -eq 0 ]] && ok "release publication is serialized and rejects downstream version rollback"
+if grep -Fq 'ssh-keyscan github.com' .github/workflows/release.yml; then
+  bad "distribution publication trusts GitHub SSH host keys via unauthenticated ssh-keyscan"
+fi
+[[ "$(grep -Fc "gh api meta --jq '.ssh_keys[]" .github/workflows/release.yml)" -eq 2 ]] || bad "Homebrew/Scoop publishers do not source GitHub SSH host keys from authenticated API metadata"
+[[ "$(grep -Fc 'GH_TOKEN: ${{ github.token }}' .github/workflows/release.yml)" -ge 2 ]] || bad "GitHub SSH host-key metadata lookup is not authenticated with the workflow token"
+[[ "$fail" -eq 0 ]] && ok "release publication is serialized, monotonic, and uses TLS-authenticated GitHub SSH host keys"
 if grep -Eq 'grep .*pxgo_(darwin|linux)_' .github/workflows/release.yml; then
   bad "Homebrew checksum extraction still uses substring grep that can match SBOM entries"
 fi
