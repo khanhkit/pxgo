@@ -8,7 +8,7 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 - Require the Linux and Windows CI matrix checks from `.github/workflows/ci.yml`.
 - Require branches to be up to date before merge.
 - Block force pushes and branch deletion.
-- Require signed commits on `main`; current GitHub squash merges are server-signed and verified.
+- GitHub squash-merge commits on `main` are server-signed/verified. A branch-level required-signatures rule is intentionally not enabled until a durable maintainer signing identity is provisioned; otherwise unsigned local PR commits cannot merge.
 - Require conversation resolution.
 - On the solo-maintained `khanhkit/pxgo` repository, set required approving reviews to `0`; the hosted CI matrix is the mandatory merge gate and must not be bypassed.
 - On a multi-maintainer authoritative upstream, a distinct approving review may be required as an additional governance gate.
