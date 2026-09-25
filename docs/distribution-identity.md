@@ -35,4 +35,10 @@ Scoop bucket publication targets `khanhkit/scoop-bucket` and is guarded by
 write deploy key scoped only to the destination repository rather than an
 account-wide token.
 
+Both distribution repositories protect `main` with administrator enforcement,
+linear history, and force-push/deletion disabled. They intentionally do not
+require pull requests or status checks on `main`: the only automated writer is
+the repository-scoped release deploy key, which must be able to publish an
+ordinary release commit directly after PxGo's immutable-promotion gate succeeds.
+
 Historical copyright and attribution remain unchanged.
