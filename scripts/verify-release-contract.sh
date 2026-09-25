@@ -46,6 +46,19 @@ grep -q 'verify-exact-sha' .github/workflows/release.yml || bad "release missing
 grep -q 'needs:.*verify-exact-sha' .github/workflows/release.yml || bad "GoReleaser is not gated on verify-exact-sha"
 grep -q 'github.sha' .github/workflows/release.yml || bad "exact-SHA verification does not reference github.sha"
 
+# TC-CI-REG-003A: Manual CI may execute an arbitrary exact verification_ref in
+# the default-branch workflow context. Required CI is itself a trust gate, so
+# it must not restore/save persistent setup-go caches that such a run could
+# poison for later main/PR verification.
+ci_setup_go_count=$(grep -c 'uses: actions/setup-go@' .github/workflows/ci.yml || true)
+ci_cache_disabled_count=$(grep -c 'cache:[[:space:]]*false' .github/workflows/ci.yml || true)
+[[ "$ci_setup_go_count" -gt 0 ]] || bad "CI workflow has no setup-go sites to audit"
+[[ "$ci_cache_disabled_count" -eq "$ci_setup_go_count" ]] || bad "every CI setup-go site must explicitly disable persistent caching"
+if grep -q 'cache:[[:space:]]*true' .github/workflows/ci.yml; then
+  bad "CI workflow enables persistent Go caching while accepting arbitrary manual verification_ref"
+fi
+[[ "$fail" -eq 0 ]] && ok "manual CI arbitrary-ref execution cannot poison persistent Go caches"
+
 # TC-CI-REG-003B: Release manual dispatch is bound to GitHub's dispatch SHA; it
 # must never accept an arbitrary verification_ref input that can run untrusted
 # code in the default-branch cache/security context. Persistent setup-go caching
