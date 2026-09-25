@@ -53,5 +53,6 @@ go build ./...
 repeats race-enabled tunnel shutdown/scheduler stress with 256 simultaneous
 tunnels and a 100-generation Guardian recycle soak. The Windows job repeats the
 native SSPI NTLM roundtrip and handle-stability tests three times. This is
-continuous regression evidence; it does not substitute for the separately
-tracked domain-joined real-AD validation gate.
+continuous regression evidence. Owner-confirmed manual domain-joined real-AD /
+Kerberos SSPI validation completed successfully on 2026-09-25; the hardened
+protected workflow remains available for optional reproducible reruns.
