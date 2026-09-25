@@ -8,7 +8,20 @@ Download the archive matching your machine from
 - `pxgo_windows_amd64.zip` for x64 Windows
 - `pxgo_windows_arm64.zip` for ARM64 Windows
 
-Extract `pxgo.exe` and place it on `PATH` if desired.
+The official WinGet package is `KhanhKit.PxGo`:
+
+```powershell
+winget install --id KhanhKit.PxGo --exact
+```
+
+The official PxGo Scoop bucket remains available as an alternative:
+
+```powershell
+scoop bucket add khanhkit https://github.com/khanhkit/scoop-bucket
+scoop install khanhkit/pxgo
+```
+
+You can also extract `pxgo.exe` manually and place it on `PATH` if desired.
 
 ## macOS and Linux
 

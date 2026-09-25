@@ -24,7 +24,7 @@ Current upstream package: `microsoft/winget-pkgs#440461`, `KhanhKit.PxGo` v0.7.1
 - [x] Microsoft technical validation stages 01-10 pass (`Azure-Pipeline-Passed`, `Validation-Completed`).
 - [x] Account owner accepted the Microsoft Contributor License Agreement on 2026-09-25; `license/cla` is SUCCESS.
 - [x] Microsoft/community moderator approved and merged the upstream PR (`Moderator-Approved`).
-- [ ] Wait for Microsoft publish pipeline completion (`Publish-Pipeline-Succeeded`) and verify `KhanhKit.PxGo` v0.7.1 appears in the official WinGet CDN/catalog before advertising `winget install KhanhKit.PxGo`.
+- [x] `KhanhKit.PxGo` v0.7.1 is present in the official WinGet CDN `source2.msix` package index; `winget install --id KhanhKit.PxGo --exact` is now an official install path.
 
 ## Optional extended Guardian evidence (non-blocking)
 
