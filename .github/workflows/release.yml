@@ -21,10 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
-  artifact-metadata: write
+  contents: read
 
 jobs:
   verify-exact-sha:
@@ -288,6 +285,11 @@ jobs:
     timeout-minutes: 15
     needs: [release-candidate, verify-release-artifacts]
     if: ${{ github.event_name == 'push' }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Download verified release candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -374,6 +376,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [release-candidate, verify-release-artifacts, promote-release]
     if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: write
     steps:
       - name: Download exact candidate for draft promotion proof
         if: ${{ !inputs.inject_verifier_failure }}
