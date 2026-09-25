@@ -53,7 +53,10 @@ grep -q 'github.sha' .github/workflows/release.yml || bad "exact-SHA verificatio
 if grep -q 'verification_ref:' .github/workflows/release.yml; then
   bad "Release workflow accepts arbitrary verification_ref input"
 fi
-grep -Fq 'ref: ${{ github.sha }}' .github/workflows/release.yml || bad "Release checkout is not bound to github.sha"
+[[ "$(grep -Fc 'ref: ${{ github.sha }}' .github/workflows/release.yml)" -eq 4 ]] || bad "every Release checkout must be bound directly to trusted github.sha"
+if grep -Fq 'ref: ${{ needs.release-candidate.outputs.sha }}' .github/workflows/release.yml; then
+  bad "Release verifier checkout is tainted by release-candidate job output instead of trusted github.sha"
+fi
 release_setup_go_count=$(grep -c 'uses: actions/setup-go@' .github/workflows/release.yml || true)
 release_cache_disabled_count=$(grep -c 'cache:[[:space:]]*false' .github/workflows/release.yml || true)
 [[ "$release_setup_go_count" -gt 0 ]] || bad "release workflow has no setup-go sites to audit"
