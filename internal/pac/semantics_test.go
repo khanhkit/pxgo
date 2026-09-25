@@ -52,6 +52,29 @@ func TestAPISS0005EncodingAliasesAndLegacyCharsets(t *testing.T) {
 	}
 }
 
+func TestPXV012ContentTypeCharsetParsing(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		want        string
+	}{
+		{name: "simple", contentType: "application/x-ns-proxy-autoconfig; charset=utf-8", want: "utf-8"},
+		{name: "quoted", contentType: `text/html; charset="windows-1251"`, want: "windows-1251"},
+		{name: "uppercase key", contentType: "text/html; Charset=UTF-8", want: "UTF-8"},
+		{name: "no charset", contentType: "application/x-ns-proxy-autoconfig", want: ""},
+		{name: "empty input", contentType: "", want: ""},
+		{name: "empty value", contentType: "text/html; charset=", want: ""},
+		{name: "multiple params", contentType: "text/html; boundary=something; charset=iso-8859-1", want: "iso-8859-1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := contentTypeCharset(tt.contentType); got != tt.want {
+				t.Fatalf("contentTypeCharset(%q)=%q want %q", tt.contentType, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAPISS0005UTF16BOMEncoding(t *testing.T) {
 	ascii := "function FindProxyForURL(url, host) { return 'PROXY utf16.ok:8080'; }"
 	tests := []struct {
