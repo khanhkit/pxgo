@@ -152,6 +152,11 @@ grep -q "vars.PXGO_HOMEBREW_TAP_ENABLED == 'true'" .github/workflows/release.yml
 grep -q 'secrets.HOMEBREW_TAP_DEPLOY_KEY' .github/workflows/release.yml || bad "Homebrew publication is not using the tap-scoped deploy key"
 grep -q 'HOMEBREW_TAP_TOKEN' .github/workflows/release.yml && bad "Homebrew publication still references account-token credentials"
 grep -Fq '$2 == file' .github/workflows/release.yml || bad "Homebrew checksum extraction is not exact-filename matched"
+if grep -Eq 'git push([^[:alnum:]_]|$).*(--force-with-lease|--force|-f([[:space:]]|$))|git push[[:space:]]+-f([[:space:]]|$)' .github/workflows/release.yml; then
+  bad "distribution publication must not force-push protected downstream main branches"
+else
+  ok "distribution publication uses non-force pushes compatible with protected downstream main branches"
+fi
 if grep -Eq 'grep .*pxgo_(darwin|linux)_' .github/workflows/release.yml; then
   bad "Homebrew checksum extraction still uses substring grep that can match SBOM entries"
 fi
