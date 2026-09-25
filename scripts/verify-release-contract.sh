@@ -157,6 +157,12 @@ if grep -Eq 'git push([^[:alnum:]_]|$).*(--force-with-lease|--force|-f([[:space:
 else
   ok "distribution publication uses non-force pushes compatible with protected downstream main branches"
 fi
+grep -Fq 'group: pxgo-release-publication' .github/workflows/release.yml || bad "release workflows are not serialized for downstream publication"
+grep -Fq 'cancel-in-progress: false' .github/workflows/release.yml || bad "release serialization may cancel an in-flight immutable promotion"
+[[ "$(grep -Fc 'version_is_newer()' .github/workflows/release.yml)" -eq 2 ]] || bad "Homebrew/Scoop monotonic version guards are missing"
+grep -Fq 'skip stale Homebrew publication:' .github/workflows/release.yml || bad "Homebrew stale-run downgrade guard missing"
+grep -Fq 'skip stale Scoop publication:' .github/workflows/release.yml || bad "Scoop stale-run downgrade guard missing"
+[[ "$fail" -eq 0 ]] && ok "release publication is serialized and rejects downstream version rollback"
 if grep -Eq 'grep .*pxgo_(darwin|linux)_' .github/workflows/release.yml; then
   bad "Homebrew checksum extraction still uses substring grep that can match SBOM entries"
 fi

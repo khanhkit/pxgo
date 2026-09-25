@@ -40,5 +40,8 @@ linear history, and force-push/deletion disabled. They intentionally do not
 require pull requests or status checks on `main`: the only automated writer is
 the repository-scoped release deploy key, which must be able to publish an
 ordinary release commit directly after PxGo's immutable-promotion gate succeeds.
+Release workflows are serialized, and each downstream publisher refuses to
+replace a newer package version with an older stable tag, preventing stale runs
+or re-runs from rolling the Homebrew tap or Scoop bucket backward.
 
 Historical copyright and attribution remain unchanged.

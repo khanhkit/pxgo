@@ -16,6 +16,10 @@ on:
         default: false
         type: boolean
 
+concurrency:
+  group: pxgo-release-publication
+  cancel-in-progress: false
+
 permissions:
   contents: write
   id-token: write
@@ -483,6 +487,17 @@ jobs:
           git clone "git@github.com:khanhkit/homebrew-tap.git" /tmp/tap
           mkdir -p /tmp/tap/Formula
 
+          version_is_newer() {
+            local current="$1"
+            local target="$2"
+            [[ "$current" != "$target" ]] && [[ "$(printf '%s\n%s\n' "$current" "$target" | sort -V | tail -n1)" == "$current" ]]
+          }
+          CURRENT_VERSION=$(sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' /tmp/tap/Formula/pxgo.rb | head -n1 || true)
+          if [[ -n "$CURRENT_VERSION" ]] && version_is_newer "$CURRENT_VERSION" "$VERSION"; then
+            echo "skip stale Homebrew publication: current=$CURRENT_VERSION target=$VERSION"
+            exit 0
+          fi
+
           cat > /tmp/tap/Formula/pxgo.rb << FORMULA
           class Pxgo < Formula
             desc "HTTP/HTTPS proxy with NTLM and Kerberos authentication"
@@ -562,6 +577,18 @@ jobs:
 
           git clone "git@github.com:khanhkit/scoop-bucket.git" /tmp/scoop-bucket
           mkdir -p /tmp/scoop-bucket/bucket
+
+          version_is_newer() {
+            local current="$1"
+            local target="$2"
+            [[ "$current" != "$target" ]] && [[ "$(printf '%s\n%s\n' "$current" "$target" | sort -V | tail -n1)" == "$current" ]]
+          }
+          CURRENT_VERSION=$(jq -r '.version // empty' /tmp/scoop-bucket/bucket/pxgo.json 2>/dev/null || true)
+          if [[ -n "$CURRENT_VERSION" ]] && version_is_newer "$CURRENT_VERSION" "$VERSION"; then
+            echo "skip stale Scoop publication: current=$CURRENT_VERSION target=$VERSION"
+            exit 0
+          fi
+
           cp dist/pxgo-scoop.json /tmp/scoop-bucket/bucket/pxgo.json
 
           cd /tmp/scoop-bucket
