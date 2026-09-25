@@ -24,7 +24,7 @@ PxGo does not claim an official WinGet package until a fork-owned package ID is
 published through the external WinGet repository. Candidate package
 `KhanhKit.PxGo` tracks the current v0.7.1 release in `microsoft/winget-pkgs#440461`.
 It must not be advertised as published until that upstream PR is accepted;
-Microsoft CLA acceptance and moderator review remain external requirements.
+Microsoft CLA acceptance is complete; moderator review/merge and public catalog publication remain external requirements.
 
 ## Publication policy
 
