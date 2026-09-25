@@ -358,6 +358,38 @@ func TestPXV012AutoEncodingHonorsHTTPContentTypeCharset(t *testing.T) {
 	}
 }
 
+func TestPXV012ExplicitEncodingOverridesHTTPContentTypeCharset(t *testing.T) {
+	content := []byte(`function FindProxyForURL(url, host) { return "PROXY explicit.ok:8080"; }`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=cp1251")
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	p := New(server.URL, "utf-8")
+	got, err := p.FindProxyForURLWithError("http://example.test", "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "explicit.ok:8080" {
+		t.Fatalf("explicit encoding result=%q", got)
+	}
+}
+
+func TestPXV012UnknownHTTPCharsetFailsLoad(t *testing.T) {
+	content := []byte(`function FindProxyForURL(url, host) { return "DIRECT"; }`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=not-a-real-encoding")
+		_, _ = w.Write(content)
+	}))
+	defer server.Close()
+
+	p := New(server.URL, "auto")
+	if _, err := p.FindProxyForURLWithError("http://example.test", "example.test"); err == nil || !strings.Contains(err.Error(), `unsupported PAC encoding "not-a-real-encoding"`) {
+		t.Fatalf("unknown HTTP charset error=%v", err)
+	}
+}
+
 func TestPXV012AutoEncodingDetectsUTF32BOM(t *testing.T) {
 	const script = "function FindProxyForURL(url, host) { return 'PROXY utf32.ok:8080'; }"
 	for _, tc := range []struct {
