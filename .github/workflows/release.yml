@@ -47,6 +47,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git rev-list -n 1 "$TAG_NAME")" = "$EXPECTED_SHA"
 
+      - name: Verify release SHA belongs to main history
+        if: ${{ github.event_name == 'push' }}
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$EXPECTED_SHA" origin/main
+
       - name: Verify manual dispatch SHA
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
