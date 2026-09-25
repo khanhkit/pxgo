@@ -26,16 +26,18 @@ Current submission: `microsoft/winget-pkgs#440461`, `KhanhKit.PxGo` v0.7.1, head
 - [ ] Microsoft/community moderator reviews and merges the upstream PR.
 - [ ] Verify `KhanhKit.PxGo` is visible in the public WinGet catalog before advertising `winget install KhanhKit.PxGo` as an official install path.
 
-## Guardian external validation
+## Optional extended Guardian evidence (non-blocking)
 
-- [ ] Run a real Windows sleep/resume cycle with the Guardian parent + worker and preserve evidence that the scheduler gap grants one fresh grace window instead of killing a healthy resumed worker.
-- [ ] Run the Guardian recycle soak for 24h+ and record parent RSS/handle/process/goroutine/log growth plus orphan-worker count.
-- [x] Run a native macOS Guardian process-lifecycle smoke on hosted `macos-15` arm64 CI, covering startup failure, ready-crash/hang/control-close recycle, graceful/forced stop, parent-death orphan cleanup, and a short recycle soak (PR #42 / run `36043844328`).
+Production/release readiness does not depend on the two checks below. They are preserved as optional long-horizon evidence and must not be represented as completed until run on suitable hardware.
+
+- [ ] Optional: run a real Windows sleep/resume cycle with the Guardian parent + worker and preserve evidence that the scheduler gap grants one fresh grace window instead of killing a healthy resumed worker.
+- [ ] Optional: run the Guardian recycle soak for 24h+ and record parent RSS/handle/process/goroutine/log growth plus orphan-worker count.
+- [x] Native macOS Guardian process-lifecycle smoke completed on hosted `macos-15` arm64 CI, covering startup failure, ready-crash/hang/control-close recycle, graceful/forced stop, parent-death orphan cleanup, and a short recycle soak (PR #42 / run `36043844328`).
 
 ## Policy
 
 - Normal CI remains gated by required hosted Ubuntu + Windows verification plus native Linux arm64/macOS arm64 execution.
 - Release remains gated by exact-tag-SHA verification, native Windows SSPI verification, candidate execution, and immutable promotion.
 - Real AD/Kerberos validation is owner-confirmed complete; the protected workflow remains available for future reproducible reruns.
-- Windows sleep/resume and continuous 24h+ Guardian soak remain extended external validation and must not be represented as complete using deterministic short tests.
+- Windows sleep/resume and continuous 24h+ Guardian soak are optional extended evidence, not production/release blockers, and must not be represented as complete using deterministic short tests.
 - These TODOs must not be silently reintroduced as mandatory release blockers without an explicit project decision.
