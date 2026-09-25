@@ -69,7 +69,7 @@ human-edited config with explanations.
 | --- | --- | --- |
 | `server`, `proxy` / `--proxy` | empty | Upstream proxy server list |
 | `pac` / `--pac` | empty | PAC URL or local file |
-| `pac_encoding` / `--pac-encoding` | `auto` | PAC source encoding: `auto`, `utf-8`/`utf8`, `latin1`/`latin-1`, `cp1252`/`windows-1252`, `cp1251`/`windows-1251`, `utf-16`, `utf-16le`, `utf-16be`, `utf-32`, `utf-32le`, or `utf-32be` |
+| `pac_encoding` / `--pac-encoding` | `auto` | PAC source encoding: `auto`, `ascii`/`us-ascii`, `utf-8`/`utf8`, `latin1`/`latin-1`, `cp1252`/`windows-1252`, `cp1251`/`windows-1251`, `utf-16`, `utf-16le`, `utf-16be`, `utf-32`, `utf-32le`, or `utf-32be` |
 | `port` / `--port` | `3128` | Local listen port |
 | `listen` / `--listen` | `127.0.0.1` | Local listen address list |
 | `gateway` / `--gateway` | `0` | Bind all interfaces; requires restrictive `allow`, `hostonly`, or strong downstream auth |
