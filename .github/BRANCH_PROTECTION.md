@@ -8,6 +8,7 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 - Require the Linux and Windows CI matrix checks from `.github/workflows/ci.yml`.
 - Require branches to be up to date before merge.
 - Block force pushes and branch deletion.
+- GitHub squash-merge commits on `main` are server-signed/verified. A branch-level required-signatures rule is intentionally not enabled until a durable maintainer signing identity is provisioned; otherwise unsigned local PR commits cannot merge.
 - Require conversation resolution.
 - On the solo-maintained `khanhkit/pxgo` repository, set required approving reviews to `0`; the hosted CI matrix is the mandatory merge gate and must not be bypassed.
 - On a multi-maintainer authoritative upstream, a distinct approving review may be required as an additional governance gate.
@@ -19,7 +20,7 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 - GoReleaser is gated by `verify-exact-sha` and `verify-windows-native`.
 - Do not manually publish artifacts when either required release gate is absent, queued, skipped, cancelled, or failed.
 - Protect `v*` tags/rulesets from unreviewed overwrite/deletion.
-- Real-AD/Kerberos validation is retained as a manual TODO workflow and is not a release blocker.
+- Owner-confirmed real-AD/Kerberos manual validation is complete; the hardened workflow remains optional reproducibility infrastructure and is not a release blocker.
 
 ## Protected AD environment
 
@@ -33,7 +34,7 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 
 `CI` exposes `workflow_dispatch` for pre-release verification of an explicit `verification_ref`. `native_sspi=true` runs the generic Windows NTLM/handle fixture.
 
-Real-AD/Kerberos validation has its own manual-only `Real AD Verification` workflow. It is intentionally excluded from normal CI and release dependencies until the disposable domain lab exists.
+Real-AD/Kerberos validation has its own manual-only `Real AD Verification` workflow. Owner-confirmed manual validation is complete; the workflow remains intentionally excluded from normal CI/release dependencies and is available for optional reproducible reruns. Hosted preflight validates an exact SHA from `main` history and stages canonical source before any protected runner executes it.
 
 Repository administrators must enforce the settings above on the authoritative upstream repository. A fork or local source checkout can validate the workflow contract but cannot prove upstream governance is enabled.
 
@@ -73,10 +74,10 @@ The bootstrap creates the `pxgo.test` forest/DNS zone, a dedicated `PXGO\pxgo-ru
 
 The real-AD testcase does not trust a generic `Negotiate` success as Kerberos proof. It requires a domain UPN, a real KDC service ticket for the HTTP SPN, rejects direct NTLMSSP tokens, completes the native SSPI exchange, and verifies the authenticated domain username.
 
-Once the runner reports online, dispatch the exact integration ref from an authenticated admin workstation:
+For an optional reproducible rerun, once the runner reports online, dispatch the exact 40-character `main`-history commit SHA from an authenticated admin workstation:
 
 ```bash
-./scripts/dispatch-real-ad-verification.sh verify/ap0002-ap0024
+./scripts/dispatch-real-ad-verification.sh 8a592c647efe6eee7f566a077466222678e169fa
 ```
 
-The helper validates the protected runner labels and environment variable, dispatches the manual real-AD workflow for the exact ref, approves the protected environment on the single-user verification fork, and waits for the workflow result. On an authoritative multi-user upstream repository, keep self-review disabled and require a distinct reviewer instead.
+The helper validates the protected runner labels and environment variable, dispatches the canonical workflow from `main` for the exact SHA, relies on hosted `main`-history validation/source staging before protected execution, approves the protected environment on the single-user verification fork, and waits for the workflow result. On an authoritative multi-user upstream repository, keep self-review disabled and require a distinct reviewer instead.
