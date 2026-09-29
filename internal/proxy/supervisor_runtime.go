@@ -38,7 +38,11 @@ func newRuntimeSupervisor(s *Server) *supervisor.Supervisor {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			dnscache.ClearNetworkState()
+			if s.dnsCache != nil {
+				s.dnsCache.ClearNetworkState()
+			} else {
+				dnscache.ClearNetworkState()
+			}
 			return nil
 		},
 	})

@@ -1,6 +1,7 @@
 package wproxy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -517,6 +518,7 @@ type Wproxy struct {
 	NoProxyHosts         map[string]bool
 	NoProxyHostsStr      string
 	PAC                  *pac.Pac
+	dnsCache             *dnscache.Cache
 	noProxyMatchers      []noProxyMatcher
 	systemResolver       systemProxyResolver
 	systemConfig         systemproxy.Config
@@ -543,6 +545,13 @@ func routeSourceForMode(mode int) RouteSource {
 }
 
 func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, error) {
+	return NewWithDNS(mode, servers, noproxy, pacEncoding, dnscache.Default(), nil)
+}
+
+func NewWithDNS(mode int, servers []Server, noproxy, pacEncoding string, cache *dnscache.Cache, dialContext func(context.Context, string, string) (net.Conn, error)) (*Wproxy, error) {
+	if cache == nil {
+		cache = dnscache.Default()
+	}
 	np, hosts, matchers, err := parseNoProxy(noproxy, false)
 	if err != nil {
 		return nil, err
@@ -553,10 +562,11 @@ func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, erro
 		Servers:         servers,
 		NoProxy:         np,
 		NoProxyHosts:    hosts,
+		dnsCache:        cache,
 		noProxyMatchers: matchers,
 	}
 	if mode == ModeConfigPAC && len(servers) > 0 {
-		w.PAC = pac.New(servers[0].Host, pacEncoding)
+		w.PAC = pac.NewWithDNS(servers[0].Host, pacEncoding, cache, dialContext)
 		if err := w.PAC.Load(); err != nil {
 			return nil, fmt.Errorf("load configured PAC: %w", err)
 		}
@@ -795,7 +805,12 @@ func (w *Wproxy) isNoProxy(netloc Server) bool {
 	if ip := net.ParseIP(host); ip != nil {
 		return w.NoProxy.Contains(ip)
 	}
-	for _, ip := range dnscache.Lookup(host) {
+	cache := w.dnsCache
+	if cache == nil {
+		cache = dnscache.Default()
+	}
+	ips, _ := cache.LookupContext(context.Background(), host)
+	for _, ip := range ips {
 		if w.NoProxy.Contains(ip) {
 			return true
 		}

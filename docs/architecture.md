@@ -31,7 +31,8 @@ The Go port is organized around one main binary and small internal packages.
 | `internal/proxy` | HTTP proxy, CONNECT tunnels, auth, allow rules, reload behavior |
 | `internal/wproxy` | Proxy discovery model, manual proxy parsing, bypass rules |
 | `internal/pac` | PAC loading, JavaScript execution, Mozilla PAC helper functions |
-| `internal/dnscache` | TTL cache in front of `net.LookupIP` (60 s hits, 5 s misses, 4096-entry cap), shared by noproxy matching and PAC `dnsResolve()` |
+| `internal/dnsresolver` | Authoritative system/custom DNS/DoH resolver policy, bounded protocol transport, validation, failover, and resolver-safe dialing |
+| `internal/dnscache` | Per-server TTL cache (60 s hits, 5 s misses, 4096-entry cap) above the selected resolver, shared by dialing, noproxy matching and PAC `dnsResolve()` |
 | `internal/kerberos` | `kinit`/`klist` orchestration, bounded ticket refresh state, FILE-ccache readiness, and Linux/macOS Kerberos/SPNEGO token generation for upstream proxy auth |
 | `internal/debug` | Debug logging |
 | `internal/diagnostic` | Bounded/redacted operational snapshots and doctor state |
@@ -120,8 +121,7 @@ path. A failed reload is logged and the previous proxy config stays active.
   keep-alive; the cache is dropped only when a reload changes the routing.
 - PAC scripts are compiled once to a `goja.Program`; evaluation draws VMs from
   a `sync.Pool`, so lookups run in parallel without a shared-VM lock.
-- DNS lookups for noproxy matching and PAC `dnsResolve()` go through
-  `internal/dnscache`.
+- Outbound hostname resolution is owned by `internal/dnsresolver`. Default/system mode preserves native OS behavior; configured DNS/DoH mode is fail-closed and feeds the per-server `internal/dnscache` used by HTTP/CONNECT dialing, upstream proxy hosts, remote PAC fetches, noproxy matching, and PAC `dnsResolve()`. Windows WinHTTP/WPAD remains OS-owned.
 - Request bodies stay streaming when only one forwarding attempt is possible.
   Requests that need auth/fallback replay keep up to 1 MiB in memory, then spool
   to a temp file with a 256 MiB per-request replay cap and a 512 MiB

@@ -1,9 +1,9 @@
-// Package dnscache provides a small TTL cache in front of net.LookupIP so hot
-// paths (noproxy matching, PAC dnsResolve) do not hit the resolver on every
-// request.
+// Package dnscache provides a bounded TTL cache for DNS lookups used by hot
+// paths such as noproxy matching and PAC dnsResolve.
 package dnscache
 
 import (
+	"context"
 	"net"
 	"sync"
 	"time"
@@ -15,62 +15,94 @@ const (
 	maxEntries  = 4096
 )
 
-// lookupIP is swappable in tests.
+type LookupFunc func(context.Context, string) ([]net.IP, error)
+
+// lookupIP remains swappable by the legacy package-level tests. New production
+// code should own a Cache instance with an explicit resolver dependency.
 var lookupIP = net.LookupIP
 
 type entry struct {
 	ips     []net.IP
+	err     error
 	expires time.Time
 }
 
 type lookupCall struct {
 	done       chan struct{}
 	ips        []net.IP
+	err        error
 	generation uint64
 }
 
-var (
+type Cache struct {
 	mu         sync.RWMutex
-	cache      = map[string]entry{}
-	inflight   = map[string]*lookupCall{}
+	cache      map[string]entry
+	inflight   map[string]*lookupCall
 	generation uint64
-)
+	lookup     LookupFunc
+}
 
-// Lookup resolves host, serving repeated lookups from a TTL cache. Concurrent
-// misses for the same host share one resolver generation. Returned IP values
-// are defensive copies so callers cannot mutate cache-owned bytes. Resolution
-// failures are cached briefly so a broken resolver is not hammered.
+func New(lookup LookupFunc) *Cache {
+	if lookup == nil {
+		lookup = func(_ context.Context, host string) ([]net.IP, error) { return lookupIP(host) }
+	}
+	return &Cache{
+		cache:    map[string]entry{},
+		inflight: map[string]*lookupCall{},
+		lookup:   lookup,
+	}
+}
+
+var defaultCache = New(nil)
+
+func Default() *Cache { return defaultCache }
+
+// Lookup resolves host with the process-default cache. It preserves the legacy
+// helper contract used by packages that have not injected a cache instance.
 func Lookup(host string) []net.IP {
+	ips, _ := defaultCache.LookupContext(context.Background(), host)
+	return ips
+}
+
+// LookupContext resolves host, coalescing concurrent misses. Waiting callers
+// remain context-cancellable, returned IP values are defensive copies, and a
+// stale network generation cannot repopulate the active cache.
+func (c *Cache) LookupContext(ctx context.Context, host string) ([]net.IP, error) {
+	if c == nil {
+		return nil, nil
+	}
 	now := time.Now()
-	mu.RLock()
-	e, ok := cache[host]
+	c.mu.RLock()
+	e, ok := c.cache[host]
 	if ok && now.Before(e.expires) {
-		ips := cloneIPs(e.ips)
-		mu.RUnlock()
-		return ips
+		ips, err := cloneIPs(e.ips), e.err
+		c.mu.RUnlock()
+		return ips, err
 	}
-	mu.RUnlock()
+	c.mu.RUnlock()
 
-	// Re-check under the write lock before creating an inflight generation.
-	// This closes the miss TOCTOU window and makes one generation authoritative.
-	mu.Lock()
+	c.mu.Lock()
 	now = time.Now()
-	if e, ok := cache[host]; ok && now.Before(e.expires) {
-		ips := cloneIPs(e.ips)
-		mu.Unlock()
-		return ips
+	if e, ok := c.cache[host]; ok && now.Before(e.expires) {
+		ips, err := cloneIPs(e.ips), e.err
+		c.mu.Unlock()
+		return ips, err
 	}
-	if call, ok := inflight[host]; ok {
+	if call, ok := c.inflight[host]; ok {
 		done := call.done
-		mu.Unlock()
-		<-done
-		return cloneIPs(call.ips)
+		c.mu.Unlock()
+		select {
+		case <-done:
+			return cloneIPs(call.ips), call.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	call := &lookupCall{done: make(chan struct{}), generation: generation}
-	inflight[host] = call
-	mu.Unlock()
+	call := &lookupCall{done: make(chan struct{}), generation: c.generation}
+	c.inflight[host] = call
+	c.mu.Unlock()
 
-	ips, err := lookupIP(host)
+	ips, err := c.lookup(ctx, host)
 	ttl := positiveTTL
 	if err != nil {
 		ips = nil
@@ -78,25 +110,30 @@ func Lookup(host string) []net.IP {
 	}
 	completedAt := time.Now()
 	stored := cloneIPs(ips)
+	// A caller cancellation/deadline is not a resolver verdict. Do not turn it
+	// into a shared negative cache entry that would poison unrelated requests.
+	cacheable := ctx.Err() == nil
 
-	mu.Lock()
-	if call.generation == generation {
-		if len(cache) >= maxEntries {
-			evictLocked(completedAt)
+	c.mu.Lock()
+	if cacheable && call.generation == c.generation {
+		if len(c.cache) >= maxEntries {
+			c.evictLocked(completedAt)
 		}
-		cache[host] = entry{
+		c.cache[host] = entry{
 			ips:     stored,
+			err:     err,
 			expires: completedAt.Add(ttl),
 		}
 	}
 	call.ips = stored
-	if inflight[host] == call {
-		delete(inflight, host)
+	call.err = err
+	if c.inflight[host] == call {
+		delete(c.inflight, host)
 	}
 	close(call.done)
-	mu.Unlock()
+	c.mu.Unlock()
 
-	return cloneIPs(stored)
+	return cloneIPs(stored), err
 }
 
 func cloneIPs(ips []net.IP) []net.IP {
@@ -112,19 +149,16 @@ func cloneIPs(ips []net.IP) []net.IP {
 	return cloned
 }
 
-// evictLocked removes expired entries first. If the cache is still full, it
-// evicts only the live entry with the earliest expiration time. A hostname
-// lexical tie-break keeps the choice deterministic when expirations are equal.
-func evictLocked(now time.Time) {
-	for host, e := range cache {
+func (c *Cache) evictLocked(now time.Time) {
+	for host, e := range c.cache {
 		if !now.Before(e.expires) {
-			delete(cache, host)
+			delete(c.cache, host)
 		}
 	}
-	for len(cache) >= maxEntries {
+	for len(c.cache) >= maxEntries {
 		var victim string
 		var oldest time.Time
-		for host, e := range cache {
+		for host, e := range c.cache {
 			if victim == "" || e.expires.Before(oldest) || (e.expires.Equal(oldest) && host < victim) {
 				victim = host
 				oldest = e.expires
@@ -133,23 +167,24 @@ func evictLocked(now time.Time) {
 		if victim == "" {
 			return
 		}
-		delete(cache, victim)
+		delete(c.cache, victim)
 	}
 }
 
 // ClearNetworkState invalidates cache entries and detaches in-flight resolver
-// generations after a network epoch. Calls already waiting on an older
-// generation may still receive that result, but stale generations cannot
-// repopulate the new cache or delete a newer in-flight lookup.
-func ClearNetworkState() {
-	mu.Lock()
-	generation++
-	cache = map[string]entry{}
-	inflight = map[string]*lookupCall{}
-	mu.Unlock()
+// generations after a network epoch.
+func (c *Cache) ClearNetworkState() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.generation++
+	c.cache = map[string]entry{}
+	c.inflight = map[string]*lookupCall{}
+	c.mu.Unlock()
 }
 
-// ResetForTest clears all transient resolver state.
-func ResetForTest() {
-	ClearNetworkState()
-}
+func ClearNetworkState() { defaultCache.ClearNetworkState() }
+
+// ResetForTest clears all transient state in the process-default cache.
+func ResetForTest() { defaultCache.ClearNetworkState() }

@@ -207,3 +207,59 @@ func TestAPISS0009FileURLPreservesUNCServerPrefix(t *testing.T) {
 		t.Fatalf("UNC path=%q want=%q", got, want)
 	}
 }
+
+func TestAPISS0031DNSConfigSurfacesAndProvenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pxgo.ini")
+	if err := os.WriteFile(path, []byte("[proxy]\ndns = udp://127.0.0.1:5300\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ParseArgs([]string{"--config=" + path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DNS != "udp://127.0.0.1:5300" || cfg.SourceOf("dns") != "ini:"+path {
+		t.Fatalf("ini dns=%q source=%q", cfg.DNS, cfg.SourceOf("dns"))
+	}
+
+	t.Setenv("PXGO_DNS", "https://dns.example/dns-query")
+	cfg, err = ParseArgs([]string{"--config=" + path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DNS != "https://dns.example/dns-query" || cfg.SourceOf("dns") != "env:PXGO_DNS" {
+		t.Fatalf("env dns=%q source=%q", cfg.DNS, cfg.SourceOf("dns"))
+	}
+
+	cfg, err = ParseArgs([]string{"--config=" + path, "--dns=tcp://127.0.0.1:5301"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DNS != "tcp://127.0.0.1:5301" || cfg.SourceOf("dns") != "cli" {
+		t.Fatalf("cli dns=%q source=%q", cfg.DNS, cfg.SourceOf("dns"))
+	}
+}
+
+func TestAPISS0031DNSConfigRejectsMalformedEndpointWithSource(t *testing.T) {
+	if _, err := ParseArgs([]string{"--dns=udp://resolver.example:53"}); err == nil || !strings.Contains(err.Error(), "command line --dns") {
+		t.Fatalf("cli error=%v", err)
+	}
+	t.Setenv("PXGO_DNS", "http://resolver.example/dns-query")
+	if _, err := ParseArgs(nil); err == nil || !strings.Contains(err.Error(), "environment PXGO_DNS") {
+		t.Fatalf("env error=%v", err)
+	}
+}
+
+func TestAPISS0031ExplicitEmptyDNSOverridesINI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pxgo.ini")
+	if err := os.WriteFile(path, []byte("[proxy]\ndns = udp://127.0.0.1:5300\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PXGO_DNS", "")
+	cfg, err := ParseArgs([]string{"--config=" + path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DNS != "" || cfg.SourceOf("dns") != "env:PXGO_DNS" {
+		t.Fatalf("dns=%q source=%q", cfg.DNS, cfg.SourceOf("dns"))
+	}
+}

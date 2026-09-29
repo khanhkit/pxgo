@@ -68,6 +68,16 @@ grep -Fq -- '--notes-file dist/RELEASE_NOTES.md' "$release" || bad 'promotion do
 grep -A5 '^  update-homebrew-tap:' "$release" | grep -Eq 'needs:.*promote-release' || bad 'Homebrew update is not downstream of promotion'
 
 [[ -f scripts/verify-release-artifact.go ]] || bad 'release artifact runtime verifier missing'
+[[ -f assets/windows/pxgo.ico ]] || bad 'Windows icon source missing'
+[[ -f rsrc_windows_amd64.syso ]] || bad 'Windows amd64 icon resource missing'
+[[ -f rsrc_windows_arm64.syso ]] || bad 'Windows arm64 icon resource missing'
+if [[ -f assets/windows/pxgo.ico ]]; then
+  icon_sha="$(sha256sum assets/windows/pxgo.ico | awk '{print $1}')"
+  [[ "$icon_sha" == 'd84be2b1f38218675a6fc74693826ac3920ce576c4b749d87599230bbbb6208f' ]] || bad "Windows icon checksum mismatch: ${icon_sha}"
+fi
+grep -Fq 'verifyWindowsIcon(binaryPath' scripts/verify-release-artifact.go || bad 'exact Windows release candidate is not icon-verified'
+grep -Fq 'resourceTypeGroupIcon = 14' scripts/verify-release-artifact.go || bad 'Windows icon verifier does not inspect RT_GROUP_ICON'
+grep -Fq 'resourceTypeIcon      = 3' scripts/verify-release-artifact.go || bad 'Windows icon verifier does not inspect RT_ICON'
 
 if [[ "$fail" -eq 0 ]]; then
   ok 'artifact-first release contract present'

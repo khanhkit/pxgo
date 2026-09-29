@@ -76,10 +76,32 @@ human-edited config with explanations.
 | `hostonly` / `--hostonly` | `0` | Bind all interfaces but allow local host IPs |
 | `allow` / `--allow` | `*.*.*.*` | Client allow list |
 | `noproxy` / `--noproxy` | empty | Direct-connect bypass list |
+| `dns` / `--dns` | empty (`system`) | Outbound DNS policy: system resolver, custom UDP/TCP DNS, DoH, or an ordered comma-separated failover list |
 | `useragent` / `--useragent` | empty | Override or set `User-Agent` |
 | `username` / `--username` | empty | Explicit upstream auth username |
 | `auth` / `--auth` | empty | Upstream auth selector; empty + reusable credentials uses `ANYSAFE`, while explicit `ANY` includes Basic fallback |
 | `kerberos` / `--kerberos` | `0` | Linux/macOS Kerberos ccache + upstream HTTP SPNEGO authentication; requires `username`; Windows current-user SSPI is separate and does not use this flag |
+
+### DNS resolver policy
+
+Leaving `dns` empty, or setting it to `system`, preserves the operating-system resolver. Configured resolver endpoints use these forms:
+
+- `1.1.1.1` or `1.1.1.1:5353` — UDP DNS;
+- `udp://1.1.1.1:53` — UDP DNS with TCP retry when the response is truncated;
+- `tcp://1.1.1.1:53` — DNS over TCP;
+- `https://resolver.example/dns-query` — DNS-over-HTTPS using normal TLS certificate validation.
+
+Multiple non-system endpoints may be comma-separated. They are attempted in configured order with bounded timeouts. Classic DNS endpoints require an IP literal so their own hostname cannot create an implicit bootstrap lookup. A DoH endpoint may use a hostname; only that endpoint bootstrap uses the OS resolver, and its HTTP transport bypasses proxy environment settings so it cannot recursively route through PxGo. Ordinary target, upstream-proxy, remote-PAC, PAC `dnsResolve()`, and noproxy address lookups do not silently fall back to system DNS while a custom policy is configured. Windows WinHTTP/WPAD discovery remains an OS-owned exception.
+
+Examples:
+
+```sh
+pxgo --dns=udp://10.0.0.53:53
+PXGO_DNS='https://dns.example/dns-query' pxgo
+pxgo --dns='udp://10.0.0.53:53,https://dns.example/dns-query'
+```
+
+`pxgo --doctor` reports the resolver mode, safe endpoint identity, any system-bootstrap requirement, source provenance, and a bounded failure class. It does not report DNS query payloads or credential-bearing endpoint URLs.
 
 ## Automatic Upstream Proxy Discovery
 

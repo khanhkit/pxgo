@@ -17,6 +17,8 @@ import (
 	"github.com/khanhkit/pxgo/internal/config"
 	"github.com/khanhkit/pxgo/internal/debug"
 	"github.com/khanhkit/pxgo/internal/diagnostic"
+	"github.com/khanhkit/pxgo/internal/dnscache"
+	"github.com/khanhkit/pxgo/internal/dnsresolver"
 	"github.com/khanhkit/pxgo/internal/kerberos"
 	"github.com/khanhkit/pxgo/internal/supervisor"
 	"github.com/khanhkit/pxgo/internal/wproxy"
@@ -60,6 +62,8 @@ type Server struct {
 	once          sync.Once
 	active        int64
 	transports    *boundedTransportCache
+	dnsResolver   *dnsresolver.Policy
+	dnsCache      *dnscache.Cache
 
 	tunnelMu           sync.Mutex
 	tunnels            map[*managedTunnel]struct{}
@@ -103,7 +107,13 @@ func New(cfg config.Config) (*Server, error) {
 	if err := validateServerBudgets(cfg); err != nil {
 		return nil, err
 	}
-	wp, err := buildWproxy(cfg)
+	dnsPolicy, err := dnsresolver.New(cfg.DNS, configuredSockTimeout(cfg))
+	if err != nil {
+		return nil, fmt.Errorf("dns resolver: %w", err)
+	}
+	dnsCache := dnscache.New(dnsPolicy.LookupIP)
+	dialContext := resolverDialContext(dnsPolicy, dnsCache)
+	wp, err := buildWproxy(cfg, dnsCache, dialContext)
 	if err != nil {
 		return nil, err
 	}
@@ -115,16 +125,18 @@ func New(cfg config.Config) (*Server, error) {
 		krb.Check(true)
 	}
 	s := &Server{
-		cfg:        cfg,
-		w:          wp,
-		lastReload: time.Now(),
-		startedAt:  time.Now(),
-		port:       cfg.Port,
-		krb:        krb,
-		closed:     make(chan struct{}),
-		transports: newBoundedTransportCache(maxCachedTransports),
-		tunnels:    make(map[*managedTunnel]struct{}),
-		tunnelZero: closedSignal(),
+		cfg:         cfg,
+		w:           wp,
+		lastReload:  time.Now(),
+		startedAt:   time.Now(),
+		port:        cfg.Port,
+		krb:         krb,
+		closed:      make(chan struct{}),
+		transports:  newBoundedTransportCache(maxCachedTransports),
+		dnsResolver: dnsPolicy,
+		dnsCache:    dnsCache,
+		tunnels:     make(map[*managedTunnel]struct{}),
+		tunnelZero:  closedSignal(),
 	}
 	s.sup = newRuntimeSupervisor(s)
 	s.clientAuthList = clientAuthMethods(cfg.ClientAuth)
@@ -254,7 +266,35 @@ func configuredWriteTimeout(cfg config.Config) time.Duration {
 	return 2 * configuredSockTimeout(cfg)
 }
 
-func buildWproxy(cfg config.Config) (*wproxy.Wproxy, error) {
+func resolverDialContext(policy *dnsresolver.Policy, cache *dnscache.Cache) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		if policy == nil {
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		}
+		var lookup dnsresolver.LookupFunc
+		if cache != nil {
+			lookup = cache.LookupContext
+		}
+		return policy.DialContext(ctx, network, address, lookup)
+	}
+}
+
+func (s *Server) dialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if s != nil && s.dnsResolver != nil {
+		var lookup dnsresolver.LookupFunc
+		if s.dnsCache != nil {
+			lookup = s.dnsCache.LookupContext
+		}
+		return s.dnsResolver.DialContext(ctx, network, address, lookup)
+	}
+	timeout := time.Duration(0)
+	if s != nil && s.cfg.SockTimeout > 0 {
+		timeout = configuredSockTimeout(s.cfg)
+	}
+	return (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext(ctx, network, address)
+}
+
+func buildWproxy(cfg config.Config, cache *dnscache.Cache, dialContext func(context.Context, string, string) (net.Conn, error)) (*wproxy.Wproxy, error) {
 	mode := wproxy.ModeNone
 	var servers []wproxy.Server
 	var err error
@@ -268,7 +308,7 @@ func buildWproxy(cfg config.Config) (*wproxy.Wproxy, error) {
 			return nil, err
 		}
 	}
-	wp, err := wproxy.New(mode, servers, cfg.NoProxy, cfg.PACEncoding)
+	wp, err := wproxy.NewWithDNS(mode, servers, cfg.NoProxy, cfg.PACEncoding, cache, dialContext)
 	if err != nil {
 		return nil, err
 	}
@@ -617,7 +657,7 @@ func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 	}
 	// buildWproxy may do bounded network I/O (PAC/system discovery); keep it
 	// outside the lock so request-path routing is never stalled by recovery.
-	wp, err := buildWproxy(s.cfg)
+	wp, err := buildWproxy(s.cfg, s.dnsCache, s.dialContext)
 	if err != nil {
 		return err
 	}

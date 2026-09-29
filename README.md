@@ -130,6 +130,7 @@ listen = 127.0.0.1
 port = 3128
 auth = ANYSAFE
 noproxy = localhost,127.0.0.1
+dns = https://dns.example/dns-query
 
 [settings]
 workers = 1
@@ -175,6 +176,7 @@ reported instead of being mistaken for a missing password. Set
 | `--hostonly` | Bind all interfaces but allow only local host interface IPs |
 | `--allow=LIST` | Client allow list for `--gateway` mode |
 | `--noproxy=LIST` | Hosts or IP ranges that bypass the upstream proxy |
+| `--dns=RESOLVERS` | Outbound DNS: `system`, custom UDP/TCP DNS, DoH, or comma-separated ordered failover; configured modes do not silently fall back to OS DNS |
 | `--auth=TYPE` | Upstream auth mode: `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `NONE`; omitted auth with reusable credentials behaves as `ANYSAFE`, while explicit `ANY` opts into Basic fallback |
 | `--username=USER` | Explicit upstream proxy username |
 | `--kerberos` | Linux/macOS: acquire/refresh a Kerberos ccache and use it for upstream HTTP `Negotiate`/SPNEGO (`HTTP/<proxy-host>`); Windows SSPI works without this flag |
