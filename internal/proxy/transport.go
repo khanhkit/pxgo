@@ -65,11 +65,8 @@ func (s *Server) httpTransportForProxy(p wproxy.Server) *http.Transport {
 func (s *Server) newHTTPTransport(p wproxy.Server) *http.Transport {
 	timeout := time.Duration(s.cfg.SockTimeout * float64(time.Second))
 	transport := &http.Transport{
-		DisableCompression: true,
-		DialContext: (&net.Dialer{
-			Timeout:   timeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		DisableCompression:    true,
+		DialContext:           s.dialContext,
 		ResponseHeaderTimeout: timeout,
 		TLSHandshakeTimeout:   timeout,
 		MaxIdleConns:          100,
@@ -83,7 +80,7 @@ func (s *Server) newHTTPTransport(p wproxy.Server) *http.Transport {
 	addr := net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
 	if strings.HasPrefix(scheme, "socks") {
 		transport.DialContext = func(ctx context.Context, network, target string) (net.Conn, error) {
-			return dialSOCKSProxy(ctx, scheme, addr, target, timeout)
+			return dialSOCKSProxyWithDial(ctx, scheme, addr, target, timeout, s.dialContext)
 		}
 	} else {
 		transport.Proxy = http.ProxyURL(&url.URL{Scheme: scheme, Host: addr})
@@ -152,18 +149,24 @@ func proxyScheme(server wproxy.Server) string {
 	return server.Scheme
 }
 
-func dialSOCKSProxy(ctx context.Context, scheme, proxyAddr, target string, timeout time.Duration) (net.Conn, error) {
+type contextDialFunc func(context.Context, string, string) (net.Conn, error)
+
+func dialSOCKSProxyWithDial(ctx context.Context, scheme, proxyAddr, target string, timeout time.Duration, dial contextDialFunc) (net.Conn, error) {
 	switch strings.ToLower(scheme) {
 	case "socks4", "socks4a":
-		return dialSOCKS4(ctx, proxyAddr, target, timeout)
+		return dialSOCKS4WithDial(ctx, proxyAddr, target, timeout, dial)
 	default:
-		return dialSOCKS5(ctx, proxyAddr, target, timeout)
+		return dialSOCKS5WithDial(ctx, proxyAddr, target, timeout, dial)
 	}
 }
 
 func dialSOCKS5(ctx context.Context, proxyAddr, target string, timeout time.Duration) (result net.Conn, retErr error) {
 	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
+	return dialSOCKS5WithDial(ctx, proxyAddr, target, timeout, dialer.DialContext)
+}
+
+func dialSOCKS5WithDial(ctx context.Context, proxyAddr, target string, timeout time.Duration, dial contextDialFunc) (result net.Conn, retErr error) {
+	conn, err := dial(ctx, "tcp", proxyAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -263,9 +266,8 @@ func dialSOCKS5(ctx context.Context, proxyAddr, target string, timeout time.Dura
 	return conn, nil
 }
 
-func dialSOCKS4(ctx context.Context, proxyAddr, target string, timeout time.Duration) (result net.Conn, retErr error) {
-	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
+func dialSOCKS4WithDial(ctx context.Context, proxyAddr, target string, timeout time.Duration, dial contextDialFunc) (result net.Conn, retErr error) {
+	conn, err := dial(ctx, "tcp", proxyAddr)
 	if err != nil {
 		return nil, err
 	}

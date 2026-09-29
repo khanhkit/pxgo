@@ -49,6 +49,15 @@ func (s *Server) DiagnosticSnapshot() diagnostic.Snapshot {
 	}
 	s.wmu.RUnlock()
 
+	dnsStatus := diagnostic.DNSSnapshot{Mode: "system", Source: sourceClass(s.cfg.SourceOf("dns"))}
+	if s.dnsResolver != nil {
+		status := s.dnsResolver.Status()
+		dnsStatus.Mode = status.Mode
+		dnsStatus.Endpoints = append([]string(nil), status.Endpoints...)
+		dnsStatus.Bootstrap = status.Bootstrap
+		dnsStatus.LastError = status.LastError
+	}
+
 	runtimeStatus := s.RuntimeStatus()
 	upstreams := make([]diagnostic.UpstreamHealthSnapshot, 0, len(runtimeStatus.Candidates))
 	for _, candidate := range runtimeStatus.Candidates {
@@ -66,6 +75,7 @@ func (s *Server) DiagnosticSnapshot() diagnostic.Snapshot {
 		Port:          s.Port(),
 		UptimeSeconds: now.Sub(s.startedAt).Seconds(),
 		Route:         route,
+		DNS:           dnsStatus,
 		Auth: diagnostic.AuthSnapshot{
 			UpstreamMode:      s.cfg.Auth,
 			UpstreamMechanism: s.authMechanism.Snapshot(),

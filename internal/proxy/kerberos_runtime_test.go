@@ -150,6 +150,7 @@ func TestAPISS0019HTTPAuthCommitsSelectedKerberosOnSuccess(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("nil response")
+		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

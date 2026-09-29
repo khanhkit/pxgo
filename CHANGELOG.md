@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Add operator-configurable outbound DNS with system DNS compatibility, custom UDP/TCP resolvers, DNS-over-HTTPS, deterministic ordered failover, fail-closed target resolution, and resolver diagnostics.
+- Embed the owner-provided icon in Windows release executables and verify the exact staged PE icon resources before immutable promotion.
+
 ## [0.7.1] - 2026-09-25
 
 ### Fixed

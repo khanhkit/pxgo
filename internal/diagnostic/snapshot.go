@@ -19,6 +19,14 @@ type RouteSnapshot struct {
 	PACLastError   string    `json:"pac_last_error,omitempty"`
 }
 
+type DNSSnapshot struct {
+	Mode      string   `json:"mode"`
+	Endpoints []string `json:"endpoints,omitempty"`
+	Bootstrap string   `json:"bootstrap,omitempty"`
+	LastError string   `json:"last_error,omitempty"`
+	Source    string   `json:"source,omitempty"`
+}
+
 type AuthSnapshot struct {
 	UpstreamMode      string            `json:"upstream_mode"`
 	UpstreamMechanism string            `json:"upstream_mechanism,omitempty"`
@@ -66,6 +74,7 @@ type Snapshot struct {
 	Port          int               `json:"port"`
 	UptimeSeconds float64           `json:"uptime_seconds"`
 	Route         RouteSnapshot     `json:"route"`
+	DNS           DNSSnapshot       `json:"dns"`
 	Auth          AuthSnapshot      `json:"auth"`
 	Runtime       RuntimeSnapshot   `json:"runtime"`
 	ActiveTunnels int64             `json:"active_tunnels"`

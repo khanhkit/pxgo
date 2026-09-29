@@ -106,7 +106,6 @@ func (s *Server) handleConnect(rw http.ResponseWriter, req *http.Request) {
 
 func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingProxyAuth string, proxies []wproxy.Server) (net.Conn, []byte, error) {
 	timeout := time.Duration(s.cfg.SockTimeout * float64(time.Second))
-	dialer := &net.Dialer{Timeout: timeout}
 	var lastErr error
 	for _, p := range s.orderedProxyCandidates(proxyCandidates(proxies)) {
 		var upstream net.Conn
@@ -114,13 +113,13 @@ func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingP
 		var err error
 		if p == wproxy.Direct {
 			debug.Dprint("CONNECT: dialing direct to " + target)
-			upstream, err = dialer.DialContext(ctx, "tcp", target) // #nosec G704 -- this proxy must dial client-requested CONNECT targets.
+			upstream, err = s.dialContext(ctx, "tcp", target) // #nosec G704 -- this proxy must dial client-requested CONNECT targets.
 		} else {
 			addr := net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
 			debug.Dprintf("CONNECT: dialing via %s proxy %s for %s", proxyScheme(p), addr, target)
 			switch scheme := proxyScheme(p); {
 			case scheme == httpsScheme:
-				upstream, err = dialer.DialContext(ctx, "tcp", addr)
+				upstream, err = s.dialContext(ctx, "tcp", addr)
 				if err == nil {
 					tlsConn := tls.Client(upstream, &tls.Config{ServerName: p.Host})
 					handshakeCtx := ctx
@@ -136,9 +135,9 @@ func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingP
 					}
 				}
 			case strings.HasPrefix(scheme, "socks"):
-				upstream, err = dialSOCKSProxy(ctx, scheme, addr, target, timeout)
+				upstream, err = dialSOCKSProxyWithDial(ctx, scheme, addr, target, timeout, s.dialContext)
 			default:
-				upstream, err = dialer.DialContext(ctx, "tcp", addr)
+				upstream, err = s.dialContext(ctx, "tcp", addr)
 				if err == nil {
 					leftover, err = s.sendUpstreamConnectBounded(ctx, upstream, target, p.Host, incomingProxyAuth, timeout)
 				}

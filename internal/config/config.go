@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/khanhkit/pxgo/internal/dnsresolver"
 )
 
 const (
@@ -43,6 +45,7 @@ const (
 	keyHostonly       = "hostonly"
 	keyAllow          = "allow"
 	keyNoProxy        = "noproxy"
+	keyDNS            = "dns"
 	keyUserAgent      = "useragent"
 	keyUsername       = "username"
 	keyPassword       = "password"
@@ -65,6 +68,7 @@ const (
 	keySave           = "save"
 	keyInstall        = "install"
 	localhostIP       = "127.0.0.1"
+	configSourceCLI   = "cli"
 )
 
 const maxConfigLineBytes = 1 << 20
@@ -79,6 +83,7 @@ var Defaults = map[string]string{
 	keyHostonly:       "0",
 	keyAllow:          "*.*.*.*",
 	keyNoProxy:        "",
+	keyDNS:            "",
 	keyUserAgent:      "",
 	keyUsername:       "",
 	keyAuth:           "",
@@ -116,6 +121,7 @@ type Config struct {
 	Hostonly             bool
 	Allow                string
 	NoProxy              string
+	DNS                  string
 	UserAgent            string
 	Username             string
 	Password             string
@@ -349,7 +355,7 @@ func ParseArgs(args []string) (Config, error) {
 	configPath := preScanConfigPath(args)
 	configPathSource := ""
 	if configPath != "" {
-		configPathSource = "cli"
+		configPathSource = configSourceCLI
 	} else if raw, source, ok := lookupCompatEnv("CONFIG"); ok {
 		configPath = raw
 		configPathSource = "env:" + source
@@ -482,7 +488,7 @@ func ParseArgs(args []string) (Config, error) {
 		if !ok {
 			name, val = strings.TrimPrefix(arg, "--"), "1"
 		}
-		if err := applyValueFrom(&cfg, strings.ReplaceAll(name, "-", "_"), val, "cli"); err != nil {
+		if err := applyValueFrom(&cfg, strings.ReplaceAll(name, "-", "_"), val, configSourceCLI); err != nil {
 			return cfg, fmt.Errorf("command line --%s: %w", name, err)
 		}
 	}
@@ -735,6 +741,11 @@ func applyValue(cfg *Config, name, val string) error {
 		cfg.Allow = val
 	case keyNoProxy:
 		cfg.NoProxy = val
+	case keyDNS:
+		if _, err := dnsresolver.New(val, time.Second); err != nil {
+			return fmt.Errorf("invalid %s: %w", name, err)
+		}
+		cfg.DNS = strings.TrimSpace(val)
 	case keyUserAgent:
 		cfg.UserAgent = val
 	case keyUsername:
@@ -1115,6 +1126,7 @@ gateway = %d
 hostonly = %d
 allow = %s
 noproxy = %s
+dns = %s
 useragent = %s
 username = %s
 auth = %s
@@ -1133,7 +1145,7 @@ socktimeout = %g
 proxyreload = %d
 foreground = %d
 log = %d
-`, cfg.Server, cfg.PAC, cfg.PACEncoding, cfg.Port, listen, btoi(cfg.Gateway), btoi(cfg.Hostonly), cfg.Allow, cfg.NoProxy,
+`, cfg.Server, cfg.PAC, cfg.PACEncoding, cfg.Port, listen, btoi(cfg.Gateway), btoi(cfg.Hostonly), cfg.Allow, cfg.NoProxy, cfg.DNS,
 		cfg.UserAgent, cfg.Username, cfg.Auth, btoi(cfg.Kerberos), cfg.ClientAuth, cfg.ClientUsername, btoi(cfg.ClientNoSSPI), cfg.Workers, cfg.Threads, cfg.Idle,
 		cfg.SockTimeout, cfg.ProxyReload, btoi(cfg.Foreground), cfg.Log)
 	return withFileLock(path, 0o600, func() error {
@@ -1152,6 +1164,7 @@ func validateINIStrings(cfg Config) error {
 		{"listen", cfg.Listen},
 		{"allow", cfg.Allow},
 		{"noproxy", cfg.NoProxy},
+		{"dns", cfg.DNS},
 		{"useragent", cfg.UserAgent},
 		{"username", cfg.Username},
 		{"auth", cfg.Auth},

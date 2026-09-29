@@ -356,6 +356,7 @@ Options:
   --hostonly                      Allow local host interfaces only
   --allow=IPGLOB                  Client allow list
   --noproxy=LIST                  Direct-connect bypass list
+  --dns=RESOLVERS                 DNS: system, IP[:PORT], udp://IP[:PORT], tcp://IP[:PORT], or HTTPS DoH URL; comma-separated failover
   --useragent=VALUE               Override forwarded User-Agent
   --auth=TYPE                     Upstream auth: ANY, ANYSAFE, NEGOTIATE, NTLM, DIGEST, BASIC, NONE
   --username=USER                 Upstream auth username

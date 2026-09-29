@@ -2,6 +2,7 @@ package pac
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -50,8 +51,10 @@ var pacHTTPTransport = func() *http.Transport {
 }()
 
 type Pac struct {
-	location string
-	encoding string
+	location      string
+	encoding      string
+	dnsCache      *dnscache.Cache
+	httpTransport http.RoundTripper
 
 	// mu guards generation (re)loading. Each active pacRuntime separately
 	// serializes evaluation on its one shared JavaScript global state.
@@ -79,10 +82,23 @@ type pacVM struct {
 }
 
 func New(location, encoding string) *Pac {
+	return NewWithDNS(location, encoding, dnscache.Default(), nil)
+}
+
+func NewWithDNS(location, encoding string, cache *dnscache.Cache, dialContext func(context.Context, string, string) (net.Conn, error)) *Pac {
 	if strings.TrimSpace(encoding) == "" {
 		encoding = autoEncoding
 	}
-	return &Pac{location: location, encoding: encoding}
+	if cache == nil {
+		cache = dnscache.Default()
+	}
+	transport := http.RoundTripper(pacHTTPTransport)
+	if dialContext != nil {
+		custom := pacHTTPTransport.Clone()
+		custom.DialContext = dialContext
+		transport = custom
+	}
+	return &Pac{location: location, encoding: encoding, dnsCache: cache, httpTransport: transport}
 }
 
 func (p *Pac) Loaded() bool {
@@ -445,7 +461,7 @@ func (p *Pac) readPACSource() (pacSource, error) {
 	loc := strings.ToLower(p.location)
 	if strings.HasPrefix(loc, "http://") || strings.HasPrefix(loc, "https://") {
 		client := http.Client{
-			Transport: pacHTTPTransport,
+			Transport: p.httpTransport,
 			Timeout:   pacHTTPTimeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -584,7 +600,13 @@ func NormalizeResult(proxies string) (string, error) {
 }
 
 func (p *Pac) DNSResolve(host string) string {
-	ips := dnscache.Lookup(host)
+	cache := p.dnsCache
+	if cache == nil {
+		cache = dnscache.Default()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pacExecTimeout)
+	defer cancel()
+	ips, _ := cache.LookupContext(ctx, host)
 	if len(ips) == 0 {
 		return ""
 	}

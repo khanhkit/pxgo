@@ -98,30 +98,30 @@ func TestAPISS0017CapacityEvictsOneOldestEntry(t *testing.T) {
 	ResetForTest()
 
 	base := time.Now().Add(time.Hour)
-	mu.Lock()
+	defaultCache.mu.Lock()
 	for i := 0; i < maxEntries; i++ {
 		host := fmt.Sprintf("existing-%04d.example.test", i)
-		cache[host] = entry{
+		defaultCache.cache[host] = entry{
 			ips:     []net.IP{net.IPv4(10, 0, byte(i>>8), byte(i)).To4()},
 			expires: base.Add(time.Duration(i) * time.Second),
 		}
 	}
-	mu.Unlock()
+	defaultCache.mu.Unlock()
 
 	Lookup("new.example.test")
 
-	mu.RLock()
-	defer mu.RUnlock()
-	if len(cache) != maxEntries {
-		t.Fatalf("cache size=%d want=%d", len(cache), maxEntries)
+	defaultCache.mu.RLock()
+	defer defaultCache.mu.RUnlock()
+	if len(defaultCache.cache) != maxEntries {
+		t.Fatalf("cache size=%d want=%d", len(defaultCache.cache), maxEntries)
 	}
-	if _, ok := cache["existing-0000.example.test"]; ok {
+	if _, ok := defaultCache.cache["existing-0000.example.test"]; ok {
 		t.Fatal("oldest entry was not evicted")
 	}
-	if _, ok := cache["existing-0001.example.test"]; !ok {
+	if _, ok := defaultCache.cache["existing-0001.example.test"]; !ok {
 		t.Fatal("bounded eviction removed more than one live victim")
 	}
-	if _, ok := cache["new.example.test"]; !ok {
+	if _, ok := defaultCache.cache["new.example.test"]; !ok {
 		t.Fatal("new entry not admitted")
 	}
 }
@@ -152,9 +152,9 @@ func TestAPISS0017ExpiryStartsAfterResolverCompletes(t *testing.T) {
 	close(release)
 	<-done
 
-	mu.RLock()
-	e := cache["ttl.example.test"]
-	mu.RUnlock()
+	defaultCache.mu.RLock()
+	e := defaultCache.cache["ttl.example.test"]
+	defaultCache.mu.RUnlock()
 	if remaining := e.expires.Sub(resolvedAt); remaining < positiveTTL-10*time.Millisecond {
 		t.Fatalf("TTL started before resolver completion: remaining=%v want approximately %v", remaining, positiveTTL)
 	}
@@ -164,14 +164,14 @@ func TestAPISS0017EvictionTreatsExactExpiryAsExpired(t *testing.T) {
 	ResetForTest()
 	t.Cleanup(ResetForTest)
 	now := time.Now()
-	mu.Lock()
-	cache["expired.example.test"] = entry{
+	defaultCache.mu.Lock()
+	defaultCache.cache["expired.example.test"] = entry{
 		ips:     []net.IP{net.IPv4(198, 51, 100, 1).To4()},
 		expires: now,
 	}
-	evictLocked(now)
-	_, ok := cache["expired.example.test"]
-	mu.Unlock()
+	defaultCache.evictLocked(now)
+	_, ok := defaultCache.cache["expired.example.test"]
+	defaultCache.mu.Unlock()
 	if ok {
 		t.Fatal("entry with expires == now was not evicted")
 	}

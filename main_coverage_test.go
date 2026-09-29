@@ -462,6 +462,7 @@ func TestDoSelfTestRequestStopsAfterBoundedAuthRetries(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("bounded retry returned nil response")
+		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusProxyAuthRequired {
