@@ -160,6 +160,7 @@ func TestServerTimeoutPolicyUsesExistingConfigBudgets(t *testing.T) {
 	px.stateMu.RUnlock()
 	if srv == nil {
 		t.Fatal("HTTP server not initialized")
+		return
 	}
 	wantSock := 200 * time.Millisecond
 	if srv.ReadHeaderTimeout != wantSock || srv.ReadTimeout != wantSock {
