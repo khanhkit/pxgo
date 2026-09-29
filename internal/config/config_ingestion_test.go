@@ -97,7 +97,7 @@ func TestAPISS0009RecordsEffectiveSourceProvenance(t *testing.T) {
 	if got := cfg.SourceOf("threads"); got != "env:PXGO_THREADS" {
 		t.Fatalf("threads source=%q", got)
 	}
-	if got := cfg.SourceOf("port"); got != "cli" {
+	if got := cfg.SourceOf("port"); got != configSourceCLI {
 		t.Fatalf("port source=%q", got)
 	}
 	if got := cfg.SourceOf("idle"); got != "default" {
@@ -234,7 +234,7 @@ func TestAPISS0031DNSConfigSurfacesAndProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DNS != "tcp://127.0.0.1:5301" || cfg.SourceOf("dns") != "cli" {
+	if cfg.DNS != "tcp://127.0.0.1:5301" || cfg.SourceOf("dns") != configSourceCLI {
 		t.Fatalf("cli dns=%q source=%q", cfg.DNS, cfg.SourceOf("dns"))
 	}
 }

@@ -68,6 +68,7 @@ const (
 	keySave           = "save"
 	keyInstall        = "install"
 	localhostIP       = "127.0.0.1"
+	configSourceCLI   = "cli"
 )
 
 const maxConfigLineBytes = 1 << 20
@@ -354,7 +355,7 @@ func ParseArgs(args []string) (Config, error) {
 	configPath := preScanConfigPath(args)
 	configPathSource := ""
 	if configPath != "" {
-		configPathSource = "cli"
+		configPathSource = configSourceCLI
 	} else if raw, source, ok := lookupCompatEnv("CONFIG"); ok {
 		configPath = raw
 		configPathSource = "env:" + source
@@ -487,7 +488,7 @@ func ParseArgs(args []string) (Config, error) {
 		if !ok {
 			name, val = strings.TrimPrefix(arg, "--"), "1"
 		}
-		if err := applyValueFrom(&cfg, strings.ReplaceAll(name, "-", "_"), val, "cli"); err != nil {
+		if err := applyValueFrom(&cfg, strings.ReplaceAll(name, "-", "_"), val, configSourceCLI); err != nil {
 			return cfg, fmt.Errorf("command line --%s: %w", name, err)
 		}
 	}

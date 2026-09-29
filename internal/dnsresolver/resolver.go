@@ -27,6 +27,8 @@ const (
 	resolverSchemeUDP    = "udp"
 	resolverSchemeTCP    = "tcp"
 	resolverSchemeHTTPS  = "https"
+	resolverModeSystem   = "system"
+	resolverModeDNS      = "dns"
 )
 
 // Policy owns outbound hostname resolution. The zero/default configuration
@@ -88,7 +90,7 @@ func New(raw string, timeout time.Duration) (*Policy, error) {
 
 func newPolicy(raw string, timeout time.Duration, client *http.Client) (*Policy, error) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.EqualFold(raw, "system") {
+	if raw == "" || strings.EqualFold(raw, resolverModeSystem) {
 		return &Policy{system: true, timeout: normalizedTimeout(timeout)}, nil
 	}
 	parts := strings.Split(raw, ",")
@@ -125,7 +127,7 @@ func parseEndpoint(raw string) (endpoint, error) {
 	if raw == "" {
 		return endpoint{}, errors.New("empty dns resolver endpoint")
 	}
-	if strings.EqualFold(raw, "system") {
+	if strings.EqualFold(raw, resolverModeSystem) {
 		return endpoint{}, errors.New("system cannot be mixed with configured dns endpoints")
 	}
 	if !strings.Contains(raw, "://") {
@@ -208,13 +210,13 @@ func (p *Policy) IsSystem() bool { return p == nil || p.system }
 
 func (p *Policy) Status() Status {
 	if p == nil || p.system {
-		return Status{Mode: "system"}
+		return Status{Mode: resolverModeSystem}
 	}
 	status := Status{Mode: p.mode()}
 	for _, ep := range p.endpoints {
 		status.Endpoints = append(status.Endpoints, ep.label)
 		if ep.scheme == resolverSchemeHTTPS && net.ParseIP(ep.url.Hostname()) == nil {
-			status.Bootstrap = "system"
+			status.Bootstrap = resolverModeSystem
 		}
 	}
 	p.mu.RLock()
@@ -238,7 +240,7 @@ func (p *Policy) mode() string {
 	case hasDoH:
 		return "doh"
 	default:
-		return "dns"
+		return resolverModeDNS
 	}
 }
 

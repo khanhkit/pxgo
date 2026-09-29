@@ -22,11 +22,11 @@ func TestAPISS0031ConfigGrammar(t *testing.T) {
 		wantMode string
 		wantErr  bool
 	}{
-		{"", "system", false},
-		{"system", "system", false},
-		{"1.1.1.1", "dns", false},
-		{"udp://1.1.1.1:5353", "dns", false},
-		{"tcp://[2606:4700:4700::1111]:53", "dns", false},
+		{"", resolverModeSystem, false},
+		{resolverModeSystem, resolverModeSystem, false},
+		{"1.1.1.1", resolverModeDNS, false},
+		{"udp://1.1.1.1:5353", resolverModeDNS, false},
+		{"tcp://[2606:4700:4700::1111]:53", resolverModeDNS, false},
 		{"https://dns.example/dns-query", "doh", false},
 		{"udp://1.1.1.1:53,https://dns.example/dns-query", "mixed", false},
 		{"udp://resolver.example:53", "", true},
