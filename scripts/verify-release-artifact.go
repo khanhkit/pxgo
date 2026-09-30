@@ -637,8 +637,8 @@ func smokeBackground(binaryPath, backgroundPath string) error {
 	if processes.pxgo < 2 {
 		return fmt.Errorf("background process tree pxgo.exe count=%d want at least 2 (Guardian parent + worker)", processes.pxgo)
 	}
-	if processes.pxgow != 0 {
-		return fmt.Errorf("pxgow.exe remained resident after launch: count=%d", processes.pxgow)
+	if processes.pxgow != 1 {
+		return fmt.Errorf("background tray host pxgow.exe count=%d want 1", processes.pxgow)
 	}
 
 	quitOut, err := exec.Command(binaryPath, "--port="+strconv.Itoa(port), "--quit").CombinedOutput()

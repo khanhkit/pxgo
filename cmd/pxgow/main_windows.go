@@ -33,5 +33,9 @@ func run() error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	return runTray(cmd, func() {
+		if err := quitBackground(pxgo, os.Args[1:]); err != nil {
+			logEarlyError(err)
+		}
+	})
 }
