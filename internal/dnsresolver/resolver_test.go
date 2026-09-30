@@ -309,15 +309,24 @@ func TestAPISS0031UDPTruncationFallsBackToTCP(t *testing.T) {
 
 func startTruncatedDNSFixture(t *testing.T, answer net.IP) (string, *atomic.Int32, func()) {
 	t.Helper()
-	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	var tcpLn net.Listener
+	var udpPC net.PacketConn
+	var port int
+	for attempt := 0; attempt < 20; attempt++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate := ln.Addr().(*net.TCPAddr).Port
+		pc, err := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(candidate)))
+		if err == nil {
+			tcpLn, udpPC, port = ln, pc, candidate
+			break
+		}
+		_ = ln.Close()
 	}
-	port := tcpLn.Addr().(*net.TCPAddr).Port
-	udpPC, err := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if err != nil {
-		tcpLn.Close()
-		t.Fatal(err)
+	if tcpLn == nil || udpPC == nil {
+		t.Fatal("unable to allocate shared TCP/UDP DNS fixture port")
 	}
 	var tcpCalls atomic.Int32
 	doneUDP := make(chan struct{})
