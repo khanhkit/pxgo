@@ -18,6 +18,42 @@ import (
 	"testing"
 )
 
+func TestServiceResolvesManagedProviderThroughSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "Cellar", "pxgo", "1.2.3", "bin", "pxgo")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "bin", "pxgo")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v1.2.4","draft":false,"prerelease":false,"assets":[]}`))
+	}))
+	defer srv.Close()
+	service := Service{
+		Checker:    Checker{APIBase: srv.URL, Client: srv.Client()},
+		Provider:   ProviderAuto,
+		Channel:    Stable,
+		Executable: link,
+		GOOS:       "darwin",
+	}
+	status, err := service.Check(context.Background(), "1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Provider != ProviderBrew {
+		t.Fatalf("provider=%q want %q", status.Provider, ProviderBrew)
+	}
+}
+
 func TestServiceDirectUpdateStagesVerifiesAndActivates(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "pxgo")

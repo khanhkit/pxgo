@@ -77,10 +77,16 @@ func ResolveProvider(configured Provider, executable, goos string) (Provider, er
 		if owned && configured != detected {
 			return "", fmt.Errorf("configured update provider %q conflicts with executable ownership %q", configured, detected)
 		}
+		if hinted, ambiguous := detectManagedProviderHint(executable, goos); ambiguous && configured != hinted {
+			return "", fmt.Errorf("configured update provider %q conflicts with manager-like executable path for %q", configured, hinted)
+		}
 		return configured, nil
 	}
 	if owned {
 		return detected, nil
+	}
+	if hinted, ambiguous := detectManagedProviderHint(executable, goos); ambiguous {
+		return "", fmt.Errorf("ambiguous update provider for manager-like executable path; configure install_provider=%s", hinted)
 	}
 	return ProviderDirect, nil
 }
@@ -98,6 +104,25 @@ func detectManagedProvider(executable, goos string) (Provider, bool) {
 		}
 	case goosDarwin, goosLinux:
 		if strings.Contains(path, "/cellar/pxgo/") {
+			return ProviderBrew, true
+		}
+	}
+	return "", false
+}
+
+func detectManagedProviderHint(executable, goos string) (Provider, bool) {
+	normalizedExecutable := strings.ReplaceAll(executable, "\\", "/")
+	path := strings.ToLower(filepath.ToSlash(filepath.Clean(normalizedExecutable)))
+	switch strings.ToLower(strings.TrimSpace(goos)) {
+	case goosWindows:
+		switch {
+		case strings.Contains(path, "/scoop/"):
+			return ProviderScoop, true
+		case strings.Contains(path, "/winget/"):
+			return ProviderWinGet, true
+		}
+	case goosDarwin, goosLinux:
+		if strings.Contains(path, "/cellar/") {
 			return ProviderBrew, true
 		}
 	}

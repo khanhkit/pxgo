@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"time"
 )
@@ -61,7 +62,11 @@ func (s Service) Check(ctx context.Context, current string) (Status, error) {
 	if configured == "" {
 		configured = ProviderAuto
 	}
-	provider, err := ResolveProvider(configured, executable, goos)
+	ownershipExecutable := executable
+	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil && resolved != "" {
+		ownershipExecutable = resolved
+	}
+	provider, err := ResolveProvider(configured, ownershipExecutable, goos)
 	if err != nil {
 		return Status{}, err
 	}

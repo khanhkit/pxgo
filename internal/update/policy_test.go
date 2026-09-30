@@ -84,6 +84,18 @@ func TestResolveProviderRejectsOwnershipConflict(t *testing.T) {
 	}
 }
 
+func TestResolveProviderAmbiguousManagerPathFailsClosed(t *testing.T) {
+	if _, err := ResolveProvider(ProviderAuto, `C:\Users\me\scoop\shims\pxgo.exe`, "windows"); err == nil {
+		t.Fatal("ambiguous Scoop-like path fell through to direct")
+	}
+	if got, err := ResolveProvider(ProviderScoop, `C:\Users\me\scoop\shims\pxgo.exe`, "windows"); err != nil || got != ProviderScoop {
+		t.Fatalf("explicit Scoop marker=%q,%v", got, err)
+	}
+	if _, err := ResolveProvider(ProviderDirect, `/opt/homebrew/Cellar/custom/1.0/bin/pxgo`, "darwin"); err == nil {
+		t.Fatal("manager-like Homebrew path accepted direct ownership")
+	}
+}
+
 func TestResolveProviderAutoRequiresExecutable(t *testing.T) {
 	if _, err := ResolveProvider(ProviderAuto, "", "linux"); err == nil {
 		t.Fatal("expected empty executable path failure")
