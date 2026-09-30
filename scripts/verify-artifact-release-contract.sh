@@ -75,7 +75,10 @@ if [[ -f assets/windows/pxgo.ico ]]; then
   icon_sha="$(sha256sum assets/windows/pxgo.ico | awk '{print $1}')"
   [[ "$icon_sha" == 'd84be2b1f38218675a6fc74693826ac3920ce576c4b749d87599230bbbb6208f' ]] || bad "Windows icon checksum mismatch: ${icon_sha}"
 fi
-grep -Fq 'verifyWindowsIcon(binaryPath' scripts/verify-release-artifact.go || bad 'exact Windows release candidate is not icon-verified'
+grep -Fq 'findFile(extractDir, "pxgow.exe")' scripts/verify-release-artifact.go || bad 'Windows release verifier does not require pxgow.exe'
+grep -Fq 'subsystem: 3' scripts/verify-release-artifact.go || bad 'Windows console subsystem contract missing'
+grep -Fq 'subsystem: 2' scripts/verify-release-artifact.go || bad 'Windows GUI subsystem contract missing'
+grep -Fq 'verifyWindowsIcon(candidate.path' scripts/verify-release-artifact.go || bad 'exact Windows release candidates are not both icon-verified'
 grep -Fq 'resourceTypeGroupIcon = 14' scripts/verify-release-artifact.go || bad 'Windows icon verifier does not inspect RT_GROUP_ICON'
 grep -Fq 'resourceTypeIcon      = 3' scripts/verify-release-artifact.go || bad 'Windows icon verifier does not inspect RT_ICON'
 

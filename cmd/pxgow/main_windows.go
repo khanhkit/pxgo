@@ -11,9 +11,16 @@ import (
 // pxgow is intentionally tiny: it launches the sibling console runtime without
 // allocating a console of its own. Guardian ownership remains in pxgo.exe.
 func main() {
+	if err := run(); err != nil {
+		logEarlyError(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	exe, err := os.Executable()
 	if err != nil {
-		os.Exit(1)
+		return err
 	}
 	pxgo := filepath.Join(filepath.Dir(exe), "pxgo.exe")
 	cmd := exec.Command(pxgo, os.Args[1:]...)
@@ -21,10 +28,10 @@ func main() {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := configureWindowlessChild(cmd); err != nil {
-		os.Exit(1)
+		return err
 	}
 	if err := cmd.Start(); err != nil {
-		os.Exit(1)
+		return err
 	}
-	os.Exit(0)
+	return cmd.Process.Release()
 }
