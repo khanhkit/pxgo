@@ -796,8 +796,8 @@ func windowsPxGoProcesses(binaryPath, backgroundPath string) (windowsProcessCoun
 	if runtime.GOOS != "windows" {
 		return windowsProcessCounts{}, errors.New("Windows process inspection requires a Windows host")
 	}
-	dir := strings.ToLower(filepath.Clean(filepath.Dir(binaryPath)))
-	ps := fmt.Sprintf(`$dir=%q; $items=Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'pxgo.exe' -or $_.Name -ieq 'pxgow.exe') -and ([IO.Path]::GetDirectoryName($_.ExecutablePath).ToLower() -eq $dir) }; $a=@($items | Where-Object {$_.Name -ieq 'pxgo.exe'}).Count; $b=@($items | Where-Object {$_.Name -ieq 'pxgow.exe'}).Count; Write-Output "$a $b"`, dir)
+	dir := filepath.Clean(filepath.Dir(binaryPath))
+	ps := fmt.Sprintf(`$dir=[IO.Path]::GetFullPath(%q); $items=Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'pxgo.exe' -or $_.Name -ieq 'pxgow.exe') -and $_.ExecutablePath -and ([IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($_.ExecutablePath)) -ieq $dir) }; $a=@($items | Where-Object {$_.Name -ieq 'pxgo.exe'}).Count; $b=@($items | Where-Object {$_.Name -ieq 'pxgow.exe'}).Count; Write-Output "$a $b"`, dir)
 	out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps).CombinedOutput()
 	if err != nil {
 		return windowsProcessCounts{}, fmt.Errorf("inspect Windows process tree: %w: %s", err, out)
