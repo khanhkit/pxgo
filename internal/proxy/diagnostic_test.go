@@ -10,6 +10,7 @@ import (
 
 	"github.com/khanhkit/pxgo/internal/config"
 	"github.com/khanhkit/pxgo/internal/diagnostic"
+	pxupdate "github.com/khanhkit/pxgo/internal/update"
 )
 
 func TestTOBSDOC012DoctorControlRequestShape(t *testing.T) {
@@ -67,6 +68,33 @@ func TestTOBSDOC012DoctorIsLoopbackOnlyAndReadOnly(t *testing.T) {
 	case <-s.closed:
 		t.Fatal("doctor request mutated server lifecycle")
 	default:
+	}
+}
+
+func TestAPISS0032SnapshotReportsDurableUpdateState(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	when := time.Date(2026, 9, 30, 4, 5, 6, 0, time.UTC)
+	state := pxupdate.State{
+		Current:    "1.0.0",
+		Latest:     "1.1.0",
+		Available:  true,
+		Provider:   pxupdate.ProviderDirect,
+		Channel:    pxupdate.Stable,
+		LastCheck:  when,
+		LastResult: pxupdate.ResultAvailable,
+	}
+	if err := pxupdate.WriteState(pxupdate.StatePath(config.GetConfigDir()), state); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Server = "DIRECT"
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := s.DiagnosticSnapshot()
+	if snapshot.Update.Current != state.Current || snapshot.Update.Latest != state.Latest || !snapshot.Update.Available || snapshot.Update.Provider != string(state.Provider) || snapshot.Update.Channel != string(state.Channel) || !snapshot.Update.LastCheck.Equal(when) || snapshot.Update.LastResult != state.LastResult {
+		t.Fatalf("update snapshot=%+v", snapshot.Update)
 	}
 }
 

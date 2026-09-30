@@ -54,6 +54,27 @@ Install somewhere on `PATH` if desired:
 install -m 0755 pxgo ~/.local/bin/pxgo
 ```
 
+## Updates
+
+A versioned PxGo build can inspect the accepted release channel without changing the installation:
+
+```bash
+pxgo --check-update
+```
+
+Use `pxgo --update` for an explicit update. PxGo preserves installation ownership:
+
+- WinGet installs delegate to `winget upgrade --id KhanhKit.PxGo --exact`;
+- Scoop installs delegate to `scoop update pxgo`;
+- Homebrew installs delegate to `brew upgrade pxgo`;
+- direct/portable installs download the exact matching GitHub release archive, verify the release-asset SHA-256 when GitHub provides it, independently verify the exact filename in `checksums.txt`, verify the staged binary version, then activate it without rebuilding or patching the published bytes.
+
+`install_provider=auto` is the default. Known package-manager paths are authoritative: configuring a conflicting provider such as `direct` for a detected Scoop/WinGet/Homebrew executable fails instead of overwriting manager-owned bytes. Use an explicit provider only when deployment tooling has a reliable installation-owner marker that path detection cannot express.
+
+Automatic updates are opt-in. `auto_update=notify` performs bounded periodic checks while leaving the worker running; `auto_update=install` stages the candidate first, then stops the Guardian-owned worker before apply. Failed discovery/download/apply leaves the current runnable version in place or restarts it; direct replacement keeps a rollback copy until the replacement passes its version check. Periodic checks default to `24h` with startup jitter so a fleet does not synchronize every request against GitHub.
+
+Stable releases are the default. `update_channel=prerelease` must be selected explicitly. Automatic flows never downgrade to an older semantic version.
+
 ## Docker
 
 Build the default runtime image:

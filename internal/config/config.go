@@ -18,6 +18,7 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/khanhkit/pxgo/internal/dnsresolver"
+	pxupdate "github.com/khanhkit/pxgo/internal/update"
 )
 
 const (
@@ -36,68 +37,77 @@ const (
 	envPrefix       = "PXGO_"
 	legacyEnvPrefix = "PX_"
 
-	keyServer         = "server"
-	keyPAC            = "pac"
-	keyPACEncoding    = "pac_encoding"
-	keyPort           = "port"
-	keyListen         = "listen"
-	keyGateway        = "gateway"
-	keyHostonly       = "hostonly"
-	keyAllow          = "allow"
-	keyNoProxy        = "noproxy"
-	keyDNS            = "dns"
-	keyUserAgent      = "useragent"
-	keyUsername       = "username"
-	keyPassword       = "password"
-	keyAuth           = "auth"
-	keyKerberos       = "kerberos"
-	keyWorkers        = "workers"
-	keyThreads        = "threads"
-	keyIdle           = "idle"
-	keySockTimeout    = "socktimeout"
-	keyProxyReload    = "proxyreload"
-	keyForeground     = "foreground"
-	keyLog            = "log"
-	keyClientAuth     = "client_auth"
-	keyClientNoSSPI   = "client_nosspi"
-	keyClientUsername = "client_username"
-	keyClientPassword = "client_password"
-	keyConfig         = "config"
-	keyTest           = "test"
-	keyDotenv         = "dotenv"
-	keySave           = "save"
-	keyInstall        = "install"
-	localhostIP       = "127.0.0.1"
-	configSourceCLI   = "cli"
+	keyServer          = "server"
+	keyPAC             = "pac"
+	keyPACEncoding     = "pac_encoding"
+	keyPort            = "port"
+	keyListen          = "listen"
+	keyGateway         = "gateway"
+	keyHostonly        = "hostonly"
+	keyAllow           = "allow"
+	keyNoProxy         = "noproxy"
+	keyDNS             = "dns"
+	keyUserAgent       = "useragent"
+	keyUsername        = "username"
+	keyPassword        = "password"
+	keyAuth            = "auth"
+	keyKerberos        = "kerberos"
+	keyWorkers         = "workers"
+	keyThreads         = "threads"
+	keyIdle            = "idle"
+	keySockTimeout     = "socktimeout"
+	keyProxyReload     = "proxyreload"
+	keyForeground      = "foreground"
+	keyLog             = "log"
+	keyClientAuth      = "client_auth"
+	keyClientNoSSPI    = "client_nosspi"
+	keyClientUsername  = "client_username"
+	keyClientPassword  = "client_password"
+	keyConfig          = "config"
+	keyTest            = "test"
+	keyDotenv          = "dotenv"
+	keySave            = "save"
+	keyInstall         = "install"
+	keyAutoUpdate      = "auto_update"
+	keyUpdateInterval  = "update_interval"
+	keyUpdateChannel   = "update_channel"
+	keyInstallProvider = "install_provider"
+	localhostIP        = "127.0.0.1"
+	configSourceCLI    = "cli"
+	defaultPACEncoding = "auto"
 )
 
 const maxConfigLineBytes = 1 << 20
 
 var Defaults = map[string]string{
-	keyServer:         "",
-	keyPAC:            "",
-	keyPACEncoding:    "auto",
-	keyPort:           "3128",
-	keyListen:         localhostIP,
-	keyGateway:        "0",
-	keyHostonly:       "0",
-	keyAllow:          "*.*.*.*",
-	keyNoProxy:        "",
-	keyDNS:            "",
-	keyUserAgent:      "",
-	keyUsername:       "",
-	keyAuth:           "",
-	keyKerberos:       "0",
-	keyWorkers:        "1",
-	keyThreads:        "32",
-	keyIdle:           "30",
-	keySockTimeout:    "20.0",
-	keyProxyReload:    "60",
-	keyForeground:     "0",
-	keyLog:            "0",
-	keyClientAuth:     "NONE",
-	keyClientNoSSPI:   "0",
-	keyClientUsername: "",
+	keyServer:          "",
+	keyPAC:             "",
+	keyPACEncoding:     defaultPACEncoding,
+	keyPort:            "3128",
+	keyListen:          localhostIP,
+	keyGateway:         "0",
+	keyHostonly:        "0",
+	keyAllow:           "*.*.*.*",
+	keyNoProxy:         "",
+	keyDNS:             "",
+	keyUserAgent:       "",
+	keyUsername:        "",
+	keyAuth:            "",
+	keyKerberos:        "0",
+	keyWorkers:         "1",
+	keyThreads:         "32",
+	keyIdle:            "30",
+	keySockTimeout:     "20.0",
+	keyProxyReload:     "60",
+	keyForeground:      "0",
+	keyLog:             "0",
+	keyClientAuth:      "NONE",
+	keyClientNoSSPI:    "0",
+	keyClientUsername:  "",
+	keyAutoUpdate:      string(pxupdate.AutoOff),
+	keyUpdateInterval:  "24h",
+	keyUpdateChannel:   "stable",
+	keyInstallProvider: string(pxupdate.ProviderAuto),
 }
 
 var (
@@ -134,12 +144,18 @@ type Config struct {
 	ProxyReload          int
 	Foreground           bool
 	Log                  int
+	AutoUpdate           string
+	UpdateInterval       time.Duration
+	UpdateChannel        string
+	InstallProvider      string
 	Test                 string
 	TestAuth             bool
 	PasswordAction       bool
 	ClientPasswordAction bool
 	Help                 bool
 	Version              bool
+	CheckUpdate          bool
+	Update               bool
 	Install              bool
 	Uninstall            bool
 	Force                bool
@@ -169,23 +185,28 @@ func Default() Config {
 	idle, _ := strconv.Atoi(Defaults[keyIdle])
 	sockTimeout, _ := strconv.ParseFloat(Defaults[keySockTimeout], 64)
 	proxyReload, _ := strconv.Atoi(Defaults[keyProxyReload])
+	updateInterval, _ := time.ParseDuration(Defaults[keyUpdateInterval])
 	sources := make(map[string]string, len(Defaults))
 	for key := range Defaults {
 		sources[key] = "default"
 	}
 	return Config{
-		PACEncoding: Defaults[keyPACEncoding],
-		Port:        port,
-		Listen:      Defaults[keyListen],
-		Allow:       Defaults[keyAllow],
-		Workers:     workers,
-		Threads:     threads,
-		Idle:        idle,
-		SockTimeout: sockTimeout,
-		ProxyReload: proxyReload,
-		Auth:        Defaults[keyAuth],
-		ClientAuth:  Defaults[keyClientAuth],
-		Sources:     sources,
+		PACEncoding:     Defaults[keyPACEncoding],
+		Port:            port,
+		Listen:          Defaults[keyListen],
+		Allow:           Defaults[keyAllow],
+		Workers:         workers,
+		Threads:         threads,
+		Idle:            idle,
+		SockTimeout:     sockTimeout,
+		ProxyReload:     proxyReload,
+		Auth:            Defaults[keyAuth],
+		ClientAuth:      Defaults[keyClientAuth],
+		AutoUpdate:      Defaults[keyAutoUpdate],
+		UpdateInterval:  updateInterval,
+		UpdateChannel:   Defaults[keyUpdateChannel],
+		InstallProvider: Defaults[keyInstallProvider],
+		Sources:         sources,
 	}
 }
 
@@ -398,87 +419,7 @@ func ParseArgs(args []string) (Config, error) {
 		return cfg, err
 	}
 	for _, arg := range args {
-		if arg == "--save" {
-			cfg.Save = true
-			continue
-		}
-		if arg == "--quit" {
-			cfg.Quit = true
-			continue
-		}
-		if arg == "--restart" {
-			cfg.Restart = true
-			continue
-		}
-		if arg == "--doctor" {
-			cfg.Doctor = true
-			continue
-		}
-		if arg == "--gateway" {
-			cfg.Gateway = true
-			cfg.Listen = ""
-			continue
-		}
-		if arg == "--hostonly" {
-			cfg.Hostonly = true
-			cfg.Listen = ""
-			continue
-		}
-		if arg == "--verbose" {
-			cfg.Log = LogStdout
-			cfg.Foreground = true
-			continue
-		}
-		if arg == "--debug" {
-			cfg.Log = LogScriptDir
-			continue
-		}
-		if arg == "--uniqlog" {
-			cfg.Log = LogUniqLog
-			continue
-		}
-		if arg == "--foreground" {
-			cfg.Foreground = true
-			continue
-		}
-		if arg == "--test-auth" {
-			cfg.TestAuth = true
-			continue
-		}
-		if arg == "--test" {
-			cfg.Test = "1"
-			continue
-		}
-		if arg == "--client-nosspi" || arg == "--client_nosspi" {
-			cfg.ClientNoSSPI = true
-			continue
-		}
-		if arg == "-h" || arg == "--help" {
-			cfg.Help = true
-			continue
-		}
-		if arg == "--version" {
-			cfg.Version = true
-			continue
-		}
-		if arg == "--"+keyInstall {
-			cfg.Install = true
-			continue
-		}
-		if arg == "--uninstall" {
-			cfg.Uninstall = true
-			continue
-		}
-		if arg == "--force" {
-			cfg.Force = true
-			continue
-		}
-		if arg == "--password" {
-			cfg.PasswordAction = true
-			continue
-		}
-		if arg == "--client-password" {
-			cfg.ClientPasswordAction = true
+		if applyBareArg(&cfg, arg) {
 			continue
 		}
 		if !strings.HasPrefix(arg, "--") {
@@ -497,6 +438,61 @@ func ParseArgs(args []string) (Config, error) {
 	}
 	normalizeDependencies(&cfg)
 	return cfg, nil
+}
+
+func applyBareArg(cfg *Config, arg string) bool {
+	switch arg {
+	case "--save":
+		cfg.Save = true
+	case "--quit":
+		cfg.Quit = true
+	case "--restart":
+		cfg.Restart = true
+	case "--doctor":
+		cfg.Doctor = true
+	case "--gateway":
+		cfg.Gateway = true
+		cfg.Listen = ""
+	case "--hostonly":
+		cfg.Hostonly = true
+		cfg.Listen = ""
+	case "--verbose":
+		cfg.Log = LogStdout
+		cfg.Foreground = true
+	case "--debug":
+		cfg.Log = LogScriptDir
+	case "--uniqlog":
+		cfg.Log = LogUniqLog
+	case "--foreground":
+		cfg.Foreground = true
+	case "--test-auth":
+		cfg.TestAuth = true
+	case "--test":
+		cfg.Test = "1"
+	case "--client-nosspi", "--client_nosspi":
+		cfg.ClientNoSSPI = true
+	case "-h", "--help":
+		cfg.Help = true
+	case "--version":
+		cfg.Version = true
+	case "--check-update":
+		cfg.CheckUpdate = true
+	case "--update":
+		cfg.Update = true
+	case "--" + keyInstall:
+		cfg.Install = true
+	case "--uninstall":
+		cfg.Uninstall = true
+	case "--force":
+		cfg.Force = true
+	case "--password":
+		cfg.PasswordAction = true
+	case "--client-password":
+		cfg.ClientPasswordAction = true
+	default:
+		return false
+	}
+	return true
 }
 
 func preScanConfigPath(args []string) string {
@@ -700,6 +696,9 @@ func applyValueFrom(cfg *Config, name, val, source string) error {
 }
 
 func applyValue(cfg *Config, name, val string) error {
+	if handled, err := applyAuxValue(cfg, name, val); handled {
+		return err
+	}
 	switch name {
 	case keyServer, "proxy":
 		cfg.Server = val
@@ -804,6 +803,38 @@ func applyValue(cfg *Config, name, val string) error {
 			return err
 		}
 		cfg.Log = parsed
+	default:
+		return fmt.Errorf("unsupported option %s", name)
+	}
+	return nil
+}
+
+func applyAuxValue(cfg *Config, name, val string) (bool, error) {
+	switch name {
+	case keyAutoUpdate:
+		mode, err := pxupdate.ParseAutoMode(val)
+		if err != nil {
+			return true, err
+		}
+		cfg.AutoUpdate = string(mode)
+	case keyUpdateInterval:
+		interval, err := time.ParseDuration(strings.TrimSpace(val))
+		if err != nil || interval <= 0 {
+			return true, fmt.Errorf("invalid %s %q: expected positive duration", name, val)
+		}
+		cfg.UpdateInterval = interval
+	case keyUpdateChannel:
+		channel, err := pxupdate.ParseChannel(val)
+		if err != nil {
+			return true, err
+		}
+		cfg.UpdateChannel = string(channel)
+	case keyInstallProvider:
+		provider, err := pxupdate.ParseProvider(val)
+		if err != nil {
+			return true, err
+		}
+		cfg.InstallProvider = string(provider)
 	case keyTest:
 		cfg.Test = val
 	case keyConfig:
@@ -819,13 +850,13 @@ func applyValue(cfg *Config, name, val string) error {
 	case keyClientNoSSPI:
 		parsed, err := parseBoolValue(val)
 		if err != nil {
-			return fmt.Errorf("invalid %s %q: %w", name, val, err)
+			return true, fmt.Errorf("invalid %s %q: %w", name, val, err)
 		}
 		cfg.ClientNoSSPI = parsed
 	default:
-		return fmt.Errorf("unsupported option %s", name)
+		return false, nil
 	}
-	return nil
+	return true, nil
 }
 
 func parseIntValue(name, val string) (int, error) {
@@ -1145,9 +1176,13 @@ socktimeout = %g
 proxyreload = %d
 foreground = %d
 log = %d
+auto_update = %s
+update_interval = %s
+update_channel = %s
+install_provider = %s
 `, cfg.Server, cfg.PAC, cfg.PACEncoding, cfg.Port, listen, btoi(cfg.Gateway), btoi(cfg.Hostonly), cfg.Allow, cfg.NoProxy, cfg.DNS,
 		cfg.UserAgent, cfg.Username, cfg.Auth, btoi(cfg.Kerberos), cfg.ClientAuth, cfg.ClientUsername, btoi(cfg.ClientNoSSPI), cfg.Workers, cfg.Threads, cfg.Idle,
-		cfg.SockTimeout, cfg.ProxyReload, btoi(cfg.Foreground), cfg.Log)
+		cfg.SockTimeout, cfg.ProxyReload, btoi(cfg.Foreground), cfg.Log, cfg.AutoUpdate, cfg.UpdateInterval.String(), cfg.UpdateChannel, cfg.InstallProvider)
 	return withFileLock(path, 0o600, func() error {
 		return atomicWriteFile(path, []byte(content), 0o600)
 	})
@@ -1170,6 +1205,9 @@ func validateINIStrings(cfg Config) error {
 		{"auth", cfg.Auth},
 		{"client_auth", cfg.ClientAuth},
 		{"client_username", cfg.ClientUsername},
+		{"auto_update", cfg.AutoUpdate},
+		{"update_channel", cfg.UpdateChannel},
+		{"install_provider", cfg.InstallProvider},
 	}
 	for _, field := range fields {
 		if strings.ContainsAny(field.value, "\r\n") {

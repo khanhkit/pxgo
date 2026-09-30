@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/khanhkit/pxgo/internal/config"
 	"github.com/khanhkit/pxgo/internal/diagnostic"
+	pxupdate "github.com/khanhkit/pxgo/internal/update"
 )
 
 const doctorControlPath = diagnostic.DoctorControlPath
@@ -76,6 +78,7 @@ func (s *Server) DiagnosticSnapshot() diagnostic.Snapshot {
 		UptimeSeconds: now.Sub(s.startedAt).Seconds(),
 		Route:         route,
 		DNS:           dnsStatus,
+		Update:        updateDiagnosticSnapshot(),
 		Auth: diagnostic.AuthSnapshot{
 			UpstreamMode:      s.cfg.Auth,
 			UpstreamMechanism: s.authMechanism.Snapshot(),
@@ -108,6 +111,26 @@ func (s *Server) DiagnosticSnapshot() diagnostic.Snapshot {
 		}
 	}
 	return snapshot
+}
+
+func updateDiagnosticSnapshot() diagnostic.UpdateSnapshot {
+	path := pxupdate.StatePath(config.GetConfigDir())
+	if path == "" {
+		return diagnostic.UpdateSnapshot{}
+	}
+	state, err := pxupdate.ReadState(path)
+	if err != nil {
+		return diagnostic.UpdateSnapshot{}
+	}
+	return diagnostic.UpdateSnapshot{
+		Current:    state.Current,
+		Latest:     state.Latest,
+		Available:  state.Available,
+		Provider:   string(state.Provider),
+		Channel:    string(state.Channel),
+		LastCheck:  state.LastCheck,
+		LastResult: diagnostic.RedactText(state.LastResult),
+	}
 }
 
 func diagnosticConfigSources(sources map[string]string) map[string]string {

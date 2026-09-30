@@ -3,14 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -23,16 +26,31 @@ import (
 	"github.com/khanhkit/pxgo/internal/diagnostic"
 	"github.com/khanhkit/pxgo/internal/guardian"
 	"github.com/khanhkit/pxgo/internal/proxy"
+	pxupdate "github.com/khanhkit/pxgo/internal/update"
 	"github.com/khanhkit/pxgo/internal/winstartup"
 	"golang.org/x/term"
 )
 
+type updateService interface {
+	Check(context.Context, string) (pxupdate.Status, error)
+	Prepare(context.Context, string) (pxupdate.PreparedUpdate, error)
+	ApplyPreparedWithRestart(context.Context, *pxupdate.PreparedUpdate, []string) (pxupdate.Status, error)
+	Update(context.Context, string) (pxupdate.Status, error)
+}
+
 var (
-	version               = "dev"
-	installStartupFunc    = installStartup
-	setupDebugFunc        = setupDebug
-	runGuardianParentFunc = runGuardianParent
-	runGuardianWorkerFunc = runGuardianWorker
+	version                    = "dev"
+	installStartupFunc         = installStartup
+	setupDebugFunc             = setupDebug
+	runGuardianParentFunc      = runGuardianParent
+	runGuardianWorkerFunc      = runGuardianWorker
+	guardianRunParentCoreFunc  = guardian.RunParent
+	newUpdateServiceFunc       = newUpdateService
+	runUpdateApplyHelperFunc   = pxupdate.RunApplyHelper
+	autoUpdateInitialDelayFunc = autoUpdateInitialDelay
+	restartUpdatedProcessFunc  = restartUpdatedProcess
+	lookupUpdateExecutableFunc = exec.LookPath
+	writeUpdateStateFunc       = pxupdate.WriteState
 )
 
 const (
@@ -72,6 +90,9 @@ func run() (exitCode int) {
 			exitCode = 1
 		}
 	}()
+	if handled, code := runUpdateApplyHelperFunc(os.Args[1:]); handled {
+		return code
+	}
 	cfg, err := config.ParseArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -92,6 +113,9 @@ func run() (exitCode int) {
 	if cfg.Version {
 		fmt.Println(version)
 		return 0
+	}
+	if cfg.CheckUpdate || cfg.Update {
+		return runUpdateAction(cfg, cfg.Update)
 	}
 	if cfg.Save {
 		path := config.ConfigPathForSave(cfg.ConfigPath)
@@ -208,9 +232,83 @@ func run() (exitCode int) {
 	return runGuardianParentFunc(cfg)
 }
 
+func newUpdateService(cfg config.Config) (updateService, error) {
+	provider, err := pxupdate.ParseProvider(cfg.InstallProvider)
+	if err != nil {
+		return nil, err
+	}
+	channel, err := pxupdate.ParseChannel(cfg.UpdateChannel)
+	if err != nil {
+		return nil, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve update executable: %w", err)
+	}
+	return pxupdate.Service{
+		Provider:   provider,
+		Channel:    channel,
+		Executable: executable,
+		StatePath:  pxupdate.StatePath(config.GetConfigDir()),
+	}, nil
+}
+
+func runUpdateAction(cfg config.Config, mutate bool) int {
+	if version == "dev" {
+		fmt.Fprintln(os.Stderr, "update actions require a versioned PxGo build")
+		return 2
+	}
+	service, err := newUpdateServiceFunc(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
+		return 7
+	}
+	timeout := 15 * time.Second
+	if mutate {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var status pxupdate.Status
+	if mutate {
+		status, err = service.Update(ctx, version)
+	} else {
+		status, err = service.Check(ctx, version)
+	}
+	if err != nil {
+		result := pxupdate.ResultCheckFailed
+		if mutate {
+			result = pxupdate.ResultApplyFailed
+		}
+		writeUpdateStateBestEffort(pxupdate.StatePath(config.GetConfigDir()), status, result)
+		fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
+		return 7
+	}
+	result := pxupdate.ResultCurrent
+	if status.Available {
+		result = pxupdate.ResultAvailable
+	}
+	if mutate && status.Applied {
+		result = pxupdate.ResultApplied
+	}
+	if mutate && status.Deferred {
+		result = pxupdate.ResultDeferred
+	}
+	writeUpdateStateBestEffort(pxupdate.StatePath(config.GetConfigDir()), status, result)
+	fmt.Printf("current=%s latest=%s provider=%s available=%t channel=%s",
+		status.Current, status.Latest, status.Provider, status.Available, status.Channel)
+	if mutate {
+		fmt.Printf(" applied=%t deferred=%t", status.Applied, status.Deferred)
+	}
+	fmt.Fprintln(os.Stdout)
+	return 0
+}
+
 func isOneShotConfig(cfg config.Config) bool {
 	return cfg.Help ||
 		cfg.Version ||
+		cfg.CheckUpdate ||
+		cfg.Update ||
 		cfg.Save ||
 		cfg.Install ||
 		cfg.Uninstall ||
@@ -221,7 +319,7 @@ func isOneShotConfig(cfg config.Config) bool {
 		cfg.Test != ""
 }
 
-func runGuardianParent(config.Config) int {
+func runGuardianParent(cfg config.Config) int {
 	raiseNofileLimitBestEffort()
 	executable, err := os.Executable()
 	if err != nil {
@@ -238,23 +336,189 @@ func runGuardianParent(config.Config) int {
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}
-	if err := guardian.RunParent(ctx, spec, guardian.ParentOptions{}); err != nil {
-		var startup *guardian.StartupExitError
-		if errors.As(err, &startup) {
-			if startup.Err != nil {
-				fmt.Fprintln(os.Stderr, diagnostic.RedactText(startup.Err.Error()))
-			} else {
-				fmt.Fprintln(os.Stderr, startup)
-			}
-			if startup.Code > 0 && startup.Code < 256 {
-				return startup.Code
-			}
-			return 5
-		}
-		fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
-		return 5
+	if err := runGuardianLifecycle(ctx, spec, cfg); err != nil {
+		return guardianParentErrorExit(err)
 	}
 	return 0
+}
+
+func guardianParentErrorExit(err error) int {
+	var startup *guardian.StartupExitError
+	if errors.As(err, &startup) {
+		if startup.Err != nil {
+			fmt.Fprintln(os.Stderr, diagnostic.RedactText(startup.Err.Error()))
+		} else {
+			fmt.Fprintln(os.Stderr, startup)
+		}
+		if startup.Code > 0 && startup.Code < 256 {
+			return startup.Code
+		}
+		return 5
+	}
+	fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
+	return 5
+}
+
+func runGuardianLifecycle(ctx context.Context, spec guardian.CommandSpec, cfg config.Config) error {
+	mode, err := pxupdate.ParseAutoMode(cfg.AutoUpdate)
+	if err != nil {
+		return err
+	}
+	if mode == pxupdate.AutoOff || version == "dev" {
+		return guardianRunParentCoreFunc(ctx, spec, guardian.ParentOptions{})
+	}
+	service, err := newUpdateServiceFunc(cfg)
+	if err != nil {
+		return err
+	}
+	return runGuardianAutoUpdateLoop(ctx, spec, cfg, mode, service)
+}
+
+func runGuardianAutoUpdateLoop(ctx context.Context, spec guardian.CommandSpec, cfg config.Config, mode pxupdate.AutoMode, service updateService) error {
+	interval := cfg.UpdateInterval
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	delay := autoUpdateInitialDelayFunc(interval)
+	statePath := pxupdate.StatePath(config.GetConfigDir())
+
+guardianLoop:
+	for {
+		workerCtx, stopWorker := context.WithCancel(ctx)
+		parentDone := make(chan error, 1)
+		go func() {
+			parentDone <- guardianRunParentCoreFunc(workerCtx, spec, guardian.ParentOptions{})
+		}()
+
+		timer := time.NewTimer(delay)
+		for {
+			select {
+			case err := <-parentDone:
+				stopWorker()
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return err
+			case <-ctx.Done():
+				stopWorker()
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return <-parentDone
+			case <-timer.C:
+				updateCtx, cancelUpdate := context.WithTimeout(ctx, 5*time.Minute)
+				if mode == pxupdate.AutoNotify {
+					status, checkErr := service.Check(updateCtx, version)
+					cancelUpdate()
+					result := pxupdate.ResultCurrent
+					if checkErr != nil {
+						result = pxupdate.ResultCheckFailed
+					} else if status.Available {
+						result = pxupdate.ResultAvailable
+					}
+					writeUpdateStateBestEffort(statePath, status, result)
+					timer.Reset(interval)
+					continue
+				}
+
+				prepared, prepareErr := service.Prepare(updateCtx, version)
+				cancelUpdate()
+				if prepareErr != nil {
+					writeUpdateStateBestEffort(statePath, pxupdate.Status{}, pxupdate.ResultCheckFailed)
+					timer.Reset(interval)
+					continue
+				}
+				if !prepared.Status.Available {
+					writeUpdateStateBestEffort(statePath, prepared.Status, pxupdate.ResultCurrent)
+					_ = prepared.Cleanup()
+					timer.Reset(interval)
+					continue
+				}
+				writeUpdateStateBestEffort(statePath, prepared.Status, pxupdate.ResultPrepared)
+
+				stopWorker()
+				parentErr := <-parentDone
+				if parentErr != nil {
+					_ = prepared.Cleanup()
+					return parentErr
+				}
+				applyCtx, cancelApply := context.WithTimeout(context.Background(), 5*time.Minute)
+				status, applyErr := service.ApplyPreparedWithRestart(applyCtx, &prepared, append([]string(nil), os.Args[1:]...))
+				cancelApply()
+				if applyErr != nil {
+					writeUpdateStateBestEffort(statePath, prepared.Status, pxupdate.ResultApplyFailed)
+					_ = prepared.Cleanup()
+					delay = interval
+					continue guardianLoop
+				}
+				if status.Deferred {
+					writeUpdateStateBestEffort(statePath, status, pxupdate.ResultDeferred)
+					return nil
+				}
+				writeUpdateStateBestEffort(statePath, status, pxupdate.ResultApplied)
+				_ = prepared.Cleanup()
+				executable, executableErr := updatedRestartPath(status.Provider)
+				if executableErr != nil {
+					return executableErr
+				}
+				return restartUpdatedProcessFunc(executable, append([]string(nil), os.Args[1:]...))
+			}
+		}
+	}
+}
+
+func writeUpdateStateBestEffort(path string, status pxupdate.Status, result string) {
+	if path == "" {
+		return
+	}
+	_ = writeUpdateStateFunc(path, pxupdate.StateFromStatus(status, result, time.Now()))
+}
+
+func updatedRestartPath(provider pxupdate.Provider) (string, error) {
+	fallback, fallbackErr := os.Executable()
+	if provider == pxupdate.ProviderDirect {
+		if fallbackErr != nil {
+			return "", fallbackErr
+		}
+		return fallback, nil
+	}
+	resolved, err := lookupUpdateExecutableFunc("pxgo")
+	if err == nil && resolved != "" {
+		return resolved, nil
+	}
+	if fallbackErr == nil {
+		if _, statErr := os.Stat(fallback); statErr == nil {
+			return fallback, nil
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve updated PxGo executable: %w", err)
+	}
+	return "", errors.New("updated PxGo executable was not found")
+}
+
+func autoUpdateInitialDelay(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	window := interval / 10
+	if window > 5*time.Minute {
+		window = 5 * time.Minute
+	}
+	if window <= 1 {
+		return 0
+	}
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(window)))
+	if err != nil {
+		return window / 2
+	}
+	return time.Duration(n.Int64())
 }
 
 func runGuardianWorker(cfg config.Config, control guardian.WorkerControl) int {
@@ -383,6 +647,8 @@ Options:
   --test[=URL|all[:BASE]]         Run self-test through the proxy
   --test-auth                     Self-test using configured upstream auth via auth=NONE
   --version                       Print version
+  --check-update                  Check latest stable release without mutation
+  --update                        Update using the authoritative install provider
   -h, --help                      Show help`)
 }
 

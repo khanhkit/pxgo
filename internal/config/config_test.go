@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testGOOSDarwin = "darwin"
@@ -196,6 +197,69 @@ func TestReadINIRejectsInvalidNumericValues(t *testing.T) {
 	}
 	if _, err := ReadINI(path); err == nil {
 		t.Fatal("expected invalid numeric INI values to fail")
+	}
+}
+
+func TestParseArgsUpdateActions(t *testing.T) {
+	cfg, err := ParseArgs([]string{"--check-update"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CheckUpdate || cfg.Update {
+		t.Fatalf("unexpected update flags: %+v", cfg)
+	}
+
+	cfg, err = ParseArgs([]string{"--update"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Update || cfg.CheckUpdate {
+		t.Fatalf("unexpected update flags: %+v", cfg)
+	}
+}
+
+func TestUpdatePolicyDefaultsAndPersistence(t *testing.T) {
+	cfg := Default()
+	if cfg.AutoUpdate != "off" || cfg.UpdateInterval != 24*time.Hour || cfg.UpdateChannel != "stable" || cfg.InstallProvider != "auto" {
+		t.Fatalf("unexpected update defaults: mode=%q interval=%s channel=%q provider=%q", cfg.AutoUpdate, cfg.UpdateInterval, cfg.UpdateChannel, cfg.InstallProvider)
+	}
+
+	cfg, err := ParseArgs([]string{
+		"--auto-update=notify",
+		"--update-interval=90m",
+		"--update-channel=prerelease",
+		"--install-provider=direct",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AutoUpdate != "notify" || cfg.UpdateInterval != 90*time.Minute || cfg.UpdateChannel != "prerelease" || cfg.InstallProvider != "direct" {
+		t.Fatalf("unexpected parsed update policy: %+v", cfg)
+	}
+
+	path := filepath.Join(t.TempDir(), "pxgo.ini")
+	if err := SaveINI(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	roundTrip, err := ReadINI(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.AutoUpdate != cfg.AutoUpdate || roundTrip.UpdateInterval != cfg.UpdateInterval || roundTrip.UpdateChannel != cfg.UpdateChannel || roundTrip.InstallProvider != cfg.InstallProvider {
+		t.Fatalf("round-trip update policy mismatch: got=%+v want=%+v", roundTrip, cfg)
+	}
+}
+
+func TestUpdatePolicyRejectsInvalidValues(t *testing.T) {
+	for _, arg := range []string{
+		"--auto-update=always",
+		"--update-interval=0s",
+		"--update-channel=nightly",
+		"--install-provider=apt",
+	} {
+		if _, err := ParseArgs([]string{arg}); err == nil {
+			t.Fatalf("accepted invalid update option %q", arg)
+		}
 	}
 }
 

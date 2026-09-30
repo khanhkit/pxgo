@@ -27,6 +27,16 @@ type DNSSnapshot struct {
 	Source    string   `json:"source,omitempty"`
 }
 
+type UpdateSnapshot struct {
+	Current    string    `json:"current,omitempty"`
+	Latest     string    `json:"latest,omitempty"`
+	Available  bool      `json:"available"`
+	Provider   string    `json:"provider,omitempty"`
+	Channel    string    `json:"channel,omitempty"`
+	LastCheck  time.Time `json:"last_check,omitempty"`
+	LastResult string    `json:"last_result,omitempty"`
+}
+
 type AuthSnapshot struct {
 	UpstreamMode      string            `json:"upstream_mode"`
 	UpstreamMechanism string            `json:"upstream_mechanism,omitempty"`
@@ -75,6 +85,7 @@ type Snapshot struct {
 	UptimeSeconds float64           `json:"uptime_seconds"`
 	Route         RouteSnapshot     `json:"route"`
 	DNS           DNSSnapshot       `json:"dns"`
+	Update        UpdateSnapshot    `json:"update"`
 	Auth          AuthSnapshot      `json:"auth"`
 	Runtime       RuntimeSnapshot   `json:"runtime"`
 	ActiveTunnels int64             `json:"active_tunnels"`
