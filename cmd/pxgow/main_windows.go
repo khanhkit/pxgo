@@ -28,7 +28,13 @@ func run() error {
 	cmd := exec.Command(pxgo, os.Args[1:]...)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
-	cmd.Stderr = nil
+	logWriter, logErr := backgroundLogWriter()
+	if logErr == nil {
+		defer logWriter.Close()
+		cmd.Stderr = logWriter
+	} else {
+		cmd.Stderr = nil
+	}
 	if err := configureWindowlessChild(cmd); err != nil {
 		return err
 	}
