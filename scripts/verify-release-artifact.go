@@ -727,11 +727,64 @@ func smokeBackground(binaryPath, backgroundPath string) error {
 			return err
 		}
 		if processes.pxgo == 0 && processes.pxgow == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if processes.pxgo != 0 || processes.pxgow != 0 {
+		return fmt.Errorf("failed background launch left processes: pxgo=%d pxgow=%d", processes.pxgo, processes.pxgow)
+	}
+
+	startup := exec.Command(backgroundPath, "--config="+configPath)
+	startup.Env = append(os.Environ(), "PXGO_PROXY=DIRECT")
+	if err := startup.Start(); err != nil {
+		return fmt.Errorf("direct pxgow startup launch: %w", err)
+	}
+	if err := startup.Process.Release(); err != nil {
+		return fmt.Errorf("release direct pxgow startup handle: %w", err)
+	}
+	if err := waitForPort(port, 8*time.Second); err != nil {
+		return fmt.Errorf("direct pxgow startup readiness: %w", err)
+	}
+	processes, err = windowsPxGoProcesses(binaryPath, backgroundPath)
+	if err != nil {
+		return err
+	}
+	if processes.pxgo < 2 || processes.pxgow != 1 {
+		return fmt.Errorf("direct pxgow startup process tree: pxgo=%d pxgow=%d want pxgo>=2 pxgow=1", processes.pxgo, processes.pxgow)
+	}
+
+	restartOut, err = exec.Command(binaryPath, "--config="+configPath, "--restart").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("startup-launched background restart: %w: %s", err, restartOut)
+	}
+	if err := waitForPort(port, 8*time.Second); err != nil {
+		return fmt.Errorf("startup-launched readiness after restart: %w", err)
+	}
+	processes, err = windowsPxGoProcesses(binaryPath, backgroundPath)
+	if err != nil {
+		return err
+	}
+	if processes.pxgo < 2 || processes.pxgow != 1 {
+		return fmt.Errorf("startup-launched restart process tree: pxgo=%d pxgow=%d want pxgo>=2 pxgow=1", processes.pxgo, processes.pxgow)
+	}
+
+	quitOut, err = exec.Command(binaryPath, "--config="+configPath, "--quit").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("startup-launched background quit: %w: %s", err, quitOut)
+	}
+	deadline = time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		processes, err = windowsPxGoProcesses(binaryPath, backgroundPath)
+		if err != nil {
+			return err
+		}
+		if processes.pxgo == 0 && processes.pxgow == 0 {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("failed background launch left processes: pxgo=%d pxgow=%d", processes.pxgo, processes.pxgow)
+	return fmt.Errorf("startup-launched background quit left processes: pxgo=%d pxgow=%d", processes.pxgo, processes.pxgow)
 }
 
 type windowsProcessCounts struct {
