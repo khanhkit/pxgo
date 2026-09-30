@@ -754,8 +754,8 @@ func doctorReport(cfg config.Config, snapshotPath string) (diagnostic.DoctorRepo
 func waitForStoppedProxy(addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err != nil {
+		conn, dialErr := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if dialErr != nil {
 			return nil
 		}
 		_ = conn.Close()
