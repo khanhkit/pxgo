@@ -30,7 +30,9 @@ builds:
     main: ./cmd/pxgow
 
 archives:
-  - formats: [tar.gz]
+  - ids: [pxgo, pxgow]
+    allow_different_binary_count: true
+    formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
