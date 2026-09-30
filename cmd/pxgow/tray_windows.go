@@ -29,15 +29,18 @@ const (
 	quitMenuID      = 1001
 )
 
-type point struct{ x, y int32 }
-type msg struct {
-	hwnd    uintptr
-	message uint32
-	wParam  uintptr
-	lParam  uintptr
-	time    uint32
-	pt      point
-}
+type (
+	point struct{ x, y int32 }
+	msg   struct {
+		hwnd    uintptr
+		message uint32
+		wParam  uintptr
+		lParam  uintptr
+		time    uint32
+		pt      point
+	}
+)
+
 type wndClass struct {
 	style      uint32
 	wndProc    uintptr
