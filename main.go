@@ -227,10 +227,14 @@ func run() (exitCode int) {
 			fmt.Fprintln(os.Stderr, err)
 			return 3
 		}
-		time.Sleep(100 * time.Millisecond)
 		if runtime.GOOS == goosWindows {
+			if err := waitForStoppedProxy(net.JoinHostPort(listenForClient(cfg.Listen), fmt.Sprint(cfg.Port)), 5*time.Second); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 3
+			}
 			return launchBackgroundFunc(cfg)
 		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	if cfg.Test != "" {
 		setupDebugBestEffort(cfg)
@@ -745,6 +749,19 @@ func doctorReport(cfg config.Config, snapshotPath string) (diagnostic.DoctorRepo
 		}
 	}
 	return diagnostic.DoctorReport{}, fmt.Errorf("doctor failed: %w", err)
+}
+
+func waitForStoppedProxy(addr string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err != nil {
+			return nil
+		}
+		_ = conn.Close()
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("restart failed: previous proxy still running")
 }
 
 func quit(cfg config.Config) error {
