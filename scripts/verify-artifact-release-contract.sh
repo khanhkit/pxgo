@@ -71,11 +71,16 @@ grep -A5 '^  update-homebrew-tap:' "$release" | grep -Eq 'needs:.*promote-releas
 [[ -f assets/windows/pxgo.ico ]] || bad 'Windows icon source missing'
 [[ -f rsrc_windows_amd64.syso ]] || bad 'Windows amd64 icon resource missing'
 [[ -f rsrc_windows_arm64.syso ]] || bad 'Windows arm64 icon resource missing'
+[[ -f cmd/pxgow/rsrc_windows_amd64.syso ]] || bad 'pxgow Windows amd64 icon resource missing'
+[[ -f cmd/pxgow/rsrc_windows_arm64.syso ]] || bad 'pxgow Windows arm64 icon resource missing'
 if [[ -f assets/windows/pxgo.ico ]]; then
   icon_sha="$(sha256sum assets/windows/pxgo.ico | awk '{print $1}')"
   [[ "$icon_sha" == 'd84be2b1f38218675a6fc74693826ac3920ce576c4b749d87599230bbbb6208f' ]] || bad "Windows icon checksum mismatch: ${icon_sha}"
 fi
-grep -Fq 'verifyWindowsIcon(binaryPath' scripts/verify-release-artifact.go || bad 'exact Windows release candidate is not icon-verified'
+grep -Fq 'findFile(extractDir, "pxgow.exe")' scripts/verify-release-artifact.go || bad 'Windows release verifier does not require pxgow.exe'
+grep -Fq 'subsystem: 3' scripts/verify-release-artifact.go || bad 'Windows console subsystem contract missing'
+grep -Fq 'subsystem: 2' scripts/verify-release-artifact.go || bad 'Windows GUI subsystem contract missing'
+grep -Fq 'verifyWindowsIcon(candidate.path' scripts/verify-release-artifact.go || bad 'exact Windows release candidates are not both icon-verified'
 grep -Fq 'resourceTypeGroupIcon = 14' scripts/verify-release-artifact.go || bad 'Windows icon verifier does not inspect RT_GROUP_ICON'
 grep -Fq 'resourceTypeIcon      = 3' scripts/verify-release-artifact.go || bad 'Windows icon verifier does not inspect RT_ICON'
 

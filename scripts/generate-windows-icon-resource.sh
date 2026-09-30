@@ -13,8 +13,10 @@ if [[ "$actual" != "$expected" ]]; then
 fi
 
 for arch in amd64 arm64; do
-  GOTOOLCHAIN=local go run github.com/akavel/rsrc@v0.10.2 \
-    -arch "$arch" \
-    -ico "$icon" \
-    -o "rsrc_windows_${arch}.syso"
+  for output in "rsrc_windows_${arch}.syso" "cmd/pxgow/rsrc_windows_${arch}.syso"; do
+    GOTOOLCHAIN=local go run github.com/akavel/rsrc@v0.10.2 \
+      -arch "$arch" \
+      -ico "$icon" \
+      -o "$output"
+  done
 done

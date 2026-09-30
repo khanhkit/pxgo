@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/khanhkit/pxgo/internal/diagnostic"
 	"github.com/khanhkit/pxgo/internal/guardian"
 	pxupdate "github.com/khanhkit/pxgo/internal/update"
+	"github.com/khanhkit/pxgo/internal/winstartup"
 )
 
 func TestSelfTestURLModesAndAllMode(t *testing.T) {
@@ -548,7 +550,12 @@ func TestRunUpdateApplyHelperBypassesConfigParsing(t *testing.T) {
 
 func TestRunInstallDispatchUsesPreparedStartupCommand(t *testing.T) {
 	oldInstall := installStartupFunc
-	defer func() { installStartupFunc = oldInstall }()
+	oldPrepare := prepareStartupRunCommandFunc
+	defer func() {
+		installStartupFunc = oldInstall
+		prepareStartupRunCommandFunc = oldPrepare
+	}()
+	prepareStartupRunCommandFunc = winstartup.PrepareRunCommand
 
 	calls := 0
 	installStartupFunc = func(cmd string, force bool) error {
@@ -597,10 +604,19 @@ func TestRunDoctorQuitAndRestartDispatch(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			oldParent := runGuardianParentFunc
-			defer func() { runGuardianParentFunc = oldParent }()
+			oldBackground := launchBackgroundFunc
+			defer func() {
+				runGuardianParentFunc = oldParent
+				launchBackgroundFunc = oldBackground
+			}()
 			parentCalls := 0
+			backgroundCalls := 0
 			runGuardianParentFunc = func(config.Config) int {
 				parentCalls++
+				return 0
+			}
+			launchBackgroundFunc = func(config.Config) int {
+				backgroundCalls++
 				return 0
 			}
 
@@ -621,7 +637,10 @@ func TestRunDoctorQuitAndRestartDispatch(t *testing.T) {
 				server.Close()
 				t.Fatalf("%s exit=%d want 0", tc.name, code)
 			}
-			if tc.restart && parentCalls != 1 {
+			if tc.restart && runtime.GOOS == "windows" && backgroundCalls != 1 {
+				t.Fatalf("restart background calls=%d want 1", backgroundCalls)
+			}
+			if tc.restart && runtime.GOOS != "windows" && parentCalls != 1 {
 				t.Fatalf("restart parent calls=%d want 1", parentCalls)
 			}
 			if !tc.restart && parentCalls != 0 {

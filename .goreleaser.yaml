@@ -3,7 +3,8 @@ version: 2
 project_name: pxgo
 
 builds:
-  - env:
+  - id: pxgo
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
@@ -15,6 +16,18 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
     main: .
+  - id: pxgow
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    binary: pxgow
+    ldflags:
+      - -s -w -H windowsgui -X main.version={{.Version}}
+    main: ./cmd/pxgow
 
 archives:
   - formats: [tar.gz]

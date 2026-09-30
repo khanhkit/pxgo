@@ -38,6 +38,7 @@ type ParentOptions struct {
 	StopTimeout     time.Duration
 	RestartSchedule []time.Duration
 	StableRunReset  time.Duration
+	OnReady         func()
 }
 
 type StartupExitError struct {
@@ -303,6 +304,9 @@ func monitorReadyWorker(
 				ready = true
 				readyAt = now
 				watchdog.Ready(now)
+				if options.OnReady != nil {
+					options.OnReady()
+				}
 			case MessageBeat:
 				if !ready {
 					stopErr := stopChild(session, cmd, waitc, options.StopTimeout)
