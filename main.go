@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/khanhkit/pxgo/internal/background"
 	"github.com/khanhkit/pxgo/internal/config"
 	"github.com/khanhkit/pxgo/internal/debug"
 	"github.com/khanhkit/pxgo/internal/diagnostic"
@@ -129,6 +130,9 @@ func run() (exitCode int) {
 			fmt.Fprint(os.Stdout, string(data))
 		}
 		return 0
+	}
+	if cfg.Background {
+		return launchBackground(cfg)
 	}
 	if cfg.Install {
 		configPath := config.ConfigPathForSave(cfg.ConfigPath)
@@ -312,6 +316,7 @@ func isOneShotConfig(cfg config.Config) bool {
 		cfg.Update ||
 		cfg.Save ||
 		cfg.Install ||
+		cfg.Background ||
 		cfg.Uninstall ||
 		cfg.PasswordAction ||
 		cfg.ClientPasswordAction ||
@@ -322,6 +327,11 @@ func isOneShotConfig(cfg config.Config) bool {
 
 func runGuardianParent(cfg config.Config) int {
 	raiseNofileLimitBestEffort()
+	reporter, reportStartup, reporterErr := background.ReporterFromEnv()
+	if reporterErr != nil {
+		fmt.Fprintln(os.Stderr, reporterErr)
+		return 5
+	}
 	executable, err := os.Executable()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -337,8 +347,22 @@ func runGuardianParent(cfg config.Config) int {
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}
-	if err := runGuardianLifecycle(ctx, spec, cfg); err != nil {
+	options := guardian.ParentOptions{}
+	if reportStartup {
+		options.OnReady = func() {
+			reportCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = reporter.Ready(reportCtx)
+		}
+	}
+	if err := runGuardianLifecycleWithOptions(ctx, spec, cfg, options); err != nil {
+		if reportStartup {
+			reportCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			_ = reporter.Error(reportCtx, err)
+			cancel()
+		}
 		return guardianParentErrorExit(err)
+
 	}
 	return 0
 }
@@ -361,21 +385,29 @@ func guardianParentErrorExit(err error) int {
 }
 
 func runGuardianLifecycle(ctx context.Context, spec guardian.CommandSpec, cfg config.Config) error {
+	return runGuardianLifecycleWithOptions(ctx, spec, cfg, guardian.ParentOptions{})
+}
+
+func runGuardianLifecycleWithOptions(ctx context.Context, spec guardian.CommandSpec, cfg config.Config, options guardian.ParentOptions) error {
 	mode, err := pxupdate.ParseAutoMode(cfg.AutoUpdate)
 	if err != nil {
 		return err
 	}
 	if mode == pxupdate.AutoOff || version == "dev" {
-		return guardianRunParentCoreFunc(ctx, spec, guardian.ParentOptions{})
+		return guardianRunParentCoreFunc(ctx, spec, options)
 	}
 	service, err := newUpdateServiceFunc(cfg)
 	if err != nil {
 		return err
 	}
-	return runGuardianAutoUpdateLoop(ctx, spec, cfg, mode, service)
+	return runGuardianAutoUpdateLoopWithOptions(ctx, spec, cfg, mode, service, options)
 }
 
 func runGuardianAutoUpdateLoop(ctx context.Context, spec guardian.CommandSpec, cfg config.Config, mode pxupdate.AutoMode, service updateService) error {
+	return runGuardianAutoUpdateLoopWithOptions(ctx, spec, cfg, mode, service, guardian.ParentOptions{})
+}
+
+func runGuardianAutoUpdateLoopWithOptions(ctx context.Context, spec guardian.CommandSpec, cfg config.Config, mode pxupdate.AutoMode, service updateService, options guardian.ParentOptions) error {
 	interval := cfg.UpdateInterval
 	if interval <= 0 {
 		interval = 24 * time.Hour
@@ -388,7 +420,7 @@ guardianLoop:
 		workerCtx, stopWorker := context.WithCancel(ctx)
 		parentDone := make(chan error, 1)
 		go func() {
-			parentDone <- guardianRunParentCoreFunc(workerCtx, spec, guardian.ParentOptions{})
+			parentDone <- guardianRunParentCoreFunc(workerCtx, spec, options)
 		}()
 
 		timer := time.NewTimer(delay)
@@ -642,6 +674,7 @@ Options:
   --doctor                        Print local read-only proxy diagnostics
   --quit                          Stop a running proxy
   --restart                       Quit then start the proxy
+  --background                    Start PxGo windowless in the background on Windows
   --install                       Install pxgo in Windows startup registry
   --uninstall                     Remove pxgo from Windows startup registry
   --force                         Overwrite existing Windows startup entry

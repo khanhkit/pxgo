@@ -81,8 +81,26 @@ func verify(dist, targetOS, targetArch, expectedVersion string) error {
 		if err := os.Chmod(binaryPath, 0o755); err != nil {
 			return fmt.Errorf("chmod candidate binary: %w", err)
 		}
-	} else if err := verifyWindowsIcon(binaryPath, filepath.Join("assets", "windows", "pxgo.ico")); err != nil {
-		return fmt.Errorf("Windows icon: %w", err)
+	} else {
+		backgroundPath, err := findFile(extractDir, "pxgow.exe")
+		if err != nil {
+			return fmt.Errorf("windowless companion: %w", err)
+		}
+		for _, candidate := range []struct {
+			path      string
+			name      string
+			subsystem uint16
+		}{
+			{path: binaryPath, name: "pxgo.exe", subsystem: 3},
+			{path: backgroundPath, name: "pxgow.exe", subsystem: 2},
+		} {
+			if err := verifyWindowsSubsystem(candidate.path, candidate.subsystem); err != nil {
+				return fmt.Errorf("%s subsystem: %w", candidate.name, err)
+			}
+			if err := verifyWindowsIcon(candidate.path, filepath.Join("assets", "windows", "pxgo.ico")); err != nil {
+				return fmt.Errorf("%s icon: %w", candidate.name, err)
+			}
+		}
 	}
 
 	versionOut, err := exec.Command(binaryPath, "--version").CombinedOutput()
@@ -144,6 +162,27 @@ func verifyChecksum(checksumPath, archiveName, archivePath string) error {
 }
 
 const windowsIconSHA256 = "d84be2b1f38218675a6fc74693826ac3920ce576c4b749d87599230bbbb6208f"
+
+func verifyWindowsSubsystem(binaryPath string, want uint16) error {
+	f, err := pe.Open(binaryPath)
+	if err != nil {
+		return fmt.Errorf("open PE: %w", err)
+	}
+	defer f.Close()
+	var got uint16
+	switch header := f.OptionalHeader.(type) {
+	case *pe.OptionalHeader32:
+		got = header.Subsystem
+	case *pe.OptionalHeader64:
+		got = header.Subsystem
+	default:
+		return errors.New("PE optional header unavailable")
+	}
+	if got != want {
+		return fmt.Errorf("got %d want %d", got, want)
+	}
+	return nil
+}
 
 const (
 	resourceTypeIcon      = 3

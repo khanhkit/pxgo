@@ -157,6 +157,7 @@ type Config struct {
 	CheckUpdate          bool
 	Update               bool
 	Install              bool
+	Background           bool
 	Uninstall            bool
 	Force                bool
 	ConfigPath           string
@@ -481,6 +482,8 @@ func applyBareArg(cfg *Config, arg string) bool {
 		cfg.Update = true
 	case "--" + keyInstall:
 		cfg.Install = true
+	case "--background":
+		cfg.Background = true
 	case "--uninstall":
 		cfg.Uninstall = true
 	case "--force":
