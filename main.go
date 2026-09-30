@@ -23,6 +23,7 @@ import (
 	"github.com/khanhkit/pxgo/internal/diagnostic"
 	"github.com/khanhkit/pxgo/internal/guardian"
 	"github.com/khanhkit/pxgo/internal/proxy"
+	pxupdate "github.com/khanhkit/pxgo/internal/update"
 	"github.com/khanhkit/pxgo/internal/winstartup"
 	"golang.org/x/term"
 )
@@ -92,6 +93,24 @@ func run() (exitCode int) {
 	if cfg.Version {
 		fmt.Println(version)
 		return 0
+	}
+	if cfg.CheckUpdate {
+		if version == "dev" {
+			fmt.Fprintln(os.Stderr, "update check requires a versioned PxGo build")
+			return 2
+		}
+		result, err := (pxupdate.Checker{}).Check(context.Background(), version)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
+			return 7
+		}
+		fmt.Printf("current=%s latest=%s provider=%s available=%t channel=%s\n",
+			result.Current, result.Latest, pxupdate.ProviderDirect, result.Available, pxupdate.Stable)
+		return 0
+	}
+	if cfg.Update {
+		fmt.Fprintln(os.Stderr, "update provider ownership has not been resolved; refusing unsafe replacement")
+		return 7
 	}
 	if cfg.Save {
 		path := config.ConfigPathForSave(cfg.ConfigPath)
@@ -211,6 +230,8 @@ func run() (exitCode int) {
 func isOneShotConfig(cfg config.Config) bool {
 	return cfg.Help ||
 		cfg.Version ||
+		cfg.CheckUpdate ||
+		cfg.Update ||
 		cfg.Save ||
 		cfg.Install ||
 		cfg.Uninstall ||
@@ -383,6 +404,8 @@ Options:
   --test[=URL|all[:BASE]]         Run self-test through the proxy
   --test-auth                     Self-test using configured upstream auth via auth=NONE
   --version                       Print version
+  --check-update                  Check latest stable release without mutation
+  --update                        Update using the authoritative install provider
   -h, --help                      Show help`)
 }
 

@@ -140,6 +140,8 @@ type Config struct {
 	ClientPasswordAction bool
 	Help                 bool
 	Version              bool
+	CheckUpdate          bool
+	Update               bool
 	Install              bool
 	Uninstall            bool
 	Force                bool
@@ -459,6 +461,14 @@ func ParseArgs(args []string) (Config, error) {
 		}
 		if arg == "--version" {
 			cfg.Version = true
+			continue
+		}
+		if arg == "--check-update" {
+			cfg.CheckUpdate = true
+			continue
+		}
+		if arg == "--update" {
+			cfg.Update = true
 			continue
 		}
 		if arg == "--"+keyInstall {

@@ -199,6 +199,24 @@ func TestReadINIRejectsInvalidNumericValues(t *testing.T) {
 	}
 }
 
+func TestParseArgsUpdateActions(t *testing.T) {
+	cfg, err := ParseArgs([]string{"--check-update"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CheckUpdate || cfg.Update {
+		t.Fatalf("unexpected update flags: %+v", cfg)
+	}
+
+	cfg, err = ParseArgs([]string{"--update"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Update || cfg.CheckUpdate {
+		t.Fatalf("unexpected update flags: %+v", cfg)
+	}
+}
+
 func TestParseArgsRejectsInvalidNumericValues(t *testing.T) {
 	if _, err := ParseArgs([]string{"--port=bad", "--threads=bad", "--socktimeout=bad", "--log=bad"}); err == nil {
 		t.Fatal("expected invalid numeric CLI values to fail")
