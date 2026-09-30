@@ -16,7 +16,7 @@ import (
 
 const (
 	envAddr  = "PXGOINT_BACKGROUND_ADDR"
-	envToken = "PXGOINT_BACKGROUND_TOKEN"
+	envToken = "PXGOINT_BACKGROUND_TOKEN" // #nosec G101 -- environment variable name, not a credential.
 )
 
 type Launcher struct {

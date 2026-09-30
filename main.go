@@ -68,6 +68,7 @@ const (
 	localhostIP            = "127.0.0.1"
 	controlShutdownTimeout = 5 * time.Second
 	startExitWaitTimeout   = time.Second
+	goosWindows            = "windows"
 )
 
 type shutdowner interface {
@@ -227,7 +228,7 @@ func run() (exitCode int) {
 			return 3
 		}
 		time.Sleep(100 * time.Millisecond)
-		if runtime.GOOS == "windows" {
+		if runtime.GOOS == goosWindows {
 			return launchBackgroundFunc(cfg)
 		}
 	}
@@ -367,7 +368,6 @@ func runGuardianParent(cfg config.Config) int {
 			cancel()
 		}
 		return guardianParentErrorExit(err)
-
 	}
 	return 0
 }
@@ -387,10 +387,6 @@ func guardianParentErrorExit(err error) int {
 	}
 	fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
 	return 5
-}
-
-func runGuardianLifecycle(ctx context.Context, spec guardian.CommandSpec, cfg config.Config) error {
-	return runGuardianLifecycleWithOptions(ctx, spec, cfg, guardian.ParentOptions{})
 }
 
 func runGuardianLifecycleWithOptions(ctx context.Context, spec guardian.CommandSpec, cfg config.Config, options guardian.ParentOptions) error {

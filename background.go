@@ -18,7 +18,7 @@ import (
 const backgroundStartupTimeout = 15 * time.Second
 
 func launchBackground(_ config.Config) int {
-	if runtime.GOOS != "windows" {
+	if runtime.GOOS != goosWindows {
 		fmt.Fprintln(os.Stderr, "--background is supported on Windows only")
 		return 6
 	}
@@ -49,7 +49,7 @@ func launchBackground(_ config.Config) int {
 			args = append(args, arg)
 		}
 	}
-	cmd := exec.Command(companion, args...)
+	cmd := exec.Command(companion, args...) // #nosec G702 -- companion is derived from os.Executable, not user input.
 	cmd.Env = append(os.Environ(), launcher.Env()...)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
