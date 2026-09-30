@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 )
 
+var version = "dev"
+
 // pxgow is intentionally tiny: it launches the sibling console runtime without
 // allocating a console of its own. Guardian ownership remains in pxgo.exe.
 func main() {

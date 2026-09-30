@@ -86,6 +86,16 @@ func verify(dist, targetOS, targetArch, expectedVersion string) error {
 		if err != nil {
 			return fmt.Errorf("windowless companion: %w", err)
 		}
+		if expectedVersion != "" {
+			data, err := os.ReadFile(backgroundPath)
+			if err != nil {
+				return fmt.Errorf("read pxgow.exe for version verification: %w", err)
+			}
+			if !bytes.Contains(data, []byte(expectedVersion)) {
+				return fmt.Errorf("pxgow.exe does not embed expected release version %q", expectedVersion)
+			}
+		}
+
 		for _, candidate := range []struct {
 			path      string
 			name      string
@@ -658,6 +668,24 @@ func smokeBackground(binaryPath, backgroundPath string) error {
 	}
 	if processes.pxgo < 2 || processes.pxgow != 1 {
 		return fmt.Errorf("background restart process tree: pxgo=%d pxgow=%d want pxgo>=2 pxgow=1", processes.pxgo, processes.pxgow)
+	}
+
+	dup := exec.Command(binaryPath, "--background", "--config="+configPath)
+	dup.Env = append(os.Environ(), "PXGO_PROXY=DIRECT")
+	dupOut, dupErr := dup.CombinedOutput()
+	if dupErr == nil {
+		return errors.New("repeated background start unexpectedly succeeded")
+	}
+	if len(strings.TrimSpace(string(dupOut))) == 0 {
+		return errors.New("repeated background start produced no diagnostic")
+	}
+	time.Sleep(300 * time.Millisecond)
+	processes, err = windowsPxGoProcesses(binaryPath, backgroundPath)
+	if err != nil {
+		return err
+	}
+	if processes.pxgo < 2 || processes.pxgow != 1 {
+		return fmt.Errorf("repeated background start disturbed running tree: pxgo=%d pxgow=%d", processes.pxgo, processes.pxgow)
 	}
 
 	quitOut, err := exec.Command(binaryPath, "--config="+configPath, "--quit").CombinedOutput()
