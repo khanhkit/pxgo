@@ -762,11 +762,11 @@ func waitForStoppedProxy(addr string, timeout time.Duration) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	conn, finalErr := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-	if finalErr != nil {
-		return nil
+	if finalErr == nil {
+		_ = conn.Close()
+		return fmt.Errorf("restart failed: previous proxy still running")
 	}
-	_ = conn.Close()
-	return fmt.Errorf("restart failed: previous proxy still running")
+	return nil
 }
 
 func quit(cfg config.Config) error {
