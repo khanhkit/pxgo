@@ -126,6 +126,15 @@ func verify(dist, targetOS, targetArch, expectedVersion string) error {
 	if err := smokeProxy(binaryPath); err != nil {
 		return err
 	}
+	if targetOS == "windows" {
+		backgroundPath, err := findFile(extractDir, "pxgow.exe")
+		if err != nil {
+			return err
+		}
+		if err := smokeBackground(binaryPath, backgroundPath); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -596,6 +605,109 @@ func smokeProxy(binaryPath string) error {
 		return errors.New("packaged proxy did not stop after --quit")
 	}
 	return nil
+}
+
+func smokeBackground(binaryPath, backgroundPath string) error {
+	port, err := freePort()
+	if err != nil {
+		return err
+	}
+	args := []string{
+		"--background",
+		"--port=" + strconv.Itoa(port),
+		"--listen=127.0.0.1",
+		"--proxy=DIRECT",
+	}
+	cmd := exec.Command(binaryPath, args...)
+	cmd.Env = append(os.Environ(), "PXGO_PROXY=DIRECT")
+	var output strings.Builder
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("background launch: %w: %s", err, output.String())
+	}
+	if err := waitForPort(port, 8*time.Second); err != nil {
+		return fmt.Errorf("background runtime readiness: %w", err)
+	}
+
+	processes, err := windowsPxGoProcesses(binaryPath, backgroundPath)
+	if err != nil {
+		return err
+	}
+	if processes.pxgo < 2 {
+		return fmt.Errorf("background process tree pxgo.exe count=%d want at least 2 (Guardian parent + worker)", processes.pxgo)
+	}
+	if processes.pxgow != 0 {
+		return fmt.Errorf("pxgow.exe remained resident after launch: count=%d", processes.pxgow)
+	}
+
+	quitOut, err := exec.Command(binaryPath, "--port="+strconv.Itoa(port), "--quit").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("background proxy quit: %w: %s", err, quitOut)
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		processes, err = windowsPxGoProcesses(binaryPath, backgroundPath)
+		if err != nil {
+			return err
+		}
+		if processes.pxgo == 0 && processes.pxgow == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if processes.pxgo != 0 || processes.pxgow != 0 {
+		return fmt.Errorf("background quit left processes: pxgo=%d pxgow=%d", processes.pxgo, processes.pxgow)
+	}
+
+	occupied, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return fmt.Errorf("occupy background failure port: %w", err)
+	}
+	bad := exec.Command(binaryPath, args...)
+	bad.Env = append(os.Environ(), "PXGO_PROXY=DIRECT")
+	badOut, badErr := bad.CombinedOutput()
+	_ = occupied.Close()
+	if badErr == nil {
+		return errors.New("background launch unexpectedly succeeded on occupied port")
+	}
+	if len(strings.TrimSpace(string(badOut))) == 0 {
+		return errors.New("background startup failure produced no console diagnostic")
+	}
+	for i := 0; i < 40; i++ {
+		processes, err = windowsPxGoProcesses(binaryPath, backgroundPath)
+		if err != nil {
+			return err
+		}
+		if processes.pxgo == 0 && processes.pxgow == 0 {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("failed background launch left processes: pxgo=%d pxgow=%d", processes.pxgo, processes.pxgow)
+}
+
+type windowsProcessCounts struct {
+	pxgo  int
+	pxgow int
+}
+
+func windowsPxGoProcesses(binaryPath, backgroundPath string) (windowsProcessCounts, error) {
+	if runtime.GOOS != "windows" {
+		return windowsProcessCounts{}, errors.New("Windows process inspection requires a Windows host")
+	}
+	dir := strings.ToLower(filepath.Clean(filepath.Dir(binaryPath)))
+	ps := fmt.Sprintf(`$dir=%q; $items=Get-CimInstance Win32_Process | Where-Object { ($_.Name -ieq 'pxgo.exe' -or $_.Name -ieq 'pxgow.exe') -and ([IO.Path]::GetDirectoryName($_.ExecutablePath).ToLower() -eq $dir) }; $a=@($items | Where-Object {$_.Name -ieq 'pxgo.exe'}).Count; $b=@($items | Where-Object {$_.Name -ieq 'pxgow.exe'}).Count; Write-Output "$a $b"`, dir)
+	out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps).CombinedOutput()
+	if err != nil {
+		return windowsProcessCounts{}, fmt.Errorf("inspect Windows process tree: %w: %s", err, out)
+	}
+	var counts windowsProcessCounts
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d %d", &counts.pxgo, &counts.pxgow); err != nil {
+		return windowsProcessCounts{}, fmt.Errorf("parse Windows process counts %q: %w", out, err)
+	}
+	_ = backgroundPath
+	return counts, nil
 }
 
 func freePort() (int, error) {
