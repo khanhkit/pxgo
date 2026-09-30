@@ -47,7 +47,7 @@ func TestResolveProviderOwnership(t *testing.T) {
 		executable string
 		want       Provider
 	}{
-		{"explicit direct", ProviderDirect, "windows", `C:\Users\me\scoop\apps\pxgo\current\pxgo.exe`, ProviderDirect},
+		{"explicit direct portable", ProviderDirect, "windows", `C:\Tools\pxgo\pxgo.exe`, ProviderDirect},
 		{"winget", ProviderAuto, "windows", `C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\KhanhKit.PxGo_foo\pxgo.exe`, ProviderWinGet},
 		{"scoop", ProviderAuto, "windows", `C:\Users\me\scoop\apps\pxgo\current\pxgo.exe`, ProviderScoop},
 		{"homebrew arm", ProviderAuto, "darwin", `/opt/homebrew/Cellar/pxgo/1.2.3/bin/pxgo`, ProviderBrew},
@@ -65,6 +65,22 @@ func TestResolveProviderOwnership(t *testing.T) {
 				t.Fatalf("provider=%q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveProviderRejectsOwnershipConflict(t *testing.T) {
+	for _, tc := range []struct {
+		configured Provider
+		goos       string
+		executable string
+	}{
+		{ProviderDirect, "windows", `C:\Users\me\scoop\apps\pxgo\current\pxgo.exe`},
+		{ProviderWinGet, "windows", `C:\Users\me\scoop\apps\pxgo\current\pxgo.exe`},
+		{ProviderDirect, "darwin", `/opt/homebrew/Cellar/pxgo/1.2.3/bin/pxgo`},
+	} {
+		if _, err := ResolveProvider(tc.configured, tc.executable, tc.goos); err == nil {
+			t.Fatalf("accepted provider %q for managed executable %q", tc.configured, tc.executable)
+		}
 	}
 }
 

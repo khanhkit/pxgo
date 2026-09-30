@@ -81,7 +81,7 @@ func TestAPISS0032SnapshotReportsDurableUpdateState(t *testing.T) {
 		Provider:   pxupdate.ProviderDirect,
 		Channel:    pxupdate.Stable,
 		LastCheck:  when,
-		LastResult: "available",
+		LastResult: pxupdate.ResultAvailable,
 	}
 	if err := pxupdate.WriteState(pxupdate.StatePath(config.GetConfigDir()), state); err != nil {
 		t.Fatal(err)

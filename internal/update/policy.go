@@ -17,6 +17,11 @@ const (
 
 const ProviderAuto Provider = "auto"
 
+const (
+	goosDarwin = "darwin"
+	goosLinux  = "linux"
+)
+
 func ParseAutoMode(value string) (AutoMode, error) {
 	mode := AutoMode(strings.ToLower(strings.TrimSpace(value)))
 	if mode == "" {
@@ -60,30 +65,41 @@ func ResolveProvider(configured Provider, executable, goos string) (Provider, er
 	if configured == "" {
 		configured = ProviderAuto
 	}
+	if _, err := ParseProvider(string(configured)); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(executable) == "" {
+		return "", errors.New("cannot resolve update provider without executable path")
+	}
+
+	detected, owned := detectManagedProvider(executable, goos)
 	if configured != ProviderAuto {
-		if _, err := ParseProvider(string(configured)); err != nil {
-			return "", err
+		if owned && configured != detected {
+			return "", fmt.Errorf("configured update provider %q conflicts with executable ownership %q", configured, detected)
 		}
 		return configured, nil
 	}
-	if strings.TrimSpace(executable) == "" {
-		return "", errors.New("cannot auto-detect update provider without executable path")
+	if owned {
+		return detected, nil
 	}
+	return ProviderDirect, nil
+}
 
+func detectManagedProvider(executable, goos string) (Provider, bool) {
 	normalizedExecutable := strings.ReplaceAll(executable, "\\", "/")
 	path := strings.ToLower(filepath.ToSlash(filepath.Clean(normalizedExecutable)))
 	switch strings.ToLower(strings.TrimSpace(goos)) {
 	case goosWindows:
 		switch {
 		case strings.Contains(path, "/scoop/apps/pxgo/"):
-			return ProviderScoop, nil
+			return ProviderScoop, true
 		case strings.Contains(path, "/microsoft/winget/packages/"), strings.Contains(path, "/winget/packages/"):
-			return ProviderWinGet, nil
+			return ProviderWinGet, true
 		}
-	case "darwin", "linux":
+	case goosDarwin, goosLinux:
 		if strings.Contains(path, "/cellar/pxgo/") {
-			return ProviderBrew, nil
+			return ProviderBrew, true
 		}
 	}
-	return ProviderDirect, nil
+	return "", false
 }

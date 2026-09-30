@@ -59,6 +59,46 @@ func (s StagedCandidate) Cleanup() error {
 	return os.RemoveAll(s.Dir)
 }
 
+func CleanupStaleStaging(base string, olderThan time.Duration, now time.Time) error {
+	if strings.TrimSpace(base) == "" {
+		base = os.TempDir()
+	}
+	if olderThan <= 0 {
+		olderThan = 24 * time.Hour
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var errs []error
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), "pxgo-update-") {
+			continue
+		}
+		path := filepath.Join(base, entry.Name())
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			if !errors.Is(statErr, os.ErrNotExist) {
+				errs = append(errs, statErr)
+			}
+			continue
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || now.Sub(info.ModTime()) < olderThan {
+			continue
+		}
+		if removeErr := os.RemoveAll(path); removeErr != nil {
+			errs = append(errs, removeErr)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (s Stager) Stage(ctx context.Context, current string) (StagedCandidate, error) {
 	if ctx == nil {
 		return StagedCandidate{}, errors.New("nil context")

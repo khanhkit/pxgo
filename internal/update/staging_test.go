@@ -9,15 +9,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStagerVerifiesExactReleaseCandidate(t *testing.T) {
@@ -154,6 +157,40 @@ func TestStagerRejectsRedirectOutsideAllowedOrigin(t *testing.T) {
 	_, err := (Stager{Checker: Checker{APIBase: srv.URL, Client: srv.Client()}, Client: srv.Client(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, TempDir: t.TempDir(), ValidateURL: testOriginValidator(t, srv.URL)}).Stage(context.Background(), "1.0.0")
 	if err == nil || !strings.Contains(err.Error(), "unexpected test origin") {
 		t.Fatalf("expected redirect rejection, got %v", err)
+	}
+}
+
+func TestCleanupStaleStagingRemovesOnlyOldOwnedDirectories(t *testing.T) {
+	base := t.TempDir()
+	now := time.Date(2026, 9, 30, 5, 0, 0, 0, time.UTC)
+	oldOwned := filepath.Join(base, "pxgo-update-old")
+	recentOwned := filepath.Join(base, "pxgo-update-recent")
+	unrelated := filepath.Join(base, "other-old")
+	for _, path := range []string{oldOwned, recentOwned, unrelated} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldTime := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(oldOwned, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(unrelated, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(recentOwned, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := CleanupStaleStaging(base, 24*time.Hour, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldOwned); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old owned staging still exists: %v", err)
+	}
+	for _, path := range []string{recentOwned, unrelated} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("unexpected removal of %s: %v", path, err)
+		}
 	}
 }
 

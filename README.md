@@ -138,6 +138,10 @@ threads = 32
 idle = 30
 socktimeout = 20.0
 proxyreload = 60
+auto_update = off
+update_interval = 24h
+update_channel = stable
+install_provider = auto
 log = 0
 ```
 
@@ -182,6 +186,12 @@ reported instead of being mistaken for a missing password. Set
 | `--kerberos` | Linux/macOS: acquire/refresh a Kerberos ccache and use it for upstream HTTP `Negotiate`/SPNEGO (`HTTP/<proxy-host>`); Windows SSPI works without this flag |
 | `--client-auth=TYPE` | Require client auth: `NONE`, `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`; `BASIC`/`ANY` are loopback-only on plaintext listeners; downstream `NEGOTIATE` means NTLMSSP/NTLM-over-SPNEGO, not Kerberos/GSSAPI |
 | `--log=N` | Debug log destination: `1`=script dir (`--debug`), `2`=cwd, `3`=unique file (`--uniqlog`), `4`=stdout (`--verbose`) |
+| `--check-update` | Check the accepted release channel and report current/latest/provider without mutation |
+| `--update` | Perform one provider-safe update; package-manager installs delegate to their owner and direct installs use verified staged replacement |
+| `--auto-update=off|notify|install` | Persisted long-running update policy; default `off` |
+| `--update-interval=DURATION` | Periodic update interval, default `24h`; startup checks are jittered |
+| `--update-channel=stable|prerelease` | Release channel; default `stable` |
+| `--install-provider=auto|direct|winget|scoop|homebrew` | Installation owner selection; `auto` detects known package-manager paths and otherwise treats the install as portable/direct |
 
 Use `pxgo --help` for the current CLI help.
 

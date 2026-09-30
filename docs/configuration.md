@@ -168,6 +168,22 @@ cannot multiply dial/auth fallback work without bound.
 | `proxyreload` / `--proxyreload` | `60` | PAC/system proxy refresh interval |
 | `foreground` / `--foreground` | `0` | Compatibility flag |
 | `log` / `--log` | `0` | Debug log destination: `1`=script dir, `2`=cwd, `3`=unique file, `4`=stdout |
+| `auto_update` / `--auto-update` | `off` | Long-running update policy: `off`, `notify`, or unattended `install` |
+| `update_interval` / `--update-interval` | `24h` | Periodic check interval as a positive Go duration; initial check is jittered |
+| `update_channel` / `--update-channel` | `stable` | Accepted release channel: `stable` or explicit `prerelease` |
+| `install_provider` / `--install-provider` | `auto` | Installation owner: `auto`, `direct`, `winget`, `scoop`, or `homebrew` |
+
+### Update lifecycle
+
+`--check-update` is read-only and reports the current version, latest accepted version, resolved provider, channel, and whether an update is available. `--update` performs one update using the resolved installation owner.
+
+Package-manager ownership is authoritative. Auto-detection recognizes official WinGet, Scoop, and Homebrew installation paths; a conflicting explicit provider is rejected instead of letting direct self-replacement mutate manager-owned bytes. Portable paths resolve to `direct` unless deployment configuration provides an explicit manager marker.
+
+Direct updates use the pinned `khanhkit/pxgo` GitHub release identity. PxGo selects only the exact `pxgo_<os>_<arch>.zip|tar.gz` archive, requires the exact filename in `checksums.txt`, cross-checks GitHub's SHA-256 asset digest when present, bounds download/extraction sizes, validates redirect origins, and executes the staged binary with `--version` before activation. Published archives are never rebuilt or patched locally.
+
+`auto_update=notify` checks without stopping the proxy worker. `auto_update=install` downloads and verifies first, then asks the existing Guardian lifecycle to stop the worker before apply; failures restart the known-good runtime. Update state is written to the platform config directory as `update-state.json` and is surfaced through local diagnostics without release URL/query payloads or credentials.
+
+Stable releases are the default and automatic flows do not downgrade. Prereleases are considered only when `update_channel=prerelease` is explicitly configured.
 
 ## Passwords
 

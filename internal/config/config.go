@@ -74,6 +74,7 @@ const (
 	keyInstallProvider = "install_provider"
 	localhostIP        = "127.0.0.1"
 	configSourceCLI    = "cli"
+	defaultPACEncoding = "auto"
 )
 
 const maxConfigLineBytes = 1 << 20
@@ -81,7 +82,7 @@ const maxConfigLineBytes = 1 << 20
 var Defaults = map[string]string{
 	keyServer:          "",
 	keyPAC:             "",
-	keyPACEncoding:     "auto",
+	keyPACEncoding:     defaultPACEncoding,
 	keyPort:            "3128",
 	keyListen:          localhostIP,
 	keyGateway:         "0",
@@ -103,10 +104,10 @@ var Defaults = map[string]string{
 	keyClientAuth:      "NONE",
 	keyClientNoSSPI:    "0",
 	keyClientUsername:  "",
-	keyAutoUpdate:      "off",
+	keyAutoUpdate:      string(pxupdate.AutoOff),
 	keyUpdateInterval:  "24h",
 	keyUpdateChannel:   "stable",
-	keyInstallProvider: "auto",
+	keyInstallProvider: string(pxupdate.ProviderAuto),
 }
 
 var (

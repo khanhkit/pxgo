@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,7 @@ var (
 	runUpdateApplyHelperFunc   = pxupdate.RunApplyHelper
 	autoUpdateInitialDelayFunc = autoUpdateInitialDelay
 	restartUpdatedProcessFunc  = restartUpdatedProcess
+	lookupUpdateExecutableFunc = exec.LookPath
 	writeUpdateStateFunc       = pxupdate.WriteState
 )
 
@@ -247,6 +249,7 @@ func newUpdateService(cfg config.Config) (updateService, error) {
 		Provider:   provider,
 		Channel:    channel,
 		Executable: executable,
+		StatePath:  pxupdate.StatePath(config.GetConfigDir()),
 	}, nil
 }
 
@@ -273,9 +276,25 @@ func runUpdateAction(cfg config.Config, mutate bool) int {
 		status, err = service.Check(ctx, version)
 	}
 	if err != nil {
+		result := pxupdate.ResultCheckFailed
+		if mutate {
+			result = pxupdate.ResultApplyFailed
+		}
+		writeUpdateStateBestEffort(pxupdate.StatePath(config.GetConfigDir()), status, result)
 		fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
 		return 7
 	}
+	result := pxupdate.ResultCurrent
+	if status.Available {
+		result = pxupdate.ResultAvailable
+	}
+	if mutate && status.Applied {
+		result = pxupdate.ResultApplied
+	}
+	if mutate && status.Deferred {
+		result = pxupdate.ResultDeferred
+	}
+	writeUpdateStateBestEffort(pxupdate.StatePath(config.GetConfigDir()), status, result)
 	fmt.Printf("current=%s latest=%s provider=%s available=%t channel=%s",
 		status.Current, status.Latest, status.Provider, status.Available, status.Channel)
 	if mutate {
@@ -397,11 +416,11 @@ guardianLoop:
 				if mode == pxupdate.AutoNotify {
 					status, checkErr := service.Check(updateCtx, version)
 					cancelUpdate()
-					result := "current"
+					result := pxupdate.ResultCurrent
 					if checkErr != nil {
-						result = "check_failed"
+						result = pxupdate.ResultCheckFailed
 					} else if status.Available {
-						result = "available"
+						result = pxupdate.ResultAvailable
 					}
 					writeUpdateStateBestEffort(statePath, status, result)
 					timer.Reset(interval)
@@ -411,17 +430,17 @@ guardianLoop:
 				prepared, prepareErr := service.Prepare(updateCtx, version)
 				cancelUpdate()
 				if prepareErr != nil {
-					writeUpdateStateBestEffort(statePath, pxupdate.Status{}, "check_failed")
+					writeUpdateStateBestEffort(statePath, pxupdate.Status{}, pxupdate.ResultCheckFailed)
 					timer.Reset(interval)
 					continue
 				}
 				if !prepared.Status.Available {
-					writeUpdateStateBestEffort(statePath, prepared.Status, "current")
+					writeUpdateStateBestEffort(statePath, prepared.Status, pxupdate.ResultCurrent)
 					_ = prepared.Cleanup()
 					timer.Reset(interval)
 					continue
 				}
-				writeUpdateStateBestEffort(statePath, prepared.Status, "prepared")
+				writeUpdateStateBestEffort(statePath, prepared.Status, pxupdate.ResultPrepared)
 
 				stopWorker()
 				parentErr := <-parentDone
@@ -433,18 +452,18 @@ guardianLoop:
 				status, applyErr := service.ApplyPreparedWithRestart(applyCtx, &prepared, append([]string(nil), os.Args[1:]...))
 				cancelApply()
 				if applyErr != nil {
-					writeUpdateStateBestEffort(statePath, prepared.Status, "apply_failed")
+					writeUpdateStateBestEffort(statePath, prepared.Status, pxupdate.ResultApplyFailed)
 					_ = prepared.Cleanup()
 					delay = interval
 					continue guardianLoop
 				}
 				if status.Deferred {
-					writeUpdateStateBestEffort(statePath, status, "deferred")
+					writeUpdateStateBestEffort(statePath, status, pxupdate.ResultDeferred)
 					return nil
 				}
-				writeUpdateStateBestEffort(statePath, status, "applied")
+				writeUpdateStateBestEffort(statePath, status, pxupdate.ResultApplied)
 				_ = prepared.Cleanup()
-				executable, executableErr := os.Executable()
+				executable, executableErr := updatedRestartPath(status.Provider)
 				if executableErr != nil {
 					return executableErr
 				}
@@ -459,6 +478,29 @@ func writeUpdateStateBestEffort(path string, status pxupdate.Status, result stri
 		return
 	}
 	_ = writeUpdateStateFunc(path, pxupdate.StateFromStatus(status, result, time.Now()))
+}
+
+func updatedRestartPath(provider pxupdate.Provider) (string, error) {
+	fallback, fallbackErr := os.Executable()
+	if provider == pxupdate.ProviderDirect {
+		if fallbackErr != nil {
+			return "", fallbackErr
+		}
+		return fallback, nil
+	}
+	resolved, err := lookupUpdateExecutableFunc("pxgo")
+	if err == nil && resolved != "" {
+		return resolved, nil
+	}
+	if fallbackErr == nil {
+		if _, statErr := os.Stat(fallback); statErr == nil {
+			return fallback, nil
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve updated PxGo executable: %w", err)
+	}
+	return "", errors.New("updated PxGo executable was not found")
 }
 
 func autoUpdateInitialDelay(interval time.Duration) time.Duration {

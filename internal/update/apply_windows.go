@@ -20,12 +20,23 @@ import (
 
 const applyHelperPrefix = "--pxgo-apply-update="
 
+var (
+	waitForParentExitFunc        = waitForParentExit
+	verifyInstalledCandidateFunc = verifyCandidateVersion
+	startUpdatedProcessFunc      = startUpdatedProcess
+)
+
 type applyHelperPayload struct {
 	Target          string   `json:"target"`
 	ExpectedVersion string   `json:"expected_version"`
 	ParentPID       int      `json:"parent_pid"`
 	Restart         bool     `json:"restart,omitempty"`
 	RestartArgs     []string `json:"restart_args,omitempty"`
+	StatePath       string   `json:"state_path,omitempty"`
+	LockPath        string   `json:"lock_path,omitempty"`
+	CurrentVersion  string   `json:"current_version,omitempty"`
+	Provider        Provider `json:"provider,omitempty"`
+	Channel         Channel  `json:"channel,omitempty"`
 }
 
 type applyHelperResult struct {
@@ -39,6 +50,10 @@ func ApplyCandidate(ctx context.Context, candidate, target, expectedVersion stri
 }
 
 func ApplyCandidateWithRestart(ctx context.Context, candidate, target, expectedVersion string, restartArgs []string) (ApplyResult, error) {
+	return ApplyCandidateWithRestartState(ctx, candidate, target, expectedVersion, restartArgs, "", Status{})
+}
+
+func ApplyCandidateWithRestartState(ctx context.Context, candidate, target, expectedVersion string, restartArgs []string, statePath string, status Status) (ApplyResult, error) {
 	if ctx == nil {
 		return ApplyResult{}, errors.New("nil context")
 	}
@@ -77,6 +92,11 @@ func ApplyCandidateWithRestart(ctx context.Context, candidate, target, expectedV
 		ParentPID:       os.Getpid(),
 		Restart:         restartArgs != nil,
 		RestartArgs:     append([]string(nil), restartArgs...),
+		StatePath:       statePath,
+		LockPath:        updateLockPath(statePath),
+		CurrentVersion:  status.Current,
+		Provider:        status.Provider,
+		Channel:         status.Channel,
 	})
 	if err != nil {
 		return ApplyResult{}, err
@@ -118,9 +138,14 @@ func RunApplyHelper(args []string) (bool, int) {
 		return true, 2
 	}
 	if err := runApplyHelper(payload); err != nil {
+		_ = writeApplyHelperState(payload, false)
+		if payload.Restart {
+			_ = startUpdatedProcessFunc(payload.Target, payload.RestartArgs)
+		}
 		_ = writeApplyHelperResult(false, err)
 		return true, 7
 	}
+	_ = writeApplyHelperState(payload, true)
 	_ = writeApplyHelperResult(true, nil)
 	return true, 0
 }
@@ -150,8 +175,15 @@ func runApplyHelper(payload applyHelperPayload) error {
 	if strings.EqualFold(helperPath, targetPath) {
 		return errors.New("update helper must run from staged candidate path")
 	}
-	if err := waitForParentExit(payload.ParentPID, 2*time.Minute); err != nil {
+	if err := waitForParentExitFunc(payload.ParentPID, 2*time.Minute); err != nil {
 		return err
+	}
+	lock, err := acquireUpdateLock(payload.LockPath)
+	if err != nil {
+		return err
+	}
+	if lock != nil {
+		defer lock.Close()
 	}
 
 	targetInfo, err := os.Lstat(targetPath)
@@ -209,7 +241,7 @@ func runApplyHelper(payload applyHelperPayload) error {
 	removeTemp = false
 
 	verifyCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	verifyErr := verifyCandidateVersion(verifyCtx, targetPath, payload.ExpectedVersion)
+	verifyErr := verifyInstalledCandidateFunc(verifyCtx, targetPath, payload.ExpectedVersion)
 	cancel()
 	if verifyErr != nil {
 		removeErr := os.Remove(targetPath)
@@ -220,7 +252,7 @@ func runApplyHelper(payload applyHelperPayload) error {
 		return fmt.Errorf("remove update backup: %w", err)
 	}
 	if payload.Restart {
-		if err := startUpdatedProcess(targetPath, payload.RestartArgs); err != nil {
+		if err := startUpdatedProcessFunc(targetPath, payload.RestartArgs); err != nil {
 			return fmt.Errorf("restart updated PxGo: %w", err)
 		}
 	}
@@ -262,6 +294,28 @@ func waitForParentExit(pid int, timeout time.Duration) error {
 		return errors.New("timed out waiting for updater parent to exit")
 	}
 	return nil
+}
+
+func writeApplyHelperState(payload applyHelperPayload, ok bool) error {
+	if payload.StatePath == "" {
+		return nil
+	}
+	status := Status{
+		Current:   payload.CurrentVersion,
+		Latest:    payload.ExpectedVersion,
+		Available: true,
+		Provider:  payload.Provider,
+		Channel:   payload.Channel,
+	}
+	result := ResultApplyFailed
+	if ok {
+		status.Current = payload.ExpectedVersion
+		status.Latest = payload.ExpectedVersion
+		status.Available = false
+		status.Applied = true
+		result = ResultApplied
+	}
+	return WriteState(payload.StatePath, StateFromStatus(status, result, time.Now()))
 }
 
 func writeApplyHelperResult(ok bool, applyErr error) error {

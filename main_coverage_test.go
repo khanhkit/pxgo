@@ -519,7 +519,7 @@ func TestGuardianNotifyCheckDoesNotStopWorker(t *testing.T) {
 	if err := runGuardianAutoUpdateLoop(ctx, guardian.CommandSpec{}, config.Config{UpdateInterval: time.Hour}, pxupdate.AutoNotify, fake); err != nil {
 		t.Fatalf("loop error=%v", err)
 	}
-	if state.LastResult != "available" || state.Provider != pxupdate.ProviderBrew {
+	if state.LastResult != pxupdate.ResultAvailable || state.Provider != pxupdate.ProviderBrew {
 		t.Fatalf("notify state=%+v", state)
 	}
 	if fake.updateCalls != 0 {

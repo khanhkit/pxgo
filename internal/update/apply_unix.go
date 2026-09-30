@@ -16,7 +16,11 @@ func ApplyCandidate(ctx context.Context, candidate, target, expectedVersion stri
 	return ApplyCandidateWithRestart(ctx, candidate, target, expectedVersion, nil)
 }
 
-func ApplyCandidateWithRestart(ctx context.Context, candidate, target, expectedVersion string, _ []string) (ApplyResult, error) {
+func ApplyCandidateWithRestart(ctx context.Context, candidate, target, expectedVersion string, restartArgs []string) (ApplyResult, error) {
+	return ApplyCandidateWithRestartState(ctx, candidate, target, expectedVersion, restartArgs, "", Status{})
+}
+
+func ApplyCandidateWithRestartState(ctx context.Context, candidate, target, expectedVersion string, _ []string, _ string, _ Status) (ApplyResult, error) {
 	if ctx == nil {
 		return ApplyResult{}, errors.New("nil context")
 	}

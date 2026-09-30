@@ -12,7 +12,7 @@ func TestUpdateStateRoundTrip(t *testing.T) {
 	want := StateFromStatus(Status{
 		Current: "1.0.0", Latest: "1.1.0", Available: true,
 		Provider: ProviderDirect, Channel: Stable,
-	}, "available", when)
+	}, ResultAvailable, when)
 	if err := WriteState(path, want); err != nil {
 		t.Fatal(err)
 	}

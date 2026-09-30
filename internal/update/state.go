@@ -9,7 +9,16 @@ import (
 	"time"
 )
 
-const stateFileName = "update-state.json"
+const (
+	stateFileName     = "update-state.json"
+	ResultCurrent     = "current"
+	ResultAvailable   = "available"
+	ResultPrepared    = "prepared"
+	ResultApplied     = "applied"
+	ResultDeferred    = "deferred"
+	ResultCheckFailed = "check_failed"
+	ResultApplyFailed = "apply_failed"
+)
 
 type State struct {
 	Current    string    `json:"current,omitempty"`

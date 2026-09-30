@@ -19,10 +19,12 @@ import (
 	"time"
 )
 
-const DefaultRepository = "khanhkit/pxgo"
-const defaultAPIBase = "https://api.github.com"
-const productName = "pxgo"
-const goosWindows = "windows"
+const (
+	DefaultRepository = "khanhkit/pxgo"
+	defaultAPIBase    = "https://api.github.com"
+	productName       = "pxgo"
+	goosWindows       = "windows"
+)
 
 type Channel string
 
@@ -31,13 +33,16 @@ const (
 	Prerelease Channel = "prerelease"
 )
 
-type Asset struct{ Name, URL, Digest string }
-type Release struct {
-	Version    string
-	Tag        string
-	Prerelease bool
-	Assets     []Asset
-}
+type (
+	Asset   struct{ Name, URL, Digest string }
+	Release struct {
+		Version    string
+		Tag        string
+		Prerelease bool
+		Assets     []Asset
+	}
+)
+
 type CheckResult struct {
 	Current   string
 	Latest    string
@@ -318,10 +323,11 @@ func CompareVersions(a, b string) int {
 type Provider string
 
 const (
-	ProviderDirect Provider = "direct"
-	ProviderWinGet Provider = "winget"
-	ProviderScoop  Provider = "scoop"
-	ProviderBrew   Provider = "homebrew"
+	ProviderDirect         Provider = "direct"
+	ProviderWinGet         Provider = "winget"
+	ProviderScoop          Provider = "scoop"
+	ProviderBrew           Provider = "homebrew"
+	providerCommandUpgrade          = "upgrade"
 )
 
 type CommandRunner interface {
@@ -345,11 +351,11 @@ func Upgrade(ctx context.Context, provider Provider, runner CommandRunner) error
 	var args []string
 	switch provider {
 	case ProviderWinGet:
-		name, args = "winget", []string{"upgrade", "--id", "KhanhKit.PxGo", "--exact", "--disable-interactivity", "--accept-source-agreements", "--accept-package-agreements"}
+		name, args = string(ProviderWinGet), []string{providerCommandUpgrade, "--id", "KhanhKit.PxGo", "--exact", "--disable-interactivity", "--accept-source-agreements", "--accept-package-agreements"}
 	case ProviderScoop:
-		name, args = "scoop", []string{"update", productName}
+		name, args = string(ProviderScoop), []string{"update", productName}
 	case ProviderBrew:
-		name, args = "brew", []string{"upgrade", productName}
+		name, args = "brew", []string{providerCommandUpgrade, productName}
 	case ProviderDirect:
 		return errors.New("direct updates require verified staged replacement")
 	default:
