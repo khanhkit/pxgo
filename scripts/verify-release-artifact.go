@@ -596,7 +596,7 @@ func smokeProxy(binaryPath string) error {
 		return fmt.Errorf("proxy smoke response status=%s body=%q err=%v", resp.Status, body, readErr)
 	}
 
-	quitOut, err := exec.Command(binaryPath, "--config="+configPath, "--quit").CombinedOutput()
+	quitOut, err := exec.Command(binaryPath, "--port="+strconv.Itoa(port), "--quit").CombinedOutput()
 	if err != nil {
 		cancel()
 		_ = cmd.Wait()
