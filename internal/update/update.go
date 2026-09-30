@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -330,7 +331,10 @@ type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) error {
 	// #nosec G204 -- provider command and argv are fixed below; no shell is used.
-	return exec.CommandContext(ctx, name, args...).Run()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func Upgrade(ctx context.Context, provider Provider, runner CommandRunner) error {

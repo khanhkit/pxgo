@@ -71,6 +71,13 @@ func (s Stager) Stage(ctx context.Context, current string) (StagedCandidate, err
 	if err != nil {
 		return StagedCandidate{}, err
 	}
+	return s.StageCheck(ctx, check)
+}
+
+func (s Stager) StageCheck(ctx context.Context, check CheckResult) (StagedCandidate, error) {
+	if ctx == nil {
+		return StagedCandidate{}, errors.New("nil context")
+	}
 	if !check.Available {
 		return StagedCandidate{}, ErrNoUpdate
 	}
@@ -98,7 +105,7 @@ func (s Stager) Stage(ctx context.Context, current string) (StagedCandidate, err
 	}
 	client := s.Client
 	if client == nil {
-		client = checker.Client
+		client = s.Checker.Client
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
@@ -402,6 +409,7 @@ func writeCandidate(destination string, source io.Reader, expected int64) error 
 func verifyCandidateVersion(ctx context.Context, path, want string) error {
 	// #nosec G204 -- path is the verified candidate extracted from the exact staged release archive.
 	cmd := exec.CommandContext(ctx, path, "--version")
+	configureHiddenProcess(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("candidate version check: %w", err)

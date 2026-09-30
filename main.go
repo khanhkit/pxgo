@@ -28,12 +28,19 @@ import (
 	"golang.org/x/term"
 )
 
+type updateService interface {
+	Check(context.Context, string) (pxupdate.Status, error)
+	Update(context.Context, string) (pxupdate.Status, error)
+}
+
 var (
-	version               = "dev"
-	installStartupFunc    = installStartup
-	setupDebugFunc        = setupDebug
-	runGuardianParentFunc = runGuardianParent
-	runGuardianWorkerFunc = runGuardianWorker
+	version                  = "dev"
+	installStartupFunc       = installStartup
+	setupDebugFunc           = setupDebug
+	runGuardianParentFunc    = runGuardianParent
+	runGuardianWorkerFunc    = runGuardianWorker
+	newUpdateServiceFunc     = newUpdateService
+	runUpdateApplyHelperFunc = pxupdate.RunApplyHelper
 )
 
 const (
@@ -73,6 +80,9 @@ func run() (exitCode int) {
 			exitCode = 1
 		}
 	}()
+	if handled, code := runUpdateApplyHelperFunc(os.Args[1:]); handled {
+		return code
+	}
 	cfg, err := config.ParseArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -94,23 +104,8 @@ func run() (exitCode int) {
 		fmt.Println(version)
 		return 0
 	}
-	if cfg.CheckUpdate {
-		if version == "dev" {
-			fmt.Fprintln(os.Stderr, "update check requires a versioned PxGo build")
-			return 2
-		}
-		result, err := (pxupdate.Checker{}).Check(context.Background(), version)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
-			return 7
-		}
-		fmt.Printf("current=%s latest=%s provider=%s available=%t channel=%s\n",
-			result.Current, result.Latest, pxupdate.ProviderDirect, result.Available, pxupdate.Stable)
-		return 0
-	}
-	if cfg.Update {
-		fmt.Fprintln(os.Stderr, "update provider ownership has not been resolved; refusing unsafe replacement")
-		return 7
+	if cfg.CheckUpdate || cfg.Update {
+		return runUpdateAction(cfg, cfg.Update)
 	}
 	if cfg.Save {
 		path := config.ConfigPathForSave(cfg.ConfigPath)
@@ -225,6 +220,61 @@ func run() (exitCode int) {
 		return 0
 	}
 	return runGuardianParentFunc(cfg)
+}
+
+func newUpdateService(cfg config.Config) (updateService, error) {
+	provider, err := pxupdate.ParseProvider(cfg.InstallProvider)
+	if err != nil {
+		return nil, err
+	}
+	channel, err := pxupdate.ParseChannel(cfg.UpdateChannel)
+	if err != nil {
+		return nil, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve update executable: %w", err)
+	}
+	return pxupdate.Service{
+		Provider:   provider,
+		Channel:    channel,
+		Executable: executable,
+	}, nil
+}
+
+func runUpdateAction(cfg config.Config, mutate bool) int {
+	if version == "dev" {
+		fmt.Fprintln(os.Stderr, "update actions require a versioned PxGo build")
+		return 2
+	}
+	service, err := newUpdateServiceFunc(cfg)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
+		return 7
+	}
+	timeout := 15 * time.Second
+	if mutate {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var status pxupdate.Status
+	if mutate {
+		status, err = service.Update(ctx, version)
+	} else {
+		status, err = service.Check(ctx, version)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
+		return 7
+	}
+	fmt.Printf("current=%s latest=%s provider=%s available=%t channel=%s",
+		status.Current, status.Latest, status.Provider, status.Available, status.Channel)
+	if mutate {
+		fmt.Printf(" applied=%t deferred=%t", status.Applied, status.Deferred)
+	}
+	fmt.Fprintln(os.Stdout)
+	return 0
 }
 
 func isOneShotConfig(cfg config.Config) bool {

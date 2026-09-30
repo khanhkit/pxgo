@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/khanhkit/pxgo/internal/config"
 	"github.com/khanhkit/pxgo/internal/diagnostic"
+	pxupdate "github.com/khanhkit/pxgo/internal/update"
 )
 
 func TestSelfTestURLModesAndAllMode(t *testing.T) {
@@ -262,6 +264,25 @@ func TestQuitSucceedsWhenListenerCloses(t *testing.T) {
 	}
 }
 
+type fakeUpdateService struct {
+	checkStatus  pxupdate.Status
+	updateStatus pxupdate.Status
+	checkErr     error
+	updateErr    error
+	checkCalls   int
+	updateCalls  int
+}
+
+func (f *fakeUpdateService) Check(_ context.Context, _ string) (pxupdate.Status, error) {
+	f.checkCalls++
+	return f.checkStatus, f.checkErr
+}
+
+func (f *fakeUpdateService) Update(_ context.Context, _ string) (pxupdate.Status, error) {
+	f.updateCalls++
+	return f.updateStatus, f.updateErr
+}
+
 func runWithMutedIO(t *testing.T, args ...string) int {
 	t.Helper()
 	oldArgs, oldStdout, oldStderr := os.Args, os.Stdout, os.Stderr
@@ -303,6 +324,58 @@ func TestRunOneShotDispatchContracts(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "port = 43211") {
 		t.Fatalf("saved config missing requested port:\n%s", data)
+	}
+}
+
+func TestRunUpdateDispatchUsesProviderAwareService(t *testing.T) {
+	oldFactory := newUpdateServiceFunc
+	oldVersion := version
+	defer func() {
+		newUpdateServiceFunc = oldFactory
+		version = oldVersion
+	}()
+	version = "1.0.0"
+	fake := &fakeUpdateService{
+		checkStatus:  pxupdate.Status{Current: "1.0.0", Latest: "1.1.0", Available: true, Provider: pxupdate.ProviderScoop, Channel: pxupdate.Stable},
+		updateStatus: pxupdate.Status{Current: "1.0.0", Latest: "1.1.0", Available: true, Provider: pxupdate.ProviderScoop, Channel: pxupdate.Stable, Applied: true},
+	}
+	newUpdateServiceFunc = func(cfg config.Config) (updateService, error) {
+		if cfg.InstallProvider != "scoop" || cfg.UpdateChannel != "stable" {
+			t.Fatalf("unexpected update config provider=%q channel=%q", cfg.InstallProvider, cfg.UpdateChannel)
+		}
+		return fake, nil
+	}
+
+	if code := runWithMutedIO(t, "--check-update", "--install-provider=scoop"); code != 0 {
+		t.Fatalf("check-update exit=%d", code)
+	}
+	if fake.checkCalls != 1 || fake.updateCalls != 0 {
+		t.Fatalf("check calls=%d update calls=%d", fake.checkCalls, fake.updateCalls)
+	}
+	if code := runWithMutedIO(t, "--update", "--install-provider=scoop"); code != 0 {
+		t.Fatalf("update exit=%d", code)
+	}
+	if fake.checkCalls != 1 || fake.updateCalls != 1 {
+		t.Fatalf("check calls=%d update calls=%d", fake.checkCalls, fake.updateCalls)
+	}
+}
+
+func TestRunUpdateApplyHelperBypassesConfigParsing(t *testing.T) {
+	oldHelper := runUpdateApplyHelperFunc
+	defer func() { runUpdateApplyHelperFunc = oldHelper }()
+	calls := 0
+	runUpdateApplyHelperFunc = func(args []string) (bool, int) {
+		calls++
+		if len(args) != 1 || args[0] != "--private-helper" {
+			t.Fatalf("helper args=%v", args)
+		}
+		return true, 23
+	}
+	if code := runWithMutedIO(t, "--private-helper"); code != 23 {
+		t.Fatalf("helper exit=%d", code)
+	}
+	if calls != 1 {
+		t.Fatalf("helper calls=%d", calls)
 	}
 }
 
