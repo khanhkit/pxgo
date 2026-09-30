@@ -20,6 +20,7 @@ import (
 
 	"github.com/khanhkit/pxgo/internal/config"
 	"github.com/khanhkit/pxgo/internal/debug"
+	"github.com/khanhkit/pxgo/internal/winstartup"
 )
 
 func TestMain(m *testing.M) {
@@ -487,9 +488,11 @@ func mustAtoi(t *testing.T, value string) int {
 func TestAPISS0011InstallPersistsConfigBeforeRegistry(t *testing.T) {
 	oldArgs := os.Args
 	oldInstall := installStartupFunc
+	oldPrepare := prepareStartupRunCommandFunc
 	t.Cleanup(func() {
 		os.Args = oldArgs
 		installStartupFunc = oldInstall
+		prepareStartupRunCommandFunc = oldPrepare
 	})
 
 	path := filepath.Join(t.TempDir(), "fresh config", "pxgo.ini")
@@ -502,6 +505,7 @@ func TestAPISS0011InstallPersistsConfigBeforeRegistry(t *testing.T) {
 	}
 
 	called := false
+	prepareStartupRunCommandFunc = winstartup.PrepareRunCommand
 	installStartupFunc = func(cmd string, force bool) error {
 		called = true
 		if force {

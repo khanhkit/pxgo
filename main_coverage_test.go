@@ -20,6 +20,7 @@ import (
 	"github.com/khanhkit/pxgo/internal/diagnostic"
 	"github.com/khanhkit/pxgo/internal/guardian"
 	pxupdate "github.com/khanhkit/pxgo/internal/update"
+	"github.com/khanhkit/pxgo/internal/winstartup"
 )
 
 func TestSelfTestURLModesAndAllMode(t *testing.T) {
@@ -548,7 +549,12 @@ func TestRunUpdateApplyHelperBypassesConfigParsing(t *testing.T) {
 
 func TestRunInstallDispatchUsesPreparedStartupCommand(t *testing.T) {
 	oldInstall := installStartupFunc
-	defer func() { installStartupFunc = oldInstall }()
+	oldPrepare := prepareStartupRunCommandFunc
+	defer func() {
+		installStartupFunc = oldInstall
+		prepareStartupRunCommandFunc = oldPrepare
+	}()
+	prepareStartupRunCommandFunc = winstartup.PrepareRunCommand
 
 	calls := 0
 	installStartupFunc = func(cmd string, force bool) error {

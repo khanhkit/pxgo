@@ -39,18 +39,19 @@ type updateService interface {
 }
 
 var (
-	version                    = "dev"
-	installStartupFunc         = installStartup
-	setupDebugFunc             = setupDebug
-	runGuardianParentFunc      = runGuardianParent
-	runGuardianWorkerFunc      = runGuardianWorker
-	guardianRunParentCoreFunc  = guardian.RunParent
-	newUpdateServiceFunc       = newUpdateService
-	runUpdateApplyHelperFunc   = pxupdate.RunApplyHelper
-	autoUpdateInitialDelayFunc = autoUpdateInitialDelay
-	restartUpdatedProcessFunc  = restartUpdatedProcess
-	lookupUpdateExecutableFunc = exec.LookPath
-	writeUpdateStateFunc       = pxupdate.WriteState
+	version                      = "dev"
+	installStartupFunc           = installStartup
+	setupDebugFunc               = setupDebug
+	prepareStartupRunCommandFunc = winstartup.PrepareBackgroundRunCommand
+	runGuardianParentFunc        = runGuardianParent
+	runGuardianWorkerFunc        = runGuardianWorker
+	guardianRunParentCoreFunc    = guardian.RunParent
+	newUpdateServiceFunc         = newUpdateService
+	runUpdateApplyHelperFunc     = pxupdate.RunApplyHelper
+	autoUpdateInitialDelayFunc   = autoUpdateInitialDelay
+	restartUpdatedProcessFunc    = restartUpdatedProcess
+	lookupUpdateExecutableFunc   = exec.LookPath
+	writeUpdateStateFunc         = pxupdate.WriteState
 )
 
 const (
@@ -136,7 +137,7 @@ func run() (exitCode int) {
 			fmt.Fprintln(os.Stderr, err)
 			return 6
 		}
-		cmd, err := winstartup.PrepareRunCommand(
+		cmd, err := prepareStartupRunCommandFunc(
 			executable,
 			configPath,
 			func(path string) bool {
