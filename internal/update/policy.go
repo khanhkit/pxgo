@@ -73,7 +73,7 @@ func ResolveProvider(configured Provider, executable, goos string) (Provider, er
 	normalizedExecutable := strings.ReplaceAll(executable, "\\", "/")
 	path := strings.ToLower(filepath.ToSlash(filepath.Clean(normalizedExecutable)))
 	switch strings.ToLower(strings.TrimSpace(goos)) {
-	case "windows":
+	case goosWindows:
 		switch {
 		case strings.Contains(path, "/scoop/apps/pxgo/"):
 			return ProviderScoop, nil

@@ -20,6 +20,8 @@ import (
 
 const DefaultRepository = "khanhkit/pxgo"
 const defaultAPIBase = "https://api.github.com"
+const productName = "pxgo"
+const goosWindows = "windows"
 
 type Channel string
 
@@ -341,9 +343,9 @@ func Upgrade(ctx context.Context, provider Provider, runner CommandRunner) error
 	case ProviderWinGet:
 		name, args = "winget", []string{"upgrade", "--id", "KhanhKit.PxGo", "--exact", "--disable-interactivity", "--accept-source-agreements", "--accept-package-agreements"}
 	case ProviderScoop:
-		name, args = "scoop", []string{"update", "pxgo"}
+		name, args = "scoop", []string{"update", productName}
 	case ProviderBrew:
-		name, args = "brew", []string{"upgrade", "pxgo"}
+		name, args = "brew", []string{"upgrade", productName}
 	case ProviderDirect:
 		return errors.New("direct updates require verified staged replacement")
 	default:
@@ -357,7 +359,7 @@ func Upgrade(ctx context.Context, provider Provider, runner CommandRunner) error
 
 func AssetName(goos, goarch, _ string) string {
 	ext := "tar.gz"
-	if goos == "windows" {
+	if goos == goosWindows {
 		ext = "zip"
 	}
 	return fmt.Sprintf("pxgo_%s_%s.%s", goos, goarch, ext)
