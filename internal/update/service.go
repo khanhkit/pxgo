@@ -19,6 +19,11 @@ type Status struct {
 	Deferred  bool
 }
 
+type PreparedUpdate struct {
+	Status Status
+	staged *StagedCandidate
+}
+
 type Service struct {
 	Checker    Checker
 	Stager     Stager
@@ -77,24 +82,23 @@ func (s Service) Check(ctx context.Context, current string) (Status, error) {
 	}, nil
 }
 
-func (s Service) Update(ctx context.Context, current string) (Status, error) {
+func (p *PreparedUpdate) Cleanup() error {
+	if p == nil || p.staged == nil {
+		return nil
+	}
+	err := p.staged.Cleanup()
+	p.staged = nil
+	return err
+}
+
+func (s Service) Prepare(ctx context.Context, current string) (PreparedUpdate, error) {
 	status, err := s.Check(ctx, current)
 	if err != nil {
-		return Status{}, err
+		return PreparedUpdate{}, err
 	}
-	if !status.Available {
-		return status, nil
-	}
-	if status.Provider != ProviderDirect {
-		runner := s.Runner
-		if runner == nil {
-			runner = ExecRunner{}
-		}
-		if err := Upgrade(ctx, status.Provider, runner); err != nil {
-			return status, err
-		}
-		status.Applied = true
-		return status, nil
+	prepared := PreparedUpdate{Status: status}
+	if !status.Available || status.Provider != ProviderDirect {
+		return prepared, nil
 	}
 
 	stager := s.Stager
@@ -115,32 +119,71 @@ func (s Service) Update(ctx context.Context, current string) (Status, error) {
 	}
 	staged, err := stager.StageCheck(ctx, check)
 	if err != nil {
-		return status, err
+		return prepared, err
 	}
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = staged.Cleanup()
-		}
-	}()
+	prepared.staged = &staged
+	return prepared, nil
+}
 
+func (s Service) ApplyPrepared(ctx context.Context, prepared *PreparedUpdate) (Status, error) {
+	return s.ApplyPreparedWithRestart(ctx, prepared, nil)
+}
+
+func (s Service) ApplyPreparedWithRestart(ctx context.Context, prepared *PreparedUpdate, restartArgs []string) (Status, error) {
+	if prepared == nil {
+		return Status{}, errors.New("nil prepared update")
+	}
+	status := prepared.Status
+	if !status.Available {
+		return status, nil
+	}
+	if status.Provider != ProviderDirect {
+		runner := s.Runner
+		if runner == nil {
+			runner = ExecRunner{}
+		}
+		if err := Upgrade(ctx, status.Provider, runner); err != nil {
+			return status, err
+		}
+		status.Applied = true
+		prepared.Status = status
+		return status, nil
+	}
+	if prepared.staged == nil {
+		return status, errors.New("direct update was not staged")
+	}
 	target := s.Executable
 	if target == "" {
+		var err error
 		target, err = os.Executable()
 		if err != nil {
 			return status, err
 		}
 	}
-	apply, err := ApplyCandidate(ctx, staged.BinaryPath, target, status.Latest)
+	apply, err := ApplyCandidateWithRestart(ctx, prepared.staged.BinaryPath, target, status.Latest, restartArgs)
 	if err != nil {
 		return status, err
 	}
 	status.Applied = !apply.Deferred
 	status.Deferred = apply.Deferred
-	if apply.Deferred {
-		cleanup = false
+	prepared.Status = status
+	if !apply.Deferred {
+		_ = prepared.Cleanup()
 	}
 	return status, nil
+}
+
+func (s Service) Update(ctx context.Context, current string) (Status, error) {
+	prepared, err := s.Prepare(ctx, current)
+	if err != nil {
+		return Status{}, err
+	}
+	defer func() {
+		if !prepared.Status.Deferred {
+			_ = prepared.Cleanup()
+		}
+	}()
+	return s.ApplyPrepared(ctx, &prepared)
 }
 
 type ApplyResult struct {

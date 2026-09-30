@@ -21,9 +21,11 @@ import (
 const applyHelperPrefix = "--pxgo-apply-update="
 
 type applyHelperPayload struct {
-	Target          string `json:"target"`
-	ExpectedVersion string `json:"expected_version"`
-	ParentPID       int    `json:"parent_pid"`
+	Target          string   `json:"target"`
+	ExpectedVersion string   `json:"expected_version"`
+	ParentPID       int      `json:"parent_pid"`
+	Restart         bool     `json:"restart,omitempty"`
+	RestartArgs     []string `json:"restart_args,omitempty"`
 }
 
 type applyHelperResult struct {
@@ -33,6 +35,10 @@ type applyHelperResult struct {
 }
 
 func ApplyCandidate(ctx context.Context, candidate, target, expectedVersion string) (ApplyResult, error) {
+	return ApplyCandidateWithRestart(ctx, candidate, target, expectedVersion, nil)
+}
+
+func ApplyCandidateWithRestart(ctx context.Context, candidate, target, expectedVersion string, restartArgs []string) (ApplyResult, error) {
 	if ctx == nil {
 		return ApplyResult{}, errors.New("nil context")
 	}
@@ -69,6 +75,8 @@ func ApplyCandidate(ctx context.Context, candidate, target, expectedVersion stri
 		Target:          targetPath,
 		ExpectedVersion: expectedVersion,
 		ParentPID:       os.Getpid(),
+		Restart:         restartArgs != nil,
+		RestartArgs:     append([]string(nil), restartArgs...),
 	})
 	if err != nil {
 		return ApplyResult{}, err
@@ -211,7 +219,23 @@ func runApplyHelper(payload applyHelperPayload) error {
 	if err := os.Remove(backup); err != nil {
 		return fmt.Errorf("remove update backup: %w", err)
 	}
+	if payload.Restart {
+		if err := startUpdatedProcess(targetPath, payload.RestartArgs); err != nil {
+			return fmt.Errorf("restart updated PxGo: %w", err)
+		}
+	}
 	return nil
+}
+
+func startUpdatedProcess(path string, args []string) error {
+	// #nosec G204 -- path is the verified replacement target and argv is inherited from the trusted running PxGo process.
+	cmd := exec.Command(path, args...)
+	configureHiddenProcess(cmd)
+	cmd.Dir = filepath.Dir(path)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }
 
 func waitForParentExit(pid int, timeout time.Duration) error {

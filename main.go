@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -30,17 +32,23 @@ import (
 
 type updateService interface {
 	Check(context.Context, string) (pxupdate.Status, error)
+	Prepare(context.Context, string) (pxupdate.PreparedUpdate, error)
+	ApplyPreparedWithRestart(context.Context, *pxupdate.PreparedUpdate, []string) (pxupdate.Status, error)
 	Update(context.Context, string) (pxupdate.Status, error)
 }
 
 var (
-	version                  = "dev"
-	installStartupFunc       = installStartup
-	setupDebugFunc           = setupDebug
-	runGuardianParentFunc    = runGuardianParent
-	runGuardianWorkerFunc    = runGuardianWorker
-	newUpdateServiceFunc     = newUpdateService
-	runUpdateApplyHelperFunc = pxupdate.RunApplyHelper
+	version                    = "dev"
+	installStartupFunc         = installStartup
+	setupDebugFunc             = setupDebug
+	runGuardianParentFunc      = runGuardianParent
+	runGuardianWorkerFunc      = runGuardianWorker
+	guardianRunParentCoreFunc  = guardian.RunParent
+	newUpdateServiceFunc       = newUpdateService
+	runUpdateApplyHelperFunc   = pxupdate.RunApplyHelper
+	autoUpdateInitialDelayFunc = autoUpdateInitialDelay
+	restartUpdatedProcessFunc  = restartUpdatedProcess
+	writeUpdateStateFunc       = pxupdate.WriteState
 )
 
 const (
@@ -292,7 +300,7 @@ func isOneShotConfig(cfg config.Config) bool {
 		cfg.Test != ""
 }
 
-func runGuardianParent(config.Config) int {
+func runGuardianParent(cfg config.Config) int {
 	raiseNofileLimitBestEffort()
 	executable, err := os.Executable()
 	if err != nil {
@@ -309,23 +317,166 @@ func runGuardianParent(config.Config) int {
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}
-	if err := guardian.RunParent(ctx, spec, guardian.ParentOptions{}); err != nil {
-		var startup *guardian.StartupExitError
-		if errors.As(err, &startup) {
-			if startup.Err != nil {
-				fmt.Fprintln(os.Stderr, diagnostic.RedactText(startup.Err.Error()))
-			} else {
-				fmt.Fprintln(os.Stderr, startup)
-			}
-			if startup.Code > 0 && startup.Code < 256 {
-				return startup.Code
-			}
-			return 5
-		}
-		fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
-		return 5
+	if err := runGuardianLifecycle(ctx, spec, cfg); err != nil {
+		return guardianParentErrorExit(err)
 	}
 	return 0
+}
+
+func guardianParentErrorExit(err error) int {
+	var startup *guardian.StartupExitError
+	if errors.As(err, &startup) {
+		if startup.Err != nil {
+			fmt.Fprintln(os.Stderr, diagnostic.RedactText(startup.Err.Error()))
+		} else {
+			fmt.Fprintln(os.Stderr, startup)
+		}
+		if startup.Code > 0 && startup.Code < 256 {
+			return startup.Code
+		}
+		return 5
+	}
+	fmt.Fprintln(os.Stderr, diagnostic.RedactText(err.Error()))
+	return 5
+}
+
+func runGuardianLifecycle(ctx context.Context, spec guardian.CommandSpec, cfg config.Config) error {
+	mode, err := pxupdate.ParseAutoMode(cfg.AutoUpdate)
+	if err != nil {
+		return err
+	}
+	if mode == pxupdate.AutoOff || version == "dev" {
+		return guardianRunParentCoreFunc(ctx, spec, guardian.ParentOptions{})
+	}
+	service, err := newUpdateServiceFunc(cfg)
+	if err != nil {
+		return err
+	}
+	return runGuardianAutoUpdateLoop(ctx, spec, cfg, mode, service)
+}
+
+func runGuardianAutoUpdateLoop(ctx context.Context, spec guardian.CommandSpec, cfg config.Config, mode pxupdate.AutoMode, service updateService) error {
+	interval := cfg.UpdateInterval
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	delay := autoUpdateInitialDelayFunc(interval)
+	statePath := pxupdate.StatePath(config.GetConfigDir())
+
+guardianLoop:
+	for {
+		workerCtx, stopWorker := context.WithCancel(ctx)
+		parentDone := make(chan error, 1)
+		go func() {
+			parentDone <- guardianRunParentCoreFunc(workerCtx, spec, guardian.ParentOptions{})
+		}()
+
+		timer := time.NewTimer(delay)
+		for {
+			select {
+			case err := <-parentDone:
+				stopWorker()
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return err
+			case <-ctx.Done():
+				stopWorker()
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return <-parentDone
+			case <-timer.C:
+				updateCtx, cancelUpdate := context.WithTimeout(ctx, 5*time.Minute)
+				if mode == pxupdate.AutoNotify {
+					status, checkErr := service.Check(updateCtx, version)
+					cancelUpdate()
+					result := "current"
+					if checkErr != nil {
+						result = "check_failed"
+					} else if status.Available {
+						result = "available"
+					}
+					writeUpdateStateBestEffort(statePath, status, result)
+					timer.Reset(interval)
+					continue
+				}
+
+				prepared, prepareErr := service.Prepare(updateCtx, version)
+				cancelUpdate()
+				if prepareErr != nil {
+					writeUpdateStateBestEffort(statePath, pxupdate.Status{}, "check_failed")
+					timer.Reset(interval)
+					continue
+				}
+				if !prepared.Status.Available {
+					writeUpdateStateBestEffort(statePath, prepared.Status, "current")
+					_ = prepared.Cleanup()
+					timer.Reset(interval)
+					continue
+				}
+				writeUpdateStateBestEffort(statePath, prepared.Status, "prepared")
+
+				stopWorker()
+				parentErr := <-parentDone
+				if parentErr != nil {
+					_ = prepared.Cleanup()
+					return parentErr
+				}
+				applyCtx, cancelApply := context.WithTimeout(context.Background(), 5*time.Minute)
+				status, applyErr := service.ApplyPreparedWithRestart(applyCtx, &prepared, append([]string(nil), os.Args[1:]...))
+				cancelApply()
+				if applyErr != nil {
+					writeUpdateStateBestEffort(statePath, prepared.Status, "apply_failed")
+					_ = prepared.Cleanup()
+					delay = interval
+					continue guardianLoop
+				}
+				if status.Deferred {
+					writeUpdateStateBestEffort(statePath, status, "deferred")
+					return nil
+				}
+				writeUpdateStateBestEffort(statePath, status, "applied")
+				_ = prepared.Cleanup()
+				executable, executableErr := os.Executable()
+				if executableErr != nil {
+					return executableErr
+				}
+				return restartUpdatedProcessFunc(executable, append([]string(nil), os.Args[1:]...))
+			}
+		}
+	}
+}
+
+func writeUpdateStateBestEffort(path string, status pxupdate.Status, result string) {
+	if path == "" {
+		return
+	}
+	_ = writeUpdateStateFunc(path, pxupdate.StateFromStatus(status, result, time.Now()))
+}
+
+func autoUpdateInitialDelay(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	window := interval / 10
+	if window > 5*time.Minute {
+		window = 5 * time.Minute
+	}
+	if window <= 1 {
+		return 0
+	}
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(window)))
+	if err != nil {
+		return window / 2
+	}
+	return time.Duration(n.Int64())
 }
 
 func runGuardianWorker(cfg config.Config, control guardian.WorkerControl) int {

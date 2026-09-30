@@ -13,6 +13,10 @@ import (
 )
 
 func ApplyCandidate(ctx context.Context, candidate, target, expectedVersion string) (ApplyResult, error) {
+	return ApplyCandidateWithRestart(ctx, candidate, target, expectedVersion, nil)
+}
+
+func ApplyCandidateWithRestart(ctx context.Context, candidate, target, expectedVersion string, _ []string) (ApplyResult, error) {
 	if ctx == nil {
 		return ApplyResult{}, errors.New("nil context")
 	}
