@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -44,6 +45,7 @@ var (
 	installStartupFunc           = installStartup
 	setupDebugFunc               = setupDebug
 	prepareStartupRunCommandFunc = winstartup.PrepareBackgroundRunCommand
+	launchBackgroundFunc         = launchBackground
 	runGuardianParentFunc        = runGuardianParent
 	runGuardianWorkerFunc        = runGuardianWorker
 	guardianRunParentCoreFunc    = guardian.RunParent
@@ -132,7 +134,7 @@ func run() (exitCode int) {
 		return 0
 	}
 	if cfg.Background {
-		return launchBackground(cfg)
+		return launchBackgroundFunc(cfg)
 	}
 	if cfg.Install {
 		configPath := config.ConfigPathForSave(cfg.ConfigPath)
@@ -225,6 +227,9 @@ func run() (exitCode int) {
 			return 3
 		}
 		time.Sleep(100 * time.Millisecond)
+		if runtime.GOOS == "windows" {
+			return launchBackgroundFunc(cfg)
+		}
 	}
 	if cfg.Test != "" {
 		setupDebugBestEffort(cfg)

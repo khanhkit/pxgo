@@ -586,7 +586,7 @@ func smokeProxy(binaryPath string) error {
 		return fmt.Errorf("proxy smoke response status=%s body=%q err=%v", resp.Status, body, readErr)
 	}
 
-	quitOut, err := exec.Command(binaryPath, "--port="+strconv.Itoa(port), "--quit").CombinedOutput()
+	quitOut, err := exec.Command(binaryPath, "--config="+configPath, "--quit").CombinedOutput()
 	if err != nil {
 		cancel()
 		_ = cmd.Wait()
@@ -612,11 +612,15 @@ func smokeBackground(binaryPath, backgroundPath string) error {
 	if err != nil {
 		return err
 	}
+	configPath := filepath.Join(filepath.Dir(binaryPath), "pxgo-background-smoke.ini")
+	configData := fmt.Sprintf("[proxy]\nport = %d\nlisten = 127.0.0.1\nproxy = DIRECT\n", port)
+	if err := os.WriteFile(configPath, []byte(configData), 0o600); err != nil {
+		return fmt.Errorf("write background smoke config: %w", err)
+	}
+	defer os.Remove(configPath)
 	args := []string{
 		"--background",
-		"--port=" + strconv.Itoa(port),
-		"--listen=127.0.0.1",
-		"--proxy=DIRECT",
+		"--config=" + configPath,
 	}
 	cmd := exec.Command(binaryPath, args...)
 	cmd.Env = append(os.Environ(), "PXGO_PROXY=DIRECT")
@@ -641,7 +645,22 @@ func smokeBackground(binaryPath, backgroundPath string) error {
 		return fmt.Errorf("background tray host pxgow.exe count=%d want 1", processes.pxgow)
 	}
 
-	quitOut, err := exec.Command(binaryPath, "--port="+strconv.Itoa(port), "--quit").CombinedOutput()
+	restartOut, err := exec.Command(binaryPath, "--config="+configPath, "--restart").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("background proxy restart: %w: %s", err, restartOut)
+	}
+	if err := waitForPort(port, 8*time.Second); err != nil {
+		return fmt.Errorf("background runtime readiness after restart: %w", err)
+	}
+	processes, err = windowsPxGoProcesses(binaryPath, backgroundPath)
+	if err != nil {
+		return err
+	}
+	if processes.pxgo < 2 || processes.pxgow != 1 {
+		return fmt.Errorf("background restart process tree: pxgo=%d pxgow=%d want pxgo>=2 pxgow=1", processes.pxgo, processes.pxgow)
+	}
+
+	quitOut, err := exec.Command(binaryPath, "--config="+configPath, "--quit").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("background proxy quit: %w: %s", err, quitOut)
 	}
