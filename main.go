@@ -232,6 +232,13 @@ func run() (exitCode int) {
 				fmt.Fprintln(os.Stderr, err)
 				return 3
 			}
+			args := append([]string(nil), os.Args[1:]...)
+			for i, arg := range args {
+				if arg == "--restart" {
+					args[i] = "--background"
+				}
+			}
+			os.Args = append([]string{os.Args[0]}, args...)
 			return launchBackgroundFunc(cfg)
 		}
 		time.Sleep(100 * time.Millisecond)
