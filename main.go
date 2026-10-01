@@ -58,6 +58,7 @@ var (
 )
 
 const (
+	restartArg       = "--restart"
 	selfTestAll      = "all"
 	selfTestHTTPURL  = "http://httpbin.org"
 	selfTestHTTPSURL = "https://httpbin.org"
@@ -234,7 +235,7 @@ func run() (exitCode int) {
 			}
 			args := append([]string(nil), os.Args[1:]...)
 			for i, arg := range args {
-				if arg == "--restart" {
+				if arg == restartArg {
 					args[i] = "--background"
 				}
 			}
