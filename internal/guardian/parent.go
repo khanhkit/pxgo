@@ -489,6 +489,12 @@ func normalizeParentStopError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		// Explicit parent cancellation may race with a hung child reaping timeout
+		// on slower Windows runners. The shutdown request still owns the lifecycle,
+		// so timeout during that stop path is not a restartable runtime failure.
+		return nil
+	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
 		// A child force-killed during an explicit parent stop is still a normal
