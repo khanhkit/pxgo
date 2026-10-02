@@ -127,12 +127,15 @@ func TestAPISS0031DoHUsesDNSMessagePOSTAndValidatesResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ips, err := p.LookupIP(context.Background(), "doh.test")
+	ips, ttl, err := p.LookupIPTTL(context.Background(), "doh.test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ips) != 1 || !ips[0].Equal(net.IPv4(198, 51, 100, 9)) {
 		t.Fatalf("ips=%v", ips)
+	}
+	if ttl != 30*time.Second {
+		t.Fatalf("ttl=%v want 30s", ttl)
 	}
 	if got := p.Status().Bootstrap; got != "" {
 		t.Fatalf("IP-literal DoH endpoint bootstrap=%q", got)

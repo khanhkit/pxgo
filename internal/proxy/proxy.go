@@ -112,6 +112,9 @@ func New(cfg config.Config) (*Server, error) {
 		return nil, fmt.Errorf("dns resolver: %w", err)
 	}
 	dnsCache := dnscache.New(dnsPolicy.LookupIP)
+	if !dnsPolicy.IsSystem() {
+		dnsCache = dnscache.NewWithTTL(dnsPolicy.LookupIPTTL)
+	}
 	dialContext := resolverDialContext(dnsPolicy, dnsCache)
 	wp, err := buildWproxy(cfg, dnsCache, dialContext)
 	if err != nil {

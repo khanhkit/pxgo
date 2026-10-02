@@ -301,39 +301,47 @@ func (p *Policy) DialContext(ctx context.Context, network, address string, looku
 // LookupIP resolves host according to the configured policy. Literal IPs never
 // perform a DNS request.
 func (p *Policy) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
+	ips, _, err := p.LookupIPTTL(ctx, host)
+	return ips, err
+}
+
+// LookupIPTTL resolves host and returns the minimum TTL of matching A/AAAA
+// records for explicit DNS/DoH policies. System DNS does not expose TTL here.
+func (p *Policy) LookupIPTTL(ctx context.Context, host string) ([]net.IP, time.Duration, error) {
 	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
-		return []net.IP{append(net.IP(nil), ip...)}, nil
+		return []net.IP{append(net.IP(nil), ip...)}, 0, nil
 	}
 	if p == nil || p.system {
-		return net.DefaultResolver.LookupIP(ctx, "ip", host)
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		return ips, 0, err
 	}
 	name, err := dnsName(host)
 	if err != nil {
 		p.recordError(err)
-		return nil, err
+		return nil, 0, err
 	}
 	var failures []error
 	for _, ep := range p.endpoints {
 		epCtx, cancel := context.WithTimeout(ctx, p.timeout)
-		ips, terminal, err := p.lookupEndpoint(epCtx, ep, name)
+		ips, ttl, terminal, err := p.lookupEndpoint(epCtx, ep, name)
 		cancel()
 		if err == nil {
 			p.recordError(nil)
-			return ips, nil
+			return ips, ttl, nil
 		}
 		if terminal {
 			p.recordError(err)
-			return nil, err
+			return nil, 0, err
 		}
 		failures = append(failures, fmt.Errorf("%s: %w", ep.label, err))
 		if ctx.Err() != nil {
 			p.recordError(ctx.Err())
-			return nil, ctx.Err()
+			return nil, 0, ctx.Err()
 		}
 	}
 	err = errors.Join(failures...)
 	p.recordError(err)
-	return nil, err
+	return nil, 0, err
 }
 
 func dnsName(host string) (dnsmessage.Name, error) {
@@ -348,14 +356,16 @@ func dnsName(host string) (dnsmessage.Name, error) {
 	return name, nil
 }
 
-func (p *Policy) lookupEndpoint(ctx context.Context, ep endpoint, name dnsmessage.Name) ([]net.IP, bool, error) {
+func (p *Policy) lookupEndpoint(ctx context.Context, ep endpoint, name dnsmessage.Name) ([]net.IP, time.Duration, bool, error) {
 	var ips []net.IP
+	var ttl time.Duration
+	ttlSet := false
 	var familyErrors []error
 	terminalNegative := true
 	for _, qtype := range []dnsmessage.Type{dnsmessage.TypeA, dnsmessage.TypeAAAA} {
 		query, id, err := buildQuery(name, qtype)
 		if err != nil {
-			return nil, false, err
+			return nil, 0, false, err
 		}
 		response, err := p.exchange(ctx, ep, query)
 		if err != nil {
@@ -363,7 +373,7 @@ func (p *Policy) lookupEndpoint(ctx context.Context, ep endpoint, name dnsmessag
 			terminalNegative = false
 			continue
 		}
-		familyIPs, terminal, err := parseResponse(response, id, name, qtype)
+		familyIPs, familyTTL, terminal, err := parseResponseTTL(response, id, name, qtype)
 		if err != nil {
 			familyErrors = append(familyErrors, err)
 			if !terminal {
@@ -372,14 +382,18 @@ func (p *Policy) lookupEndpoint(ctx context.Context, ep endpoint, name dnsmessag
 			continue
 		}
 		ips = append(ips, familyIPs...)
+		if !ttlSet || familyTTL < ttl {
+			ttl = familyTTL
+			ttlSet = true
+		}
 	}
 	if len(ips) > 0 {
-		return dedupeIPs(ips), false, nil
+		return dedupeIPs(ips), ttl, false, nil
 	}
 	if len(familyErrors) == 0 {
-		return nil, true, &responseError{msg: "dns response contains no A or AAAA records", terminal: true}
+		return nil, 0, true, &responseError{msg: "dns response contains no A or AAAA records", terminal: true}
 	}
-	return nil, terminalNegative, errors.Join(familyErrors...)
+	return nil, 0, terminalNegative, errors.Join(familyErrors...)
 }
 
 func buildQuery(name dnsmessage.Name, qtype dnsmessage.Type) ([]byte, uint16, error) {
@@ -517,32 +531,37 @@ func (p *Policy) exchangeDoH(ctx context.Context, endpointURL *url.URL, query []
 }
 
 func parseResponse(msg []byte, wantID uint16, wantName dnsmessage.Name, wantType dnsmessage.Type) ([]net.IP, bool, error) {
+	ips, _, terminal, err := parseResponseTTL(msg, wantID, wantName, wantType)
+	return ips, terminal, err
+}
+
+func parseResponseTTL(msg []byte, wantID uint16, wantName dnsmessage.Name, wantType dnsmessage.Type) ([]net.IP, time.Duration, bool, error) {
 	var parser dnsmessage.Parser
 	header, err := parser.Start(msg)
 	if err != nil {
-		return nil, false, &protocolError{msg: "malformed DNS response header"}
+		return nil, 0, false, &protocolError{msg: "malformed DNS response header"}
 	}
 	if !header.Response || header.ID != wantID {
-		return nil, false, &protocolError{msg: "DNS response does not match query id"}
+		return nil, 0, false, &protocolError{msg: "DNS response does not match query id"}
 	}
 	questions, err := parser.AllQuestions()
 	if err != nil || len(questions) != 1 {
-		return nil, false, &protocolError{msg: "DNS response has invalid question section"}
+		return nil, 0, false, &protocolError{msg: "DNS response has invalid question section"}
 	}
 	q := questions[0]
 	if !sameName(q.Name, wantName) || q.Type != wantType || q.Class != dnsmessage.ClassINET {
-		return nil, false, &protocolError{msg: "DNS response question does not match request"}
+		return nil, 0, false, &protocolError{msg: "DNS response question does not match request"}
 	}
 	switch header.RCode {
 	case dnsmessage.RCodeSuccess:
 	case dnsmessage.RCodeNameError:
-		return nil, true, &responseError{msg: "dns name does not exist", terminal: true}
+		return nil, 0, true, &responseError{msg: "dns name does not exist", terminal: true}
 	default:
-		return nil, false, &responseError{msg: "dns response code " + header.RCode.String(), terminal: false}
+		return nil, 0, false, &responseError{msg: "dns response code " + header.RCode.String(), terminal: false}
 	}
 	answers, err := parser.AllAnswers()
 	if err != nil {
-		return nil, false, &protocolError{msg: "malformed DNS answer section"}
+		return nil, 0, false, &protocolError{msg: "malformed DNS answer section"}
 	}
 
 	allowed := map[string]bool{canonicalName(wantName): true}
@@ -564,27 +583,45 @@ func parseResponse(msg []byte, wantID uint16, wantName dnsmessage.Name, wantType
 		}
 	}
 	var ips []net.IP
+	var ttl time.Duration
+	ttlSet := false
 	for _, answer := range answers {
 		if answer.Header.Class != dnsmessage.ClassINET || !allowed[canonicalName(answer.Header.Name)] {
 			continue
 		}
 		switch body := answer.Body.(type) {
+		case *dnsmessage.CNAMEResource:
+			recordTTL := time.Duration(answer.Header.TTL) * time.Second
+			if !ttlSet || recordTTL < ttl {
+				ttl = recordTTL
+				ttlSet = true
+			}
 		case *dnsmessage.AResource:
 			if wantType == dnsmessage.TypeA {
 				ips = append(ips, net.IPv4(body.A[0], body.A[1], body.A[2], body.A[3]))
+				recordTTL := time.Duration(answer.Header.TTL) * time.Second
+				if !ttlSet || recordTTL < ttl {
+					ttl = recordTTL
+					ttlSet = true
+				}
 			}
 		case *dnsmessage.AAAAResource:
 			if wantType == dnsmessage.TypeAAAA {
 				ip := make(net.IP, net.IPv6len)
 				copy(ip, body.AAAA[:])
 				ips = append(ips, ip)
+				recordTTL := time.Duration(answer.Header.TTL) * time.Second
+				if !ttlSet || recordTTL < ttl {
+					ttl = recordTTL
+					ttlSet = true
+				}
 			}
 		}
 	}
 	if len(ips) == 0 {
-		return nil, true, &responseError{msg: "dns response contains no matching address records", terminal: true}
+		return nil, 0, true, &responseError{msg: "dns response contains no matching address records", terminal: true}
 	}
-	return ips, true, nil
+	return ips, ttl, true, nil
 }
 
 func sameName(a, b dnsmessage.Name) bool {

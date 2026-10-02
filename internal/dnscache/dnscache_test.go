@@ -105,3 +105,68 @@ func TestAPISS0031CallerCancellationDoesNotPoisonNegativeCache(t *testing.T) {
 		t.Fatalf("resolver calls=%d want 2; canceled result was cached", got)
 	}
 }
+
+func TestTTLResolverUsesAuthoritativeTTL(t *testing.T) {
+	var calls atomic.Int32
+	cache := NewWithTTL(func(context.Context, string) ([]net.IP, time.Duration, error) {
+		calls.Add(1)
+		return []net.IP{net.ParseIP("192.0.2.1")}, 30 * time.Second, nil
+	})
+	if _, err := cache.LookupContext(context.Background(), "ttl.example.test"); err != nil {
+		t.Fatal(err)
+	}
+	cache.mu.RLock()
+	remaining := time.Until(cache.cache["ttl.example.test"].expires)
+	cache.mu.RUnlock()
+	if remaining < 29*time.Second || remaining > 31*time.Second {
+		t.Fatalf("cached TTL=%v want approximately 30s", remaining)
+	}
+	if _, err := cache.LookupContext(context.Background(), "ttl.example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("resolver calls=%d want 1", got)
+	}
+}
+
+func TestTTLResolverZeroTTLIsNotCached(t *testing.T) {
+	var calls atomic.Int32
+	cache := NewWithTTL(func(context.Context, string) ([]net.IP, time.Duration, error) {
+		calls.Add(1)
+		return []net.IP{net.ParseIP("192.0.2.2")}, 0, nil
+	})
+	for range 2 {
+		if _, err := cache.LookupContext(context.Background(), "zero.example.test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("resolver calls=%d want 2", got)
+	}
+}
+
+func TestTTLResolverClampsPositiveTTL(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ttl  time.Duration
+		want time.Duration
+	}{
+		{name: "minimum", ttl: time.Millisecond, want: minPositiveTTL},
+		{name: "maximum", ttl: 24 * time.Hour, want: maxPositiveTTL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := NewWithTTL(func(context.Context, string) ([]net.IP, time.Duration, error) {
+				return []net.IP{net.ParseIP("192.0.2.3")}, tc.ttl, nil
+			})
+			if _, err := cache.LookupContext(context.Background(), "clamp.example.test"); err != nil {
+				t.Fatal(err)
+			}
+			cache.mu.RLock()
+			remaining := time.Until(cache.cache["clamp.example.test"].expires)
+			cache.mu.RUnlock()
+			if remaining < tc.want-time.Second/10 || remaining > tc.want+time.Second/10 {
+				t.Fatalf("cached TTL=%v want approximately %v", remaining, tc.want)
+			}
+		})
+	}
+}
