@@ -287,3 +287,8 @@ if [[ -f "$dependabot" ]]; then
 fi
 
 exit "$fail"
+
+# Green release repository hygiene: only main may exist at release boundary.
+grep -Fq 'Verify green release branch hygiene' .github/workflows/release.yml
+grep -Fq 'repos/${GITHUB_REPOSITORY}/branches?per_page=100' .github/workflows/release.yml
+grep -Fq 'Green release requires exactly one repository branch named main.' .github/workflows/release.yml
