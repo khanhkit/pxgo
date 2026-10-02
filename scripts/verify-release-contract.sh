@@ -286,4 +286,9 @@ if [[ -f "$dependabot" ]]; then
   [[ "$(grep -c 'interval: \"weekly\"' "$dependabot")" -ge 3 ]] || bad "Dependabot ecosystems are not on weekly cadence"
 fi
 
+# Green release repository hygiene: only main may exist at release boundary.
+grep -Fq 'Verify green release branch hygiene' .github/workflows/release.yml || bad "green release branch-hygiene step missing"
+grep -Fq 'repos/${GITHUB_REPOSITORY}/branches?per_page=100' .github/workflows/release.yml || bad "green release branch inventory does not query GitHub"
+grep -Fq 'Green release requires exactly one repository branch named main.' .github/workflows/release.yml || bad "green release single-main fail-closed guard missing"
+
 exit "$fail"
