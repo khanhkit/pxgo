@@ -66,7 +66,7 @@ fi
 if grep -q 'verification_ref:' .github/workflows/release.yml; then
   bad "Release workflow accepts arbitrary verification_ref input"
 fi
-[[ "$(grep -Fc 'ref: ${{ github.sha }}' .github/workflows/release.yml)" -eq 4 ]] || bad "every Release checkout must be bound directly to trusted github.sha"
+[[ "$(grep -Fc 'ref: ${{ github.sha }}' .github/workflows/release.yml)" -eq 5 ]] || bad "every Release checkout must be bound directly to trusted github.sha"
 grep -Fq 'git fetch --no-tags origin main' .github/workflows/release.yml || bad "production release does not fetch canonical main for ancestry verification"
 grep -Fq 'git merge-base --is-ancestor "$EXPECTED_SHA" origin/main' .github/workflows/release.yml || bad "production release does not require tagged SHA to belong to main history"
 if grep -Fq 'ref: ${{ needs.release-candidate.outputs.sha }}' .github/workflows/release.yml; then
@@ -256,6 +256,28 @@ fi
 if grep -Eq 'grep .*pxgo_(darwin|linux)_' .github/workflows/release.yml; then
   bad "Homebrew checksum extraction still uses substring grep that can match SBOM entries"
 fi
+grep -q '^  submit-winget:' .github/workflows/release.yml || bad "official WinGet submission job missing"
+winget_header=$(sed -n '/^  submit-winget:/,/^    steps:/p' .github/workflows/release.yml)
+grep -Fq 'runs-on: windows-latest' <<<"$winget_header" || bad "WinGet submission does not use a Windows runner"
+grep -Eq 'needs:.*release-candidate.*promote-release' <<<"$winget_header" || bad "WinGet submission is not downstream of immutable promotion"
+if grep -Fq 'PXGO_WINGET_ENABLED' .github/workflows/release.yml; then
+  bad "live WinGet publication must not have an opt-out gate"
+fi
+grep -Fq 'WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}' .github/workflows/release.yml || bad "WinGet submission is not bound to its repository secret"
+grep -Fq 'actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68' .github/workflows/release.yml || bad "WinGet runtime setup is not immutable-SHA pinned"
+[[ -f scripts/submit-winget-release.ps1 ]] || bad "WinGet release submission script missing"
+if [[ -f scripts/submit-winget-release.ps1 ]]; then
+  grep -Fq "wingetCreateVersion = '1.12.13.0'" scripts/submit-winget-release.ps1 || bad "WingetCreate version is not pinned"
+  grep -Fq "wingetCreateSha256 = '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'" scripts/submit-winget-release.ps1 || bad "WingetCreate checksum is not pinned"
+  grep -Fq "'--submit'" scripts/submit-winget-release.ps1 || bad "WingetCreate update does not submit upstream"
+  grep -Fq "'KhanhKit.PxGo'" scripts/submit-winget-release.ps1 || bad "WinGet submission package identity is wrong"
+  grep -Fq 'pxgo_windows_amd64.zip' scripts/submit-winget-release.ps1 || bad "WinGet x64 artifact URL missing"
+  grep -Fq 'pxgo_windows_arm64.zip' scripts/submit-winget-release.ps1 || bad "WinGet arm64 artifact URL missing"
+  if grep -Fq -- "'--token'" scripts/submit-winget-release.ps1; then
+    bad "WinGet token must not be exposed through command-line arguments"
+  fi
+fi
+
 grep -q '^  update-scoop-bucket:' .github/workflows/release.yml || bad "official Scoop bucket publication job missing"
 grep -A8 '^  update-scoop-bucket:' .github/workflows/release.yml | grep -Eq 'needs:.*promote-release' || bad "Scoop bucket update is not downstream of release promotion"
 grep -q "vars.PXGO_SCOOP_BUCKET_ENABLED == 'true'" .github/workflows/release.yml || bad "Scoop bucket publication lacks explicit opt-in gate"
@@ -290,5 +312,10 @@ fi
 grep -Fq 'Verify green release branch hygiene' .github/workflows/release.yml || bad "green release branch-hygiene step missing"
 grep -Fq 'repos/${GITHUB_REPOSITORY}/branches?per_page=100' .github/workflows/release.yml || bad "green release branch inventory does not query GitHub"
 grep -Fq 'Green release requires exactly one repository branch named main.' .github/workflows/release.yml || bad "green release single-main fail-closed guard missing"
+
+[[ -f docs/release-green-policy.md ]] || bad "green release policy missing"
+grep -Fq 'WinGet (`KhanhKit.PxGo`' docs/release-green-policy.md || bad "green release policy does not require WinGet convergence"
+grep -Fq 'submitted-but-unmerged WinGet manifest does not count' docs/release-green-policy.md || bad "green release policy incorrectly allows pending WinGet submissions"
+grep -Fq 'must not be reported as a green release until all live channels' docs/release-green-policy.md || bad "green release policy lacks fail-closed distribution convergence"
 
 exit "$fail"

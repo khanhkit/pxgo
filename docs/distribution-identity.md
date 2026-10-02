@@ -19,16 +19,25 @@ checksums and publishes it alongside the archives. Stable releases also copy tha
 exact staged manifest into the official `khanhkit/scoop-bucket`; the release asset
 remains available as a bucket-independent direct-install fallback.
 
-WinGet metadata inherited from the previous repository identity is retired.
-Fork-owned package `KhanhKit.PxGo` v0.7.1 was moderator-approved and merged in
-`microsoft/winget-pkgs#440461` on 2026-09-25. The manifests are present on the
-upstream `master` branch and the official WinGet CDN `source2.msix` index now
-contains `KhanhKit.PxGo` with `latest_version=0.7.1`. WinGet is therefore a live
-official distribution channel:
+Legacy GoReleaser-owned WinGet metadata from the previous repository identity is retired.
+Fork-owned package `KhanhKit.PxGo` was established by moderator-approved
+`microsoft/winget-pkgs#440461` on 2026-09-25. WinGet is a live official distribution
+channel and every stable PxGo release is submitted from CI with the pinned
+WingetCreate client. `WINGET_CREATE_GITHUB_TOKEN` is mandatory for stable release
+submission; the token is consumed through WingetCreate's environment variable and
+is never placed on the command line. Submission is idempotent when the exact
+version is already upstream or an exact-version PR is still open:
 
 ```powershell
 winget install --id KhanhKit.PxGo --exact
 ```
+
+## Green release convergence
+
+The canonical green-release invariant is defined in `docs/release-green-policy.md`.
+A release is not green merely because GitHub promotion succeeded: every live official
+distribution channel, including WinGet, must advertise the exact same stable version.
+An open WinGet submission is pending convergence, not success.
 
 ## Publication policy
 

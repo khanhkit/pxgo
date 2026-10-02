@@ -111,6 +111,23 @@ jobs:
             throw 'protected AD bootstrap PowerShell has parser errors'
           }
 
+      - name: Validate WinGet publisher PowerShell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $path = (Resolve-Path 'scripts/submit-winget-release.ps1').Path
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            $path,
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'WinGet publisher PowerShell has parser errors'
+          }
+
       - name: Native WinHTTP resolver fixtures
         if: runner.os == 'Windows'
         shell: pwsh
