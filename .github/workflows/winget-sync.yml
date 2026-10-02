@@ -1,0 +1,69 @@
+name: WinGet Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable PxGo tag to synchronize to WinGet (for example v0.8.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pxgo-winget-sync-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  sync-winget:
+    name: Sync WinGet exact version
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted workflow SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Validate stable tag belongs to main
+        id: target
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "WinGet sync accepts stable tags only: $env:TAG"
+          }
+          git fetch --no-tags origin main
+          git fetch --force origin "refs/tags/$env:TAG:refs/tags/$env:TAG"
+          $tagSha = (git rev-list -n 1 $env:TAG).Trim()
+          if (-not $tagSha) {
+            throw "tag not found: $env:TAG"
+          }
+          git merge-base --is-ancestor $tagSha origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "tag $env:TAG is not in canonical main history"
+          }
+          $version = $env:TAG.Substring(1)
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag_sha=$tagSha" >> $env:GITHUB_OUTPUT
+
+      - name: Set up WingetCreate runtime
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Synchronize exact stable version
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+          VERSION: ${{ steps.target.outputs.version }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINGET_CREATE_GITHUB_TOKEN)) {
+            throw 'WINGET_CREATE_GITHUB_TOKEN secret is required for WinGet synchronization'
+          }
+          ./scripts/submit-winget-release.ps1 -Version $env:VERSION -Tag $env:TAG
