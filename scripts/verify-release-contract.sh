@@ -265,6 +265,13 @@ if grep -Fq 'PXGO_WINGET_ENABLED' .github/workflows/release.yml; then
 fi
 grep -Fq 'WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}' .github/workflows/release.yml || bad "WinGet submission is not bound to its repository secret"
 grep -Fq 'actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68' .github/workflows/release.yml || bad "WinGet runtime setup is not immutable-SHA pinned"
+[[ -f .github/workflows/winget-sync.yml ]] || bad "manual WinGet synchronization workflow missing"
+if [[ -f .github/workflows/winget-sync.yml ]]; then
+  grep -Fq 'Sync WinGet exact version' .github/workflows/winget-sync.yml || bad "manual WinGet synchronization job missing"
+  grep -Fq 'git merge-base --is-ancestor $tagSha origin/main' .github/workflows/winget-sync.yml || bad "manual WinGet sync does not constrain target tag to main history"
+  grep -Fq 'WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}' .github/workflows/winget-sync.yml || bad "manual WinGet sync is not bound to repository secret"
+  grep -Fq './scripts/submit-winget-release.ps1 -Version $env:VERSION -Tag $env:TAG' .github/workflows/winget-sync.yml || bad "manual WinGet sync does not reuse canonical publisher"
+fi
 [[ -f scripts/submit-winget-release.ps1 ]] || bad "WinGet release submission script missing"
 if [[ -f scripts/submit-winget-release.ps1 ]]; then
   grep -Fq "wingetCreateVersion = '1.12.13.0'" scripts/submit-winget-release.ps1 || bad "WingetCreate version is not pinned"
