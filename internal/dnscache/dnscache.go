@@ -10,12 +10,17 @@ import (
 )
 
 const (
-	positiveTTL = 60 * time.Second
-	negativeTTL = 5 * time.Second
-	maxEntries  = 4096
+	positiveTTL    = 60 * time.Second
+	minPositiveTTL = 1 * time.Second
+	maxPositiveTTL = 1 * time.Hour
+	negativeTTL    = 5 * time.Second
+	maxEntries     = 4096
 )
 
-type LookupFunc func(context.Context, string) ([]net.IP, error)
+type (
+	LookupFunc    func(context.Context, string) ([]net.IP, error)
+	LookupTTLFunc func(context.Context, string) ([]net.IP, time.Duration, error)
+)
 
 // lookupIP remains swappable by the legacy package-level tests. New production
 // code should own a Cache instance with an explicit resolver dependency.
@@ -40,6 +45,7 @@ type Cache struct {
 	inflight   map[string]*lookupCall
 	generation uint64
 	lookup     LookupFunc
+	lookupTTL  LookupTTLFunc
 }
 
 func New(lookup LookupFunc) *Cache {
@@ -51,6 +57,14 @@ func New(lookup LookupFunc) *Cache {
 		inflight: map[string]*lookupCall{},
 		lookup:   lookup,
 	}
+}
+
+// NewWithTTL creates a cache whose resolver can supply the authoritative DNS TTL.
+// A zero TTL is not cached; positive TTLs are clamped to a bounded local range.
+func NewWithTTL(lookup LookupTTLFunc) *Cache {
+	c := New(nil)
+	c.lookupTTL = lookup
+	return c
 }
 
 var defaultCache = New(nil)
@@ -102,17 +116,25 @@ func (c *Cache) LookupContext(ctx context.Context, host string) ([]net.IP, error
 	c.inflight[host] = call
 	c.mu.Unlock()
 
-	ips, err := c.lookup(ctx, host)
+	var ips []net.IP
+	var err error
 	ttl := positiveTTL
+	if c.lookupTTL != nil {
+		ips, ttl, err = c.lookupTTL(ctx, host)
+	} else {
+		ips, err = c.lookup(ctx, host)
+	}
 	if err != nil {
 		ips = nil
 		ttl = negativeTTL
+	} else if c.lookupTTL != nil && ttl > 0 {
+		ttl = max(minPositiveTTL, min(ttl, maxPositiveTTL))
 	}
 	completedAt := time.Now()
 	stored := cloneIPs(ips)
 	// A caller cancellation/deadline is not a resolver verdict. Do not turn it
 	// into a shared negative cache entry that would poison unrelated requests.
-	cacheable := ctx.Err() == nil
+	cacheable := ctx.Err() == nil && (err != nil || c.lookupTTL == nil || ttl > 0)
 
 	c.mu.Lock()
 	if cacheable && call.generation == c.generation {
