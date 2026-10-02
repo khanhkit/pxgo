@@ -567,6 +567,49 @@ jobs:
           git add Formula/pxgo.rb
           git diff --cached --quiet || git commit -m "Update pxgo to ${TAG}"
           git push
+  submit-winget:
+    name: Submit WinGet update
+    runs-on: windows-latest
+    timeout-minutes: 20
+    needs: [release-candidate, promote-release]
+    if: ${{ github.event_name == 'push' && !contains(needs.release-candidate.outputs.tag, '-') }}
+    steps:
+      - name: Checkout exact release SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Verify WinGet publisher SHA binding
+        shell: pwsh
+        env:
+          EVENT_SHA: ${{ github.sha }}
+          CANDIDATE_SHA: ${{ needs.release-candidate.outputs.sha }}
+        run: |
+          if ((git rev-parse HEAD) -ne $env:EVENT_SHA) {
+            throw 'WinGet publisher checkout does not match trusted event SHA'
+          }
+          if ($env:CANDIDATE_SHA -ne $env:EVENT_SHA) {
+            throw 'WinGet publisher candidate SHA does not match trusted event SHA'
+          }
+
+      - name: Set up WingetCreate runtime
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Submit exact stable version to WinGet
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+          VERSION: ${{ needs.release-candidate.outputs.version }}
+          TAG: ${{ needs.release-candidate.outputs.tag }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINGET_CREATE_GITHUB_TOKEN)) {
+            throw 'WINGET_CREATE_GITHUB_TOKEN secret is required for stable releases'
+          }
+          ./scripts/submit-winget-release.ps1 -Version $env:VERSION -Tag $env:TAG
+
   update-scoop-bucket:
     name: Update Scoop Bucket
     runs-on: ubuntu-latest
