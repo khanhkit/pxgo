@@ -30,6 +30,13 @@ official distribution channel:
 winget install --id KhanhKit.PxGo --exact
 ```
 
+## Green release convergence
+
+The canonical green-release invariant is defined in `docs/release-green-policy.md`.
+A release is not green merely because GitHub promotion succeeded: every live official
+distribution channel, including WinGet, must advertise the exact same stable version.
+An open WinGet submission is pending convergence, not success.
+
 ## Publication policy
 
 GitHub Releases target `khanhkit/pxgo`. Homebrew publication targets

@@ -291,4 +291,9 @@ grep -Fq 'Verify green release branch hygiene' .github/workflows/release.yml || 
 grep -Fq 'repos/${GITHUB_REPOSITORY}/branches?per_page=100' .github/workflows/release.yml || bad "green release branch inventory does not query GitHub"
 grep -Fq 'Green release requires exactly one repository branch named main.' .github/workflows/release.yml || bad "green release single-main fail-closed guard missing"
 
+[[ -f docs/release-green-policy.md ]] || bad "green release policy missing"
+grep -Fq 'WinGet (`KhanhKit.PxGo`' docs/release-green-policy.md || bad "green release policy does not require WinGet convergence"
+grep -Fq 'submitted-but-unmerged WinGet manifest does not count' docs/release-green-policy.md || bad "green release policy incorrectly allows pending WinGet submissions"
+grep -Fq 'must not be reported as a green release until all live channels' docs/release-green-policy.md || bad "green release policy lacks fail-closed distribution convergence"
+
 exit "$fail"
