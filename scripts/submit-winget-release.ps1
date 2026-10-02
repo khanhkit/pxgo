@@ -79,7 +79,7 @@ $searchQuery = [System.Uri]::EscapeDataString("repo:microsoft/winget-pkgs is:pr 
 $pending = Invoke-RestMethod -Uri "https://api.github.com/search/issues?q=$searchQuery" -Headers $apiHeaders
 if ($pending.total_count -gt 0) {
     $urls = @($pending.items | ForEach-Object { $_.html_url }) -join ', '
-    Write-Host "WinGet submission already pending for $PackageIdentifier $Version: $urls"
+    Write-Host "WinGet submission already pending for $PackageIdentifier ${Version}: $urls"
     exit 0
 }
 
