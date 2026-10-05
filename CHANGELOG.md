@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Embed the owner-provided icon in Windows release executables and verify the exact staged PE icon resources before immutable promotion.
 - Add provider-aware update checking/updating with opt-in periodic Guardian orchestration, stable/prerelease channels, package-manager delegation, verified direct-release staging, rollback-aware replacement, persisted update diagnostics, and concurrent-update serialization.
 
+### Fixed
+- Keep remote PAC bootstrap on system/VPN DNS and add ordered `dns_only` / `dns_bypass` rules so split-DNS enterprise domains can bypass public/custom resolvers without disabling DoH for other traffic.
+- Run live DoH resolver and proxy HTTP/CONNECT end-to-end coverage in CI and as an exact-SHA release gate.
+
 ## [0.7.1] - 2026-09-25
 
 ### Fixed

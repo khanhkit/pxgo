@@ -180,7 +180,9 @@ reported instead of being mistaken for a missing password. Set
 | `--hostonly` | Bind all interfaces but allow only local host interface IPs |
 | `--allow=LIST` | Client allow list for `--gateway` mode |
 | `--noproxy=LIST` | Hosts or IP ranges that bypass the upstream proxy |
-| `--dns=RESOLVERS` | Outbound DNS: `system`, custom UDP/TCP DNS, DoH, or comma-separated ordered failover; configured modes do not silently fall back to OS DNS |
+| `--dns=RESOLVERS` | Outbound DNS: `system`, custom UDP/TCP DNS, DoH, or comma-separated failover; repeated INI `dns` entries form ordered resolver rules |
+| `--dns-only=DOMAINS` | Use the immediately preceding DNS rule only for matching domains |
+| `--dns-bypass=DOMAINS` | Resolve matching domains with system/VPN DNS instead of the immediately preceding DNS rule |
 | `--auth=TYPE` | Upstream auth mode: `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, `NONE`; omitted auth with reusable credentials behaves as `ANYSAFE`, while explicit `ANY` opts into Basic fallback |
 | `--username=USER` | Explicit upstream proxy username |
 | `--kerberos` | Linux/macOS: acquire/refresh a Kerberos ccache and use it for upstream HTTP `Negotiate`/SPNEGO (`HTTP/<proxy-host>`); Windows SSPI works without this flag |

@@ -76,7 +76,9 @@ human-edited config with explanations.
 | `hostonly` / `--hostonly` | `0` | Bind all interfaces but allow local host IPs |
 | `allow` / `--allow` | `*.*.*.*` | Client allow list |
 | `noproxy` / `--noproxy` | empty | Direct-connect bypass list |
-| `dns` / `--dns` | empty (`system`) | Outbound DNS policy: system resolver, custom UDP/TCP DNS, DoH, or an ordered comma-separated failover list |
+| `dns` / `--dns` | empty (`system`) | Outbound DNS resolver. Repeated INI `dns` entries create ordered resolver rules; comma-separated endpoints inside one entry remain failover endpoints |
+| `dns_only` / `--dns-only` | empty | Apply the immediately preceding `dns` rule only to matching domains |
+| `dns_bypass` / `--dns-bypass` | empty | Resolve matching domains with the operating-system DNS instead of the immediately preceding `dns` rule |
 | `useragent` / `--useragent` | empty | Override or set `User-Agent` |
 | `username` / `--username` | empty | Explicit upstream auth username |
 | `auth` / `--auth` | empty | Upstream auth selector; empty + reusable credentials uses `ANYSAFE`, while explicit `ANY` includes Basic fallback |
@@ -91,15 +93,30 @@ Leaving `dns` empty, or setting it to `system`, preserves the operating-system r
 - `tcp://1.1.1.1:53` — DNS over TCP;
 - `https://resolver.example/dns-query` — DNS-over-HTTPS using normal TLS certificate validation.
 
-Multiple non-system endpoints may be comma-separated. They are attempted in configured order with bounded timeouts. Classic DNS endpoints require an IP literal so their own hostname cannot create an implicit bootstrap lookup. A DoH endpoint may use a hostname; only that endpoint bootstrap uses the OS resolver, and its HTTP transport bypasses proxy environment settings so it cannot recursively route through PxGo. Ordinary target, upstream-proxy, remote-PAC, PAC `dnsResolve()`, and noproxy address lookups do not silently fall back to system DNS while a custom policy is configured. Windows WinHTTP/WPAD discovery remains an OS-owned exception.
+Multiple non-system endpoints inside one `dns` value may be comma-separated. They are attempted in configured order with bounded timeouts. Classic DNS endpoints require an IP literal so their own hostname cannot create an implicit bootstrap lookup. A DoH endpoint may use a hostname; only that endpoint bootstrap uses the OS resolver, and its HTTP transport bypasses proxy environment settings so it cannot recursively route through PxGo.
+
+INI files may repeat `dns` to create ordered resolver rules. `dns_only` limits the immediately preceding rule to matching domains; if it does not match, evaluation continues to the next rule and ultimately the OS resolver if no rule matches. `dns_bypass` is terminal for matching domains and sends them directly to the OS resolver. `*.example.com` matches subdomains only; `example.com` matches both the apex and its subdomains. If both selectors are present on one rule, `dns_bypass` wins.
+
+Remote HTTP(S) PAC source loading is a control-plane bootstrap and always uses the OS resolver, so an internal PAC URL remains reachable on split-DNS/VPN networks. PAC `dnsResolve()`, ordinary destinations, upstream-proxy hostnames, and noproxy address lookups use the ordered DNS policy above. A configured rule itself remains fail-closed; there is no implicit system-DNS fallback after that rule has been selected.
 
 Examples:
 
 ```sh
 pxgo --dns=udp://10.0.0.53:53
-PXGO_DNS='https://dns.example/dns-query' pxgo
+PXGO_DNS='https://dns.example/dns-query' PXGO_DNS_ONLY='example.com' pxgo
 pxgo --dns='udp://10.0.0.53:53,https://dns.example/dns-query'
 ```
+
+```ini
+[proxy]
+dns = https://1.1.1.1/dns-query
+dns_only = *.google.com
+
+dns = udp://9.9.9.9:53
+dns_bypass = *.bosch.com,bosch.com
+```
+
+The example sends Google subdomains to the first DoH rule, all other non-Bosch names to the second resolver, and Bosch domains to system/VPN DNS.
 
 `pxgo --doctor` reports the resolver mode, safe endpoint identity, any system-bootstrap requirement, source provenance, and a bounded failure class. It does not report DNS query payloads or credential-bearing endpoint URLs.
 

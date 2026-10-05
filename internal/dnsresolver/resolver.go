@@ -39,11 +39,24 @@ type LookupFunc func(context.Context, string) ([]net.IP, error)
 type Policy struct {
 	system    bool
 	endpoints []endpoint
+	rules     []policyRule
 	timeout   time.Duration
 	http      *http.Client
 
 	mu        sync.RWMutex
 	lastError string
+}
+
+type Rule struct {
+	Resolver string
+	Only     []string
+	Bypass   []string
+}
+
+type policyRule struct {
+	resolver *Policy
+	only     []string
+	bypass   []string
 }
 
 type Status struct {
@@ -86,6 +99,70 @@ func (e *responseError) Terminal() bool { return e.terminal }
 // ordered failover.
 func New(raw string, timeout time.Duration) (*Policy, error) {
 	return newPolicy(raw, timeout, nil)
+}
+
+func NewRules(rules []Rule, timeout time.Duration) (*Policy, error) {
+	if len(rules) == 0 {
+		return New("", timeout)
+	}
+	if len(rules) == 1 && len(rules[0].Only) == 0 && len(rules[0].Bypass) == 0 {
+		return New(rules[0].Resolver, timeout)
+	}
+	p := &Policy{timeout: normalizedTimeout(timeout)}
+	for _, rawRule := range rules {
+		resolver, err := New(rawRule.Resolver, timeout)
+		if err != nil {
+			return nil, err
+		}
+		only, err := normalizeRulePatterns(rawRule.Only)
+		if err != nil {
+			return nil, fmt.Errorf("dns_only: %w", err)
+		}
+		bypass, err := normalizeRulePatterns(rawRule.Bypass)
+		if err != nil {
+			return nil, fmt.Errorf("dns_bypass: %w", err)
+		}
+		p.rules = append(p.rules, policyRule{resolver: resolver, only: only, bypass: bypass})
+	}
+	return p, nil
+}
+
+func normalizeRulePatterns(values []string) ([]string, error) {
+	var out []string
+	for _, value := range values {
+		for _, raw := range strings.Split(value, ",") {
+			pattern := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+			if pattern == "" {
+				continue
+			}
+			if strings.ContainsAny(pattern, "/:") || (strings.Contains(pattern, "*") && pattern != "*" && !strings.HasPrefix(pattern, "*.")) {
+				return nil, fmt.Errorf("invalid domain pattern %q", raw)
+			}
+			out = append(out, pattern)
+		}
+	}
+	return out, nil
+}
+
+func matchDomain(host, pattern string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	pattern = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
+	if pattern == "*" {
+		return host != ""
+	}
+	if base, ok := strings.CutPrefix(pattern, "*."); ok {
+		return host != base && strings.HasSuffix(host, "."+base)
+	}
+	return host == pattern || strings.HasSuffix(host, "."+pattern)
+}
+
+func matchesAny(host string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if matchDomain(host, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 func newPolicy(raw string, timeout time.Duration, client *http.Client) (*Policy, error) {
@@ -213,34 +290,55 @@ func (p *Policy) Status() Status {
 		return Status{Mode: resolverModeSystem}
 	}
 	status := Status{Mode: p.mode()}
-	for _, ep := range p.endpoints {
-		status.Endpoints = append(status.Endpoints, ep.label)
-		if ep.scheme == resolverSchemeHTTPS && net.ParseIP(ep.url.Hostname()) == nil {
-			status.Bootstrap = resolverModeSystem
-		}
-	}
+	p.appendStatusEndpoints(&status)
 	p.mu.RLock()
 	status.LastError = p.lastError
 	p.mu.RUnlock()
 	return status
 }
 
-func (p *Policy) mode() string {
-	hasClassic, hasDoH := false, false
+func (p *Policy) appendStatusEndpoints(status *Status) {
 	for _, ep := range p.endpoints {
-		if ep.scheme == resolverSchemeHTTPS {
-			hasDoH = true
-		} else {
-			hasClassic = true
+		status.Endpoints = append(status.Endpoints, ep.label)
+		if ep.scheme == resolverSchemeHTTPS && net.ParseIP(ep.url.Hostname()) == nil {
+			status.Bootstrap = resolverModeSystem
 		}
 	}
+	for _, rule := range p.rules {
+		if rule.resolver != nil {
+			rule.resolver.appendStatusEndpoints(status)
+		}
+	}
+}
+
+func (p *Policy) mode() string {
+	hasClassic, hasDoH := false, false
+	var visit func(*Policy)
+	visit = func(policy *Policy) {
+		if policy == nil {
+			return
+		}
+		for _, ep := range policy.endpoints {
+			if ep.scheme == resolverSchemeHTTPS {
+				hasDoH = true
+			} else {
+				hasClassic = true
+			}
+		}
+		for _, rule := range policy.rules {
+			visit(rule.resolver)
+		}
+	}
+	visit(p)
 	switch {
 	case hasClassic && hasDoH:
 		return "mixed"
 	case hasDoH:
 		return "doh"
-	default:
+	case hasClassic:
 		return resolverModeDNS
+	default:
+		return resolverModeSystem
 	}
 }
 
@@ -313,6 +411,24 @@ func (p *Policy) LookupIPTTL(ctx context.Context, host string) ([]net.IP, time.D
 	}
 	if p == nil || p.system {
 		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		return ips, 0, err
+	}
+	if len(p.rules) > 0 {
+		for _, rule := range p.rules {
+			if matchesAny(host, rule.bypass) {
+				ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+				p.recordError(err)
+				return ips, 0, err
+			}
+			if len(rule.only) > 0 && !matchesAny(host, rule.only) {
+				continue
+			}
+			ips, ttl, err := rule.resolver.LookupIPTTL(ctx, host)
+			p.recordError(err)
+			return ips, ttl, err
+		}
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		p.recordError(err)
 		return ips, 0, err
 	}
 	name, err := dnsName(host)

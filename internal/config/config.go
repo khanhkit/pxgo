@@ -47,6 +47,8 @@ const (
 	keyAllow           = "allow"
 	keyNoProxy         = "noproxy"
 	keyDNS             = "dns"
+	keyDNSOnly         = "dns_only"
+	keyDNSBypass       = "dns_bypass"
 	keyUserAgent       = "useragent"
 	keyUsername        = "username"
 	keyPassword        = "password"
@@ -90,6 +92,8 @@ var Defaults = map[string]string{
 	keyAllow:           "*.*.*.*",
 	keyNoProxy:         "",
 	keyDNS:             "",
+	keyDNSOnly:         "",
+	keyDNSBypass:       "",
 	keyUserAgent:       "",
 	keyUsername:        "",
 	keyAuth:            "",
@@ -121,6 +125,8 @@ const (
 	ClientRealm = "pxgo-client"
 )
 
+type DNSRule = dnsresolver.Rule
+
 type Config struct {
 	Server               string
 	PAC                  string
@@ -132,6 +138,7 @@ type Config struct {
 	Allow                string
 	NoProxy              string
 	DNS                  string
+	DNSRules             []DNSRule
 	UserAgent            string
 	Username             string
 	Password             string
@@ -677,6 +684,7 @@ func loadDotenvFile(path string, values map[string]string) (bool, error) {
 }
 
 func canonicalConfigKey(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "proxy" {
 		return keyServer
 	}
@@ -691,11 +699,64 @@ func markSource(cfg *Config, name, source string) {
 }
 
 func applyValueFrom(cfg *Config, name, val, source string) error {
+	name = canonicalConfigKey(name)
+	if name == keyDNS || name == keyDNSOnly || name == keyDNSBypass {
+		if err := applyDNSPolicyValue(cfg, name, val, source); err != nil {
+			return err
+		}
+		markSource(cfg, name, source)
+		return nil
+	}
 	if err := applyValue(cfg, name, val); err != nil {
 		return err
 	}
 	markSource(cfg, name, source)
 	return nil
+}
+
+func applyDNSPolicyValue(cfg *Config, name, val, source string) error {
+	switch name {
+	case keyDNS:
+		resolver := strings.TrimSpace(val)
+		if _, err := dnsresolver.New(resolver, time.Second); err != nil {
+			return fmt.Errorf("invalid %s: %w", name, err)
+		}
+		cfg.DNS = resolver
+		if resolver == "" {
+			cfg.DNSRules = nil
+			return nil
+		}
+		if !strings.HasPrefix(source, "ini:") {
+			cfg.DNSRules = nil
+		}
+		cfg.DNSRules = append(cfg.DNSRules, DNSRule{Resolver: resolver})
+		return nil
+	case keyDNSOnly, keyDNSBypass:
+		if len(cfg.DNSRules) == 0 {
+			return fmt.Errorf("%s requires a preceding dns setting", name)
+		}
+		patterns := splitDNSPatterns(val)
+		rule := &cfg.DNSRules[len(cfg.DNSRules)-1]
+		if name == keyDNSOnly {
+			rule.Only = append(rule.Only, patterns...)
+		} else {
+			rule.Bypass = append(rule.Bypass, patterns...)
+		}
+		_, err := dnsresolver.NewRules([]dnsresolver.Rule{{Resolver: rule.Resolver, Only: rule.Only, Bypass: rule.Bypass}}, time.Second)
+		return err
+	default:
+		return fmt.Errorf("unsupported option %s", name)
+	}
+}
+
+func splitDNSPatterns(raw string) []string {
+	var patterns []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			patterns = append(patterns, item)
+		}
+	}
+	return patterns
 }
 
 func applyValue(cfg *Config, name, val string) error {
@@ -1160,8 +1221,7 @@ gateway = %d
 hostonly = %d
 allow = %s
 noproxy = %s
-dns = %s
-useragent = %s
+%suseragent = %s
 username = %s
 auth = %s
 kerberos = %d
@@ -1183,12 +1243,29 @@ auto_update = %s
 update_interval = %s
 update_channel = %s
 install_provider = %s
-`, cfg.Server, cfg.PAC, cfg.PACEncoding, cfg.Port, listen, btoi(cfg.Gateway), btoi(cfg.Hostonly), cfg.Allow, cfg.NoProxy, cfg.DNS,
+`, cfg.Server, cfg.PAC, cfg.PACEncoding, cfg.Port, listen, btoi(cfg.Gateway), btoi(cfg.Hostonly), cfg.Allow, cfg.NoProxy, dnsINIBlock(cfg),
 		cfg.UserAgent, cfg.Username, cfg.Auth, btoi(cfg.Kerberos), cfg.ClientAuth, cfg.ClientUsername, btoi(cfg.ClientNoSSPI), cfg.Workers, cfg.Threads, cfg.Idle,
 		cfg.SockTimeout, cfg.ProxyReload, btoi(cfg.Foreground), cfg.Log, cfg.AutoUpdate, cfg.UpdateInterval.String(), cfg.UpdateChannel, cfg.InstallProvider)
 	return withFileLock(path, 0o600, func() error {
 		return atomicWriteFile(path, []byte(content), 0o600)
 	})
+}
+
+func dnsINIBlock(cfg Config) string {
+	if len(cfg.DNSRules) == 0 {
+		return "dns = " + cfg.DNS + "\n"
+	}
+	var b strings.Builder
+	for _, rule := range cfg.DNSRules {
+		fmt.Fprintf(&b, "dns = %s\n", rule.Resolver)
+		if len(rule.Only) > 0 {
+			fmt.Fprintf(&b, "dns_only = %s\n", strings.Join(rule.Only, ","))
+		}
+		if len(rule.Bypass) > 0 {
+			fmt.Fprintf(&b, "dns_bypass = %s\n", strings.Join(rule.Bypass, ","))
+		}
+	}
+	return b.String()
 }
 
 func validateINIStrings(cfg Config) error {
@@ -1215,6 +1292,15 @@ func validateINIStrings(cfg Config) error {
 	for _, field := range fields {
 		if strings.ContainsAny(field.value, "\r\n") {
 			return fmt.Errorf("%s contains a line break", field.name)
+		}
+	}
+	for _, rule := range cfg.DNSRules {
+		values := append([]string{rule.Resolver}, rule.Only...)
+		values = append(values, rule.Bypass...)
+		for _, value := range values {
+			if strings.ContainsAny(value, "\r\n") {
+				return errors.New("dns policy contains a line break")
+			}
 		}
 	}
 	return nil

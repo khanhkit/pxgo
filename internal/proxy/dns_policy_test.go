@@ -99,7 +99,7 @@ func TestAPISS0031CustomDNSCoversUpstreamProxyHostname(t *testing.T) {
 	}
 }
 
-func TestAPISS0031CustomDNSCoversRemotePACFetch(t *testing.T) {
+func TestDNSPolicyRemotePACBootstrapUsesSystemDNSAndTargetsUseConfiguredDNS(t *testing.T) {
 	dnsAddr, queries, stopDNS := startProxyDNSFixture(t, false)
 	defer stopDNS()
 	pacServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -107,7 +107,7 @@ func TestAPISS0031CustomDNSCoversRemotePACFetch(t *testing.T) {
 		_, _ = io.WriteString(w, `function FindProxyForURL(url, host) { return "DIRECT"; }`)
 	}))
 	defer pacServer.Close()
-	pacURL := fixtureHostURL(t, pacServer.URL+"/proxy.pac", "pac.fixture.test")
+	pacURL := fixtureHostURL(t, pacServer.URL+"/proxy.pac", "localhost")
 
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "remote-pac-custom-dns")
@@ -119,6 +119,9 @@ func TestAPISS0031CustomDNSCoversRemotePACFetch(t *testing.T) {
 	cfg.PAC = pacURL
 	cfg.DNS = "udp://" + dnsAddr
 	px := startTestProxy(t, cfg)
+	if got := queries.Load(); got != 0 {
+		t.Fatalf("configured DNS saw %d PAC bootstrap queries, want 0", got)
+	}
 	client := proxyClient(t, px.Port())
 	resp, err := client.Get(originURL)
 	if err != nil {
@@ -129,8 +132,8 @@ func TestAPISS0031CustomDNSCoversRemotePACFetch(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || string(body) != "remote-pac-custom-dns" {
 		t.Fatalf("status=%s body=%q", resp.Status, body)
 	}
-	if got := queries.Load(); got < 4 {
-		t.Fatalf("DNS fixture queries=%d, want PAC fetch plus target lookups", got)
+	if got := queries.Load(); got < 2 {
+		t.Fatalf("DNS fixture queries=%d, target did not use configured DNS", got)
 	}
 }
 

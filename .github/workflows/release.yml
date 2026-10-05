@@ -97,6 +97,11 @@ jobs:
       - name: Test with race detector
         run: go test -race ./...
 
+      - name: Run live DoH end-to-end tests
+        env:
+          CI_DOH_E2E: "1"
+        run: go test ./internal/dnsresolver ./internal/proxy -run '^TestDoHE2E' -count=1 -v -timeout=45s
+
       - name: Fuzz routing parsers
         run: |
           go test ./internal/wproxy -run '^$' -fuzz '^FuzzParseProxyCanonical$' -fuzztime=1000x
