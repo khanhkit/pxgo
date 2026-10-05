@@ -182,6 +182,29 @@ jobs:
         if: runner.os == 'Windows'
         run: go build -o bin/pxgo.exe .
 
+  doh-live-e2e:
+    name: Live DoH E2E
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run live DoH end-to-end tests
+        env:
+          CI_DOH_E2E: "1"
+        run: go test ./internal/dnsresolver ./internal/proxy -run '^TestDoHE2E' -count=1 -v -timeout=45s
+
   native-platform:
     name: Native runtime (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}

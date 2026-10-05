@@ -6,6 +6,7 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 
 - Require pull requests before merge.
 - Require the Linux and Windows CI matrix checks from `.github/workflows/ci.yml`.
+- Run the live DoH E2E job on pull requests as advisory coverage; it is intentionally not a required PR check because public resolver/network availability is external to the repository.
 - Require branches to be up to date before merge.
 - Block force pushes and branch deletion.
 - GitHub squash-merge commits on `main` are server-signed/verified. A branch-level required-signatures rule is intentionally not enabled until a durable maintainer signing identity is provisioned; otherwise unsigned local PR commits cannot merge.
@@ -18,6 +19,7 @@ This file documents the repository-admin controls required by AP-ISS-0024. Sourc
 
 - Release publication must run from the exact tagged SHA.
 - GoReleaser is gated by `verify-exact-sha` and `verify-windows-native`.
+- `verify-exact-sha` must pass the live DoH resolver + proxy HTTP/CONNECT E2E check before a release candidate is built.
 - Do not manually publish artifacts when either required release gate is absent, queued, skipped, cancelled, or failed.
 - Protect `v*` tags/rulesets from unreviewed overwrite/deletion.
 - Owner-confirmed real-AD/Kerberos manual validation is complete; the hardened workflow remains optional reproducibility infrastructure and is not a release blocker.

@@ -107,7 +107,7 @@ func New(cfg config.Config) (*Server, error) {
 	if err := validateServerBudgets(cfg); err != nil {
 		return nil, err
 	}
-	dnsPolicy, err := dnsresolver.New(cfg.DNS, configuredSockTimeout(cfg))
+	dnsPolicy, err := newDNSPolicy(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("dns resolver: %w", err)
 	}
@@ -115,8 +115,7 @@ func New(cfg config.Config) (*Server, error) {
 	if !dnsPolicy.IsSystem() {
 		dnsCache = dnscache.NewWithTTL(dnsPolicy.LookupIPTTL)
 	}
-	dialContext := resolverDialContext(dnsPolicy, dnsCache)
-	wp, err := buildWproxy(cfg, dnsCache, dialContext)
+	wp, err := buildWproxy(cfg, dnsCache)
 	if err != nil {
 		return nil, err
 	}
@@ -269,17 +268,11 @@ func configuredWriteTimeout(cfg config.Config) time.Duration {
 	return 2 * configuredSockTimeout(cfg)
 }
 
-func resolverDialContext(policy *dnsresolver.Policy, cache *dnscache.Cache) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		if policy == nil {
-			return (&net.Dialer{}).DialContext(ctx, network, address)
-		}
-		var lookup dnsresolver.LookupFunc
-		if cache != nil {
-			lookup = cache.LookupContext
-		}
-		return policy.DialContext(ctx, network, address, lookup)
+func newDNSPolicy(cfg config.Config) (*dnsresolver.Policy, error) {
+	if len(cfg.DNSRules) == 0 {
+		return dnsresolver.New(cfg.DNS, configuredSockTimeout(cfg))
 	}
+	return dnsresolver.NewRules(cfg.DNSRules, configuredSockTimeout(cfg))
 }
 
 func (s *Server) dialContext(ctx context.Context, network, address string) (net.Conn, error) {
@@ -297,7 +290,7 @@ func (s *Server) dialContext(ctx context.Context, network, address string) (net.
 	return (&net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}).DialContext(ctx, network, address)
 }
 
-func buildWproxy(cfg config.Config, cache *dnscache.Cache, dialContext func(context.Context, string, string) (net.Conn, error)) (*wproxy.Wproxy, error) {
+func buildWproxy(cfg config.Config, cache *dnscache.Cache) (*wproxy.Wproxy, error) {
 	mode := wproxy.ModeNone
 	var servers []wproxy.Server
 	var err error
@@ -311,7 +304,7 @@ func buildWproxy(cfg config.Config, cache *dnscache.Cache, dialContext func(cont
 			return nil, err
 		}
 	}
-	wp, err := wproxy.NewWithDNS(mode, servers, cfg.NoProxy, cfg.PACEncoding, cache, dialContext)
+	wp, err := wproxy.NewWithDNS(mode, servers, cfg.NoProxy, cfg.PACEncoding, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -660,7 +653,7 @@ func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 	}
 	// buildWproxy may do bounded network I/O (PAC/system discovery); keep it
 	// outside the lock so request-path routing is never stalled by recovery.
-	wp, err := buildWproxy(s.cfg, s.dnsCache, s.dialContext)
+	wp, err := buildWproxy(s.cfg, s.dnsCache)
 	if err != nil {
 		return err
 	}

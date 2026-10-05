@@ -545,10 +545,10 @@ func routeSourceForMode(mode int) RouteSource {
 }
 
 func New(mode int, servers []Server, noproxy, pacEncoding string) (*Wproxy, error) {
-	return NewWithDNS(mode, servers, noproxy, pacEncoding, dnscache.Default(), nil)
+	return NewWithDNS(mode, servers, noproxy, pacEncoding, dnscache.Default())
 }
 
-func NewWithDNS(mode int, servers []Server, noproxy, pacEncoding string, cache *dnscache.Cache, dialContext func(context.Context, string, string) (net.Conn, error)) (*Wproxy, error) {
+func NewWithDNS(mode int, servers []Server, noproxy, pacEncoding string, cache *dnscache.Cache) (*Wproxy, error) {
 	if cache == nil {
 		cache = dnscache.Default()
 	}
@@ -566,7 +566,7 @@ func NewWithDNS(mode int, servers []Server, noproxy, pacEncoding string, cache *
 		noProxyMatchers: matchers,
 	}
 	if mode == ModeConfigPAC && len(servers) > 0 {
-		w.PAC = pac.NewWithDNS(servers[0].Host, pacEncoding, cache, dialContext)
+		w.PAC = pac.NewWithDNS(servers[0].Host, pacEncoding, cache)
 		if err := w.PAC.Load(); err != nil {
 			return nil, fmt.Errorf("load configured PAC: %w", err)
 		}

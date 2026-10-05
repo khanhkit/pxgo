@@ -51,10 +51,9 @@ var pacHTTPTransport = func() *http.Transport {
 }()
 
 type Pac struct {
-	location      string
-	encoding      string
-	dnsCache      *dnscache.Cache
-	httpTransport http.RoundTripper
+	location string
+	encoding string
+	dnsCache *dnscache.Cache
 
 	// mu guards generation (re)loading. Each active pacRuntime separately
 	// serializes evaluation on its one shared JavaScript global state.
@@ -82,23 +81,17 @@ type pacVM struct {
 }
 
 func New(location, encoding string) *Pac {
-	return NewWithDNS(location, encoding, dnscache.Default(), nil)
+	return NewWithDNS(location, encoding, dnscache.Default())
 }
 
-func NewWithDNS(location, encoding string, cache *dnscache.Cache, dialContext func(context.Context, string, string) (net.Conn, error)) *Pac {
+func NewWithDNS(location, encoding string, cache *dnscache.Cache) *Pac {
 	if strings.TrimSpace(encoding) == "" {
 		encoding = autoEncoding
 	}
 	if cache == nil {
 		cache = dnscache.Default()
 	}
-	transport := http.RoundTripper(pacHTTPTransport)
-	if dialContext != nil {
-		custom := pacHTTPTransport.Clone()
-		custom.DialContext = dialContext
-		transport = custom
-	}
-	return &Pac{location: location, encoding: encoding, dnsCache: cache, httpTransport: transport}
+	return &Pac{location: location, encoding: encoding, dnsCache: cache}
 }
 
 func (p *Pac) Loaded() bool {
@@ -461,7 +454,7 @@ func (p *Pac) readPACSource() (pacSource, error) {
 	loc := strings.ToLower(p.location)
 	if strings.HasPrefix(loc, "http://") || strings.HasPrefix(loc, "https://") {
 		client := http.Client{
-			Transport: p.httpTransport,
+			Transport: pacHTTPTransport,
 			Timeout:   pacHTTPTimeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse

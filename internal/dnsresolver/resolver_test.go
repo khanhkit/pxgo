@@ -397,3 +397,89 @@ func TestAPISS0031DoHEndpointStatusDoesNotExposeQueryOrCredentials(t *testing.T)
 		}
 	}
 }
+
+func TestDNSPolicyRulesUseFirstMatchingOnlyRule(t *testing.T) {
+	firstAddr, stopFirst := startUDPFixture(t, net.IPv4(203, 0, 113, 10))
+	defer stopFirst()
+	secondAddr, stopSecond := startUDPFixture(t, net.IPv4(203, 0, 113, 20))
+	defer stopSecond()
+
+	p, err := NewRules([]Rule{
+		{Resolver: "udp://" + firstAddr, Only: []string{"*.google.com"}},
+		{Resolver: "udp://" + secondAddr},
+	}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	google, err := p.LookupIP(context.Background(), "mail.google.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(google) != 1 || !google[0].Equal(net.IPv4(203, 0, 113, 10)) {
+		t.Fatalf("google lookup=%v", google)
+	}
+
+	other, err := p.LookupIP(context.Background(), "example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(other) != 1 || !other[0].Equal(net.IPv4(203, 0, 113, 20)) {
+		t.Fatalf("fallback rule lookup=%v", other)
+	}
+}
+
+func TestDNSPolicyRulesBypassUsesSystemResolverTerminally(t *testing.T) {
+	dead := unusedUDPAddr(t)
+	p, err := NewRules([]Rule{
+		{Resolver: "udp://" + dead, Bypass: []string{"localhost"}},
+		{Resolver: "udp://" + dead},
+	}, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ips, ttl, err := p.LookupIPTTL(context.Background(), "localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ips) == 0 {
+		t.Fatal("system bypass returned no localhost addresses")
+	}
+	if ttl != 0 {
+		t.Fatalf("system bypass TTL=%v want 0", ttl)
+	}
+}
+
+func TestDNSPolicyRulesOnlyMissFallsBackToSystem(t *testing.T) {
+	dead := unusedUDPAddr(t)
+	p, err := NewRules([]Rule{{Resolver: "udp://" + dead, Only: []string{"*.google.com"}}}, 100*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ips, _, err := p.LookupIPTTL(context.Background(), "localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ips) == 0 {
+		t.Fatal("unmatched DNS_Only rule did not fall back to system resolver")
+	}
+}
+
+func TestDNSPolicyDomainMatcher(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		host    string
+		want    bool
+	}{
+		{"*.bosch.com", "rbins.bosch.com", true},
+		{"*.bosch.com", "bosch.com", false},
+		{"bosch.com", "bosch.com", true},
+		{"bosch.com", "rbins.bosch.com", true},
+		{"*.google.com", "MAIL.GOOGLE.COM", true},
+		{"*", "anything.example", true},
+	} {
+		if got := matchDomain(tc.host, tc.pattern); got != tc.want {
+			t.Fatalf("matchDomain(%q,%q)=%v want %v", tc.host, tc.pattern, got, tc.want)
+		}
+	}
+}
