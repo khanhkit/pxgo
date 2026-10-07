@@ -363,6 +363,7 @@ func TestServerResourceBudgetsRejectDisabledOrOverflowingValues(t *testing.T) {
 
 func TestBasicClientAuthAllowedOnlyOnLoopbackPlaintextListener(t *testing.T) {
 	loopback := config.Default()
+	loopback.Listen = "127.0.0.1"
 	loopback.ClientAuth = "BASIC"
 	loopback.ClientUsername = "user"
 	loopback.ClientPassword = "secret"

@@ -75,6 +75,7 @@ const (
 	keyUpdateChannel   = "update_channel"
 	keyInstallProvider = "install_provider"
 	localhostIP        = "127.0.0.1"
+	defaultListenIP    = "0.0.0.0"
 	configSourceCLI    = "cli"
 	defaultPACEncoding = "auto"
 )
@@ -86,7 +87,7 @@ var Defaults = map[string]string{
 	keyPAC:             "",
 	keyPACEncoding:     defaultPACEncoding,
 	keyPort:            "3128",
-	keyListen:          localhostIP,
+	keyListen:          defaultListenIP,
 	keyGateway:         "0",
 	keyHostonly:        "0",
 	keyAllow:           "*.*.*.*",
@@ -108,7 +109,7 @@ var Defaults = map[string]string{
 	keyClientAuth:      "NONE",
 	keyClientNoSSPI:    "0",
 	keyClientUsername:  "",
-	keyAutoUpdate:      string(pxupdate.AutoOff),
+	keyAutoUpdate:      string(pxupdate.AutoInstall),
 	keyUpdateInterval:  "24h",
 	keyUpdateChannel:   "stable",
 	keyInstallProvider: string(pxupdate.ProviderAuto),
@@ -165,6 +166,7 @@ type Config struct {
 	Update               bool
 	Install              bool
 	Background           bool
+	ApplySystemProxy     bool
 	Uninstall            bool
 	Force                bool
 	ConfigPath           string
@@ -491,6 +493,8 @@ func applyBareArg(cfg *Config, arg string) bool {
 		cfg.Install = true
 	case "--background":
 		cfg.Background = true
+	case "--apply-system-proxy":
+		cfg.ApplySystemProxy = true
 	case "--uninstall":
 		cfg.Uninstall = true
 	case "--force":
@@ -1246,9 +1250,7 @@ install_provider = %s
 `, cfg.Server, cfg.PAC, cfg.PACEncoding, cfg.Port, listen, btoi(cfg.Gateway), btoi(cfg.Hostonly), cfg.Allow, cfg.NoProxy, dnsINIBlock(cfg),
 		cfg.UserAgent, cfg.Username, cfg.Auth, btoi(cfg.Kerberos), cfg.ClientAuth, cfg.ClientUsername, btoi(cfg.ClientNoSSPI), cfg.Workers, cfg.Threads, cfg.Idle,
 		cfg.SockTimeout, cfg.ProxyReload, btoi(cfg.Foreground), cfg.Log, cfg.AutoUpdate, cfg.UpdateInterval.String(), cfg.UpdateChannel, cfg.InstallProvider)
-	return withFileLock(path, 0o600, func() error {
-		return atomicWriteFile(path, []byte(content), 0o600)
-	})
+	return writeFileWithBackup(path, []byte(content), 0o600)
 }
 
 func dnsINIBlock(cfg Config) string {
@@ -1273,21 +1275,21 @@ func validateINIStrings(cfg Config) error {
 		name  string
 		value string
 	}{
-		{"server", cfg.Server},
-		{"pac", cfg.PAC},
-		{"pac_encoding", cfg.PACEncoding},
-		{"listen", cfg.Listen},
-		{"allow", cfg.Allow},
-		{"noproxy", cfg.NoProxy},
-		{"dns", cfg.DNS},
-		{"useragent", cfg.UserAgent},
-		{"username", cfg.Username},
-		{"auth", cfg.Auth},
-		{"client_auth", cfg.ClientAuth},
-		{"client_username", cfg.ClientUsername},
-		{"auto_update", cfg.AutoUpdate},
-		{"update_channel", cfg.UpdateChannel},
-		{"install_provider", cfg.InstallProvider},
+		{keyServer, cfg.Server},
+		{keyPAC, cfg.PAC},
+		{keyPACEncoding, cfg.PACEncoding},
+		{keyListen, cfg.Listen},
+		{keyAllow, cfg.Allow},
+		{keyNoProxy, cfg.NoProxy},
+		{keyDNS, cfg.DNS},
+		{keyUserAgent, cfg.UserAgent},
+		{keyUsername, cfg.Username},
+		{keyAuth, cfg.Auth},
+		{keyClientAuth, cfg.ClientAuth},
+		{keyClientUsername, cfg.ClientUsername},
+		{keyAutoUpdate, cfg.AutoUpdate},
+		{keyUpdateChannel, cfg.UpdateChannel},
+		{keyInstallProvider, cfg.InstallProvider},
 	}
 	for _, field := range fields {
 		if strings.ContainsAny(field.value, "\r\n") {
