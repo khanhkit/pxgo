@@ -39,7 +39,9 @@ func startTestProxy(t *testing.T, cfg config.Config) *Server {
 	if cfg.Server == "" && cfg.PAC == "" {
 		cfg.Server = "DIRECT"
 	}
-	if cfg.Listen == "" {
+	// Unit/integration proxy fixtures stay loopback-bound when they merely inherit
+	// the production default. Explicit listener tests keep their configured value.
+	if cfg.Listen == "" || cfg.Listen == config.Default().Listen {
 		cfg.Listen = "127.0.0.1"
 	}
 	cfg.Port = 0

@@ -126,7 +126,7 @@ plain-text `pxgo.ini` such as:
 ```ini
 [proxy]
 server = proxy.company.com:8080
-listen = 127.0.0.1
+listen = 0.0.0.0
 port = 3128
 auth = ANYSAFE
 noproxy = localhost,127.0.0.1
@@ -138,7 +138,7 @@ threads = 32
 idle = 30
 socktimeout = 20.0
 proxyreload = 60
-auto_update = off
+auto_update = install
 update_interval = 24h
 update_channel = stable
 install_provider = auto
@@ -149,10 +149,14 @@ On domain-joined Windows, omit `username` when you want pxgo to use the logged-i
 user's SSPI credentials. For explicit credentials, add `username = DOMAIN\\user`
 and store the password with the OS keyring rather than writing it into the INI.
 
+On normal first run without an explicit config, PxGo bootstraps a documented `pxgo.ini`. Lookup/import priority is `pxgo.ini` -> legacy `px.ini` -> operating-system proxy -> DIRECT. A legacy `px.ini` is copied into a new canonical `pxgo.ini` and never modified in place. When both a fixed PAC and manual HTTP proxy are discoverable, PAC wins. Dynamic WPAD/AutoDetect and protocol-specific system mappings remain dynamic instead of being flattened. Existing `pxgo.ini` files are schema-upgraded by appending only newly introduced settings/guides; every existing-file mutation first writes a timestamped `.bak.*` copy.
+
+Use `pxgo --apply-system-proxy` to explicitly replace only the routing fields in the canonical INI from current OS proxy/PAC state; unrelated DNS/update/runtime settings are preserved and the old INI is backed up first.
+
 You can place `pxgo.ini` next to the binary, in the platform config directory,
 or anywhere you prefer when you pass its path explicitly. For migration from
 Python Px, if no `pxgo.ini` exists in any normal search location, pxgo also
-reads legacy `px.ini` from the same locations; `--save` still writes `pxgo.ini`:
+reads legacy `px.ini` from the same locations:
 
 ```bash
 pxgo --config=/path/to/pxgo.ini

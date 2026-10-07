@@ -19,7 +19,7 @@ func TestDefaults(t *testing.T) {
 			t.Fatalf("missing default %s", key)
 		}
 	}
-	if Defaults["port"] != "3128" || Defaults["listen"] != "127.0.0.1" || Defaults["workers"] != "1" || Defaults["threads"] != "32" || Defaults["client_auth"] != "NONE" {
+	if Defaults["port"] != "3128" || Defaults["listen"] != "0.0.0.0" || Defaults["workers"] != "1" || Defaults["threads"] != "32" || Defaults["client_auth"] != "NONE" {
 		t.Fatalf("unexpected defaults: %#v", Defaults)
 	}
 }
@@ -220,7 +220,7 @@ func TestParseArgsUpdateActions(t *testing.T) {
 
 func TestUpdatePolicyDefaultsAndPersistence(t *testing.T) {
 	cfg := Default()
-	if cfg.AutoUpdate != "off" || cfg.UpdateInterval != 24*time.Hour || cfg.UpdateChannel != "stable" || cfg.InstallProvider != "auto" {
+	if cfg.AutoUpdate != "install" || cfg.UpdateInterval != 24*time.Hour || cfg.UpdateChannel != "stable" || cfg.InstallProvider != "auto" {
 		t.Fatalf("unexpected update defaults: mode=%q interval=%s channel=%q provider=%q", cfg.AutoUpdate, cfg.UpdateInterval, cfg.UpdateChannel, cfg.InstallProvider)
 	}
 
@@ -671,11 +671,11 @@ func TestGatewayAndHostonlyNormalizeListenAfterAllInputs(t *testing.T) {
 }
 
 func TestParseArgsBareActions(t *testing.T) {
-	cfg, err := ParseArgs([]string{"--restart", "--password", "--client-password", "--test", "--test-auth", "--client-nosspi", "--foreground", "--install", "--uninstall", "--force"})
+	cfg, err := ParseArgs([]string{"--restart", "--password", "--client-password", "--test", "--test-auth", "--client-nosspi", "--foreground", "--install", "--uninstall", "--force", "--apply-system-proxy"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Restart || !cfg.PasswordAction || !cfg.ClientPasswordAction || cfg.Test != "1" || !cfg.TestAuth || !cfg.ClientNoSSPI || !cfg.Foreground || !cfg.Install || !cfg.Uninstall || !cfg.Force {
+	if !cfg.Restart || !cfg.PasswordAction || !cfg.ClientPasswordAction || cfg.Test != "1" || !cfg.TestAuth || !cfg.ClientNoSSPI || !cfg.Foreground || !cfg.Install || !cfg.Uninstall || !cfg.Force || !cfg.ApplySystemProxy {
 		t.Fatalf("bare flags not parsed: %#v", cfg)
 	}
 	cfg, err = ParseArgs([]string{"--verbose"})

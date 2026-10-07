@@ -67,6 +67,7 @@ const (
 const (
 	authNone               = "NONE"
 	localhostIP            = "127.0.0.1"
+	wildcardListenIP       = "0.0.0.0"
 	controlShutdownTimeout = 5 * time.Second
 	startExitWaitTimeout   = time.Second
 	goosWindows            = "windows"
@@ -123,6 +124,15 @@ func run() (exitCode int) {
 	if cfg.CheckUpdate || cfg.Update {
 		return runUpdateAction(cfg, cfg.Update)
 	}
+	if cfg.ApplySystemProxy {
+		path, err := applySystemProxyConfig(cfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		fmt.Fprintf(os.Stdout, "System proxy configuration applied to %s\n", path)
+		return 0
+	}
 	if cfg.Save {
 		path := config.ConfigPathForSave(cfg.ConfigPath)
 		if err := config.SaveINI(path, cfg); err != nil {
@@ -130,10 +140,19 @@ func run() (exitCode int) {
 			return 2
 		}
 		fmt.Fprintf(os.Stdout, "Configuration saved to %s\n", path)
+		// #nosec G703 -- path is the validated user-selected config path just written above.
 		if data, err := os.ReadFile(path); err == nil {
 			fmt.Fprint(os.Stdout, string(data))
 		}
 		return 0
+	}
+	if shouldBootstrapUserConfig(cfg) {
+		path, _, bootstrapErr := ensureUserConfig(cfg)
+		if bootstrapErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: config bootstrap skipped: %v\n", bootstrapErr)
+		} else if path != "" {
+			cfg.ConfigPath = path
+		}
 	}
 	if cfg.Background {
 		return launchBackgroundFunc(cfg)
@@ -678,6 +697,7 @@ Options:
   --client-nosspi=0|1             Disable SSPI for downstream auth compatibility
   --config=PATH                   Read or save pxgo.ini at PATH
   --save                          Save configuration to pxgo.ini
+  --apply-system-proxy            Import current OS proxy/PAC into pxgo.ini, backing up any existing file
   --password                      Store upstream password
   --client-password               Store downstream password
   --log= | PXGO_LOG= | settings:log=
@@ -1031,7 +1051,7 @@ func listenForClient(listen string) string {
 		if host == "" {
 			continue
 		}
-		if host == "0.0.0.0" {
+		if host == wildcardListenIP {
 			return localhostIP
 		}
 		return host

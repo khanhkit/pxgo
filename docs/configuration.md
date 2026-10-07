@@ -43,8 +43,9 @@ Without `--config`, pxgo checks all native `pxgo.ini` locations first:
 2. the platform config directory
 3. `pxgo.ini` next to the executable
 
-If none exists, it checks legacy `px.ini` in those same three locations. The
-legacy file is a read-compatibility path only; `--save` still targets `pxgo.ini`.
+If none exists, it checks legacy `px.ini` in those same three locations. On normal startup, PxGo materializes the selected legacy file as a new `pxgo.ini`, preserving `px.ini` untouched and adding PxGo-specific settings/guidance. If neither file exists, PxGo detects the operating-system proxy state and generates a documented canonical INI; fixed PAC takes precedence over a fixed manual HTTP proxy, while dynamic WPAD/AutoDetect and protocol-specific mappings remain OS-owned and dynamic.
+
+Existing canonical INIs carry a `# pxgo-config-schema:` marker. When a newer binary introduces config fields, PxGo appends only the missing new settings/guidance, preserves explicit user values/comments, creates a timestamped `.bak.*` copy first, and writes atomically. `pxgo --apply-system-proxy` is the explicit escape hatch that imports current OS routing into an existing canonical INI; it changes routing fields only and also requires a successful backup before mutation.
 
 Platform config directories:
 
@@ -71,7 +72,7 @@ human-edited config with explanations.
 | `pac` / `--pac` | empty | PAC URL or local file |
 | `pac_encoding` / `--pac-encoding` | `auto` | PAC source encoding: `auto`, `ascii`/`us-ascii`, `utf-8`/`utf8`, `latin1`/`latin-1`, `cp1252`/`windows-1252`, `cp1251`/`windows-1251`, `utf-16`, `utf-16le`, `utf-16be`, `utf-32`, `utf-32le`, or `utf-32be` |
 | `port` / `--port` | `3128` | Local listen port |
-| `listen` / `--listen` | `127.0.0.1` | Local listen address list |
+| `listen` / `--listen` | `0.0.0.0` | Local listen address list; the default binds all interfaces, so restrict `allow` and/or enable client authentication on untrusted networks |
 | `gateway` / `--gateway` | `0` | Bind all interfaces; requires restrictive `allow`, `hostonly`, or strong downstream auth |
 | `hostonly` / `--hostonly` | `0` | Bind all interfaces but allow local host IPs |
 | `allow` / `--allow` | `*.*.*.*` | Client allow list |
@@ -185,7 +186,7 @@ cannot multiply dial/auth fallback work without bound.
 | `proxyreload` / `--proxyreload` | `60` | PAC/system proxy refresh interval |
 | `foreground` / `--foreground` | `0` | Compatibility flag |
 | `log` / `--log` | `0` | Debug log destination: `1`=script dir, `2`=cwd, `3`=unique file, `4`=stdout |
-| `auto_update` / `--auto-update` | `off` | Long-running update policy: `off`, `notify`, or unattended `install` |
+| `auto_update` / `--auto-update` | `install` | Long-running update policy: `off`, `notify`, or unattended `install` |
 | `update_interval` / `--update-interval` | `24h` | Periodic check interval as a positive Go duration; initial check is jittered |
 | `update_channel` / `--update-channel` | `stable` | Accepted release channel: `stable` or explicit `prerelease` |
 | `install_provider` / `--install-provider` | `auto` | Installation owner: `auto`, `direct`, `winget`, `scoop`, or `homebrew` |

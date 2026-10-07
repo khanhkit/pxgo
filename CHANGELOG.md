@@ -8,9 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add first-run self-documenting `pxgo.ini` bootstrap, legacy `px.ini` migration, schema-aware incremental config upgrades with timestamped backups, and explicit `--apply-system-proxy` import.
 - Add operator-configurable outbound DNS with system DNS compatibility, custom UDP/TCP resolvers, DNS-over-HTTPS, deterministic ordered failover, fail-closed target resolution, and resolver diagnostics.
 - Embed the owner-provided icon in Windows release executables and verify the exact staged PE icon resources before immutable promotion.
 - Add provider-aware update checking/updating with opt-in periodic Guardian orchestration, stable/prerelease channels, package-manager delegation, verified direct-release staging, rollback-aware replacement, persisted update diagnostics, and concurrent-update serialization.
+
+### Changed
+- Default new configurations to `listen=0.0.0.0` and unattended `auto_update=install`; generated configuration warns that all-interface listening with a wildcard allow-list is remotely reachable.
+- Prefer fixed PAC routing over manual HTTP proxy when importing operating-system proxy configuration while preserving WPAD/AutoDetect and protocol-specific mappings as dynamic OS-owned routing.
 
 ### Fixed
 - Keep remote PAC bootstrap on system/VPN DNS and add ordered `dns_only` / `dns_bypass` rules so split-DNS enterprise domains can bypass public/custom resolvers without disabling DoH for other traffic.
