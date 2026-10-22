@@ -181,8 +181,9 @@ cannot multiply dial/auth fallback work without bound.
 
 | Key / Flag | Default | Description |
 | --- | --- | --- |
-| `workers` / `--workers` | `1` | Connection-admission multiplier; `workers × threads` is the global accepted-connection cap |
-| `threads` / `--threads` | `32` | Connection-admission multiplier; must be positive |
+| `workers` / `--workers` | `1` | Legacy admission multiplier; `workers × threads` remains the shipped global accepted-connection cap |
+| `threads` / `--threads` | `32` | Legacy-only admission multiplier; ignored in experimental AUTO mode |
+| `max-connections` / `--max-connections` | `0` | Manual hard ceiling in experimental AUTO, **not recommended** except diagnosis; 0 disables the manual ceiling |
 | `idle` / `--idle` | `30` | CONNECT tunnel and downstream HTTP keep-alive idle timeout in seconds |
 | `socktimeout` / `--socktimeout` | `20.0` | Upstream socket plus downstream header/read timeout in seconds; downstream write window is bounded to 2× this value |
 | `proxyreload` / `--proxyreload` | `60` | PAC/system proxy refresh interval |

@@ -78,6 +78,7 @@ func (s *Server) DiagnosticSnapshot() diagnostic.Snapshot {
 		UptimeSeconds: now.Sub(s.startedAt).Seconds(),
 		Route:         route,
 		DNS:           dnsStatus,
+		Capacity:      s.capacityDiagnosticSnapshot(),
 		Update:        updateDiagnosticSnapshot(),
 		Auth: diagnostic.AuthSnapshot{
 			UpstreamMode:      s.cfg.Auth,

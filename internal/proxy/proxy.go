@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -68,6 +69,8 @@ type Server struct {
 	dnsResolver   *dnsresolver.Policy
 	dohBootstrap  *dohBootstrapRoute // independently resolved, reloadable OS-DNS routing
 	dnsCache      *dnscache.Cache
+	capacity      *capacityGovernor // opt-in AUTO/shadow, never a second admission gate
+	legacySlots   chan struct{}     // legacy/shadow observation for Doctor
 
 	tunnelMu           sync.Mutex
 	tunnels            map[*managedTunnel]struct{}
@@ -116,7 +119,11 @@ func New(cfg config.Config) (*Server, error) {
 	if err := validateGatewaySecurity(cfg); err != nil {
 		return nil, err
 	}
-	if err := validateServerBudgets(cfg); err != nil {
+	capacityMode, err := experimentalCapacityMode()
+	if err != nil {
+		return nil, err
+	}
+	if err := validateServerBudgetsForMode(cfg, capacityMode); err != nil {
 		return nil, err
 	}
 	dnsPolicy, err := newDNSPolicy(cfg)
@@ -204,6 +211,7 @@ func New(cfg config.Config) (*Server, error) {
 		dnsResolver:  dnsPolicy,
 		dohBootstrap: dohBootstrap,
 		dnsCache:     dnsCache,
+		capacity:     newCapacityGovernor(capacityMode, cfg),
 		tunnels:      make(map[*managedTunnel]struct{}),
 		tunnelZero:   closedSignal(),
 	}
@@ -301,11 +309,18 @@ func isRemotePlaintextExposure(cfg config.Config) bool {
 }
 
 func validateServerBudgets(cfg config.Config) error {
-	if cfg.Workers <= 0 || cfg.Threads <= 0 {
+	return validateServerBudgetsForMode(cfg, modeLegacy)
+}
+
+func validateServerBudgetsForMode(cfg config.Config, mode capacityMode) error {
+	if cfg.MaxConnections < 0 {
+		return errors.New("max-connections must be nonnegative")
+	}
+	if mode != modeAuto && (cfg.Workers <= 0 || cfg.Threads <= 0) {
 		return errors.New("workers and threads must both be greater than zero")
 	}
 	maxInt := int(^uint(0) >> 1)
-	if cfg.Workers > maxInt/cfg.Threads {
+	if mode != modeAuto && cfg.Workers > maxInt/cfg.Threads {
 		return errors.New("workers*threads connection budget overflows int")
 	}
 	if cfg.Idle <= 0 {
@@ -459,7 +474,14 @@ func (s *Server) listenHosts() []string {
 func (s *Server) Start() error {
 	port := s.cfg.Port
 	var listeners []net.Listener
-	admissionSlots := make(chan struct{}, connectionBudget(s.cfg))
+	var admissionSlots chan struct{}
+	if s.capacity == nil || s.capacity.mode == modeShadow {
+		admissionSlots = make(chan struct{}, connectionBudget(s.cfg))
+		s.legacySlots = admissionSlots
+	}
+	if s.capacity != nil && s.capacity.mode == modeAuto && (s.cfg.Workers != 1 || s.cfg.Threads != 32) {
+		fmt.Fprintln(os.Stderr, "warning: workers/threads are legacy-only and do not control AUTO admission")
+	}
 	for _, host := range s.listenHosts() {
 		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 		rawListener, err := net.Listen("tcp", addr)
@@ -469,7 +491,15 @@ func (s *Server) Start() error {
 			}
 			return err
 		}
-		ln := newAdmissionListener(rawListener, admissionSlots)
+		var ln net.Listener
+		if s.capacity != nil && s.capacity.mode == modeAuto {
+			ln = newDynamicAdmissionListener(rawListener, s.capacity, configuredSockTimeout(s.cfg))
+		} else {
+			ln = newAdmissionListener(rawListener, admissionSlots)
+			if s.capacity != nil {
+				ln.(*admissionListener).governor = s.capacity
+			}
+		}
 		listeners = append(listeners, ln)
 		if port == 0 {
 			port = rawListener.Addr().(*net.TCPAddr).Port
@@ -518,6 +548,9 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	var err error
 	s.once.Do(func() {
+		if s.capacity != nil {
+			s.capacity.close()
+		}
 		// Fence concurrent reloads before shutdown waits on listeners/tunnels.
 		// Publication checks the same lock, so no route can be resurrected.
 		s.wmu.Lock()
@@ -712,6 +745,9 @@ func (s *Server) maintenanceLoop() {
 	for {
 		select {
 		case now := <-t.C:
+			if s.capacity != nil {
+				s.capacity.sample(readCapacitySample(), now)
+			}
 			if err := s.reloadProxyIfDue(); err != nil {
 				debug.Dprintf("proxy reload failed, keeping previous: %v", err)
 			}

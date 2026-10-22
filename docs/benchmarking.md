@@ -174,3 +174,14 @@ A result is publishable only when all of the following are attached:
 A summary table should be generated from those artifacts and should link back
 to the run ID. Until an authorized Windows/domain run exists, corporate-auth
 performance remains **unmeasured**, not inferred from the local benchmark.
+
+## AP-ISS-0035 staged governor comparison
+
+See [the experimental capacity runbook](capacity-experimental.md). Keep the
+shipped/default `legacy` run as the control; collect separate `shadow` and
+`auto` runs with `PXGO_EXPERIMENTAL_CAPACITY_MODE` injected into each actual
+PxGo child process (the existing `bench-e2e.sh` deliberately strips inherited
+`PXGO_*` environment variables). Retain SHA-pinned raw logs/manifests for all
+three variants and do not report latency/throughput improvements without
+Windows and Linux platform evidence. Experimental FD constants and automatic
+production defaults remain uncalibrated and therefore release-blocked.

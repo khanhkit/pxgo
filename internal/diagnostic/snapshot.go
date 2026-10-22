@@ -27,6 +27,22 @@ type DNSSnapshot struct {
 	Source    string   `json:"source,omitempty"`
 }
 
+type CapacitySnapshot struct {
+	Mode                 string    `json:"mode"`
+	State                string    `json:"state"`
+	ActiveDownstream     int       `json:"active_downstream"`
+	SoftWindow           int       `json:"soft_window"`
+	HardEnvelope         int       `json:"hard_envelope"`
+	EffectiveLimit       int       `json:"effective_limit"`
+	ManualCeilingEnabled bool      `json:"manual_ceiling_enabled"`
+	ManualCeiling        int       `json:"manual_ceiling,omitempty"`
+	PressureReason       string    `json:"governing_pressure_reason,omitempty"`
+	AdmissionWaits       uint64    `json:"admission_waits"`
+	AdmissionTimeouts    uint64    `json:"admission_timeouts"`
+	SensorAvailability   string    `json:"sensor_availability"`
+	LastTransition       time.Time `json:"last_transition,omitempty"`
+}
+
 type UpdateSnapshot struct {
 	Current    string    `json:"current,omitempty"`
 	Latest     string    `json:"latest,omitempty"`
@@ -85,6 +101,7 @@ type Snapshot struct {
 	UptimeSeconds float64           `json:"uptime_seconds"`
 	Route         RouteSnapshot     `json:"route"`
 	DNS           DNSSnapshot       `json:"dns"`
+	Capacity      CapacitySnapshot  `json:"capacity"`
 	Update        UpdateSnapshot    `json:"update"`
 	Auth          AuthSnapshot      `json:"auth"`
 	Runtime       RuntimeSnapshot   `json:"runtime"`
