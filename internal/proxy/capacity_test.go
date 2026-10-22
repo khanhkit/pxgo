@@ -414,3 +414,43 @@ func TestCapacityEMFILEUnavailableSensorUsesOneBoundedRecoveryProbe(t *testing.T
 	}
 	g.release()
 }
+
+func TestCapacityRecoveryProbeNeverExceedsSoftHardOrManual(t *testing.T) {
+	cfg := config.Default()
+	g := newCapacityGovernor(modeAuto, cfg)
+	g.recordAcceptError(syscall.EMFILE)
+	g.mu.Lock()
+	g.active = g.hard
+	late := g.cooldown.Add(time.Millisecond)
+	g.mu.Unlock()
+	g.sample(capacitySample{reason: "sensor unavailable"}, late)
+	if snap := g.snapshot(); snap.EffectiveLimit != 0 {
+		t.Fatalf("probe exceeded full hard envelope: %+v", snap)
+	}
+	g.release() // One existing useful connection naturally closes.
+	if snap := g.snapshot(); snap.EffectiveLimit != g.active+1 || snap.EffectiveLimit > snap.HardEnvelope {
+		t.Fatalf("single probe did not respect freed headroom: %+v", snap)
+	}
+	if err := g.acquire(make(chan struct{}), time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if snap := g.snapshot(); snap.ActiveDownstream != snap.HardEnvelope || snap.EffectiveLimit != 0 {
+		t.Fatalf("probe violated hard cap: %+v", snap)
+	}
+	g.release()
+	cfg.MaxConnections = 1
+	manual := newCapacityGovernor(modeAuto, cfg)
+	manual.recordAcceptError(syscall.EMFILE)
+	manual.mu.Lock()
+	manual.active = 1
+	late = manual.cooldown.Add(time.Millisecond)
+	manual.mu.Unlock()
+	manual.sample(capacitySample{reason: "sensor unavailable"}, late)
+	if snap := manual.snapshot(); snap.EffectiveLimit != 0 {
+		t.Fatalf("probe bypassed manual hard ceiling: %+v", snap)
+	}
+	manual.release()
+	if snap := manual.snapshot(); snap.EffectiveLimit != 1 {
+		t.Fatalf("probe should reopen below manual limit: %+v", snap)
+	}
+}

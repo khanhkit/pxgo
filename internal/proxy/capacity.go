@@ -95,9 +95,9 @@ func (g *capacityGovernor) recomputeLocked() {
 	}
 	if g.state == capacityStatePressure && g.reason == capacityEmergencyFD {
 		n = 0
-		if g.probeAllowed {
-			// An already established tunnel does not consume the bounded recovery
-			// probe, which allows exactly one additional downstream socket.
+		if g.probeAllowed && g.active < g.soft && g.active < g.hard && (g.manual == 0 || g.active < g.manual) {
+			// Permit one probe only WITHIN the already established soft and hard
+			// envelopes; a sensor outage never invents additional headroom.
 			n = g.active + 1
 			if g.manual > 0 && n > g.manual {
 				n = g.manual
@@ -117,6 +117,9 @@ func (g *capacityGovernor) release() {
 	g.mu.Lock()
 	if g.active > 0 {
 		g.active--
+		if g.probeAllowed {
+			g.recomputeLocked()
+		}
 		g.notifyLocked()
 	}
 	g.mu.Unlock()
