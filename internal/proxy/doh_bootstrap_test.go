@@ -47,7 +47,7 @@ func TestDoHBootstrapUsesUpstreamCONNECT(t *testing.T) {
 			} else {
 				pacPath := filepath.Join(t.TempDir(), "proxy.pac")
 				pacContent := fmt.Sprintf(`function FindProxyForURL(url, host) { return "PROXY localhost:%s"; }`, parentPort)
-				if err := os.WriteFile(pacPath, []byte(pacContent), 0600); err != nil {
+				if err := os.WriteFile(pacPath, []byte(pacContent), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				cfg.PAC = pacPath
