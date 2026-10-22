@@ -71,6 +71,7 @@ func TestCapacityBurst2560(t *testing.T) {
 		success       bool
 		latency       time.Duration
 		dialError     bool
+		dialMessage   string
 		beforeRelease bool
 	}
 	results := make(chan outcome, attempts)
@@ -85,7 +86,7 @@ func TestCapacityBurst2560(t *testing.T) {
 			begun := time.Now()
 			conn, e := net.DialTimeout("tcp", px.ListenAddr(), 3*time.Second)
 			if e != nil {
-				results <- outcome{dialError: true}
+				results <- outcome{dialError: true, dialMessage: e.Error()}
 				return
 			}
 			defer conn.Close()
@@ -134,6 +135,7 @@ func TestCapacityBurst2560(t *testing.T) {
 	}
 	close(results)
 	var successes, dialErrors, otherErrors int
+	var firstDialError string
 	latencies := make([]time.Duration, 0, attempts)
 	preReleaseLatencies := make([]time.Duration, 0, attempts)
 	for result := range results {
@@ -146,6 +148,9 @@ func TestCapacityBurst2560(t *testing.T) {
 			}
 		case result.dialError:
 			dialErrors++
+			if firstDialError == "" {
+				firstDialError = result.dialMessage
+			}
 		default:
 			otherErrors++
 		}
@@ -169,7 +174,10 @@ func TestCapacityBurst2560(t *testing.T) {
 	if (mode == string(modeLegacy) || mode == string(modeShadow)) && peak.ActiveDownstream > 256 {
 		t.Fatalf("fixed legacy budget violated: %+v", peak)
 	}
-	if mode == "auto" && runtime.GOOS == "linux" && peak.SensorAvailability == "fresh" && successBeforeRelease <= 256 {
-		t.Fatalf("AUTO did not exceed legacy fixed budget despite healthy Linux headroom: %+v", peak)
+	if dialErrors > 0 {
+		t.Logf("FIRST_DIAL_ERROR platform=%s mode=%s count=%d example=%q", runtime.GOOS, mode, dialErrors, firstDialError)
+	}
+	if mode == "auto" && (successBeforeRelease != attempts || tunnelsBeforeRelease != attempts) {
+		t.Fatalf("AUTO 2560 simultaneous CONNECT admission NOT VERIFIED (attempted=%d admitted_before_release=%d live_tunnels_at_release=%d dial_errors=%d first_error=%q sensor=%s); leave release gate BLOCKED", attempts, successBeforeRelease, tunnelsBeforeRelease, dialErrors, firstDialError, peak.SensorAvailability)
 	}
 }

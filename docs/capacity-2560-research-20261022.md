@@ -10,6 +10,14 @@ The opt-in test `TestCapacityBurst2560` opens 2,560 client goroutines on a start
 
 The co-located test provides comparable *functional admission* evidence, but its goroutine count, Go heap, RSS and CPU **cannot** be attributed solely to PxGo. Proper production capacity conclusions require separate PXGO and load-driver processes/hosts, native Windows handles and Unix FD counts, CPU, RSS/cgroup pressure, backlog/retransmissions, and true long-lived tunnel plateaus. Use fresh immutable SHAs, similar load-driver setups, 1/10/50/200/2560 loads, and repeated steady runs with confidence intervals.
 
+## Windows CI result: 2,560 attempts are not 2,560 established connections
+
+GitHub R6 run `39773156841` returned `success` for its Windows burst job, but raw logs showed only **201/2,560** CONNECTs admitted before release in `legacy` and `shadow` (2,359 TCP dial errors), and **256/2,560** in `auto` (2,101 dial errors; 458 total successful handshakes including later completions). It was therefore a load-attempt test, **not successful Windows proof of 2,560 simultaneously established tunnels**. A saturated Windows listen backlog is a plausible explanation, but the actual first socket error and provider backlog have not yet been independently proven.
+
+Microsoft describes `SOMAXCONN_HINT(N)` (with N clamped 200..65535) to request a larger Winsock pending connection queue, while Go's Windows listener currently uses `SOMAXCONN`, letting the provider choose a default. See https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-listen and https://go.dev/src/net/sock_windows.go. Do not silently rewrite the Go listener/socket layer to enlarge the backlog: research/test first, preserve the approved serial Accept-then-wait design and auth/Go-netpoll semantics.
+
+The revised benchmark asserts **all 2,560 real CONNECT tunnels are live at the pre-release barrier in AUTO**. If Windows cannot do so, the GitHub heavy benchmark job must **FAIL** with the measured shortfall rather than greenwashing partial evidence. Legacy/shadow intentionally retain <=256 admissions under 10x overload, and report real dial errors. This is a **real unresolved release gate**, not permission to push uncalibrated Windows AUTO expansion.
+
 ## R5 baseline and R6 local evidence (Linux ARM64, 2026-10-22)
 
 | Test | 2,560 attempted; pre-release admitted | End-of-run full-sample p95 CONNECT | Other evidence |
