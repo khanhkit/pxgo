@@ -539,3 +539,26 @@ func TestCapacityWindowsMemoryHandlesEnvelopeIsFiniteAndFailClosed(t *testing.T)
 		t.Fatalf("native resource pressure ignored: %+v", snap)
 	}
 }
+
+func TestCapacityWindowsHardLimitIsAbsoluteNotIncremental(t *testing.T) {
+	g := newCapacityGovernor(modeAuto, config.Default())
+	now := time.Unix(30000, 0)
+	g.mu.Lock()
+	g.active = 2560
+	g.hard = 2560
+	g.soft = 4096
+	g.mu.Unlock()
+	g.sample(capacitySample{available: true, resource: capacityWindowsSensor, freeSlots: 4096}, now)
+	if snap := g.snapshot(); snap.HardEnvelope != 4096 || snap.EffectiveLimit > 4096 {
+		t.Fatalf("native sample invented active+4096 capacity instead of a finite absolute trial ceiling: %+v", snap)
+	}
+	g.mu.Lock()
+	g.active = 4200
+	g.hard = 4200
+	g.soft = 4300
+	g.mu.Unlock()
+	g.sample(capacitySample{available: true, resource: capacityWindowsSensor, freeSlots: 4096}, now.Add(time.Second))
+	if snap := g.snapshot(); snap.HardEnvelope != 4200 || snap.EffectiveLimit > 4200 {
+		t.Fatalf("shrinking absolute ceiling evicted existing useful sockets or admitted beyond active: %+v", snap)
+	}
+}

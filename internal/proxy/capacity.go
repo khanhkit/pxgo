@@ -269,7 +269,16 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 			g.recomputeLocked()
 			return
 		}
-		hard = g.active + s.freeSlots
+		// The provisional 4,096 limit is an absolute downstream trial cap,
+		// not an additional 4,096 admissions on top of already active tunnels.
+		// On a future lowered cap, retain useful existing connections, but
+		// forbid any further admission until active is below the ceiling.
+		const windowsPreviewMaxActive = 4096
+		if g.active >= windowsPreviewMaxActive {
+			hard = g.active
+		} else {
+			hard = g.active + min(s.freeSlots, windowsPreviewMaxActive-g.active)
+		}
 		pressured = s.resourcePressure
 		g.sensor = capacityWindowsSensor
 	default:
