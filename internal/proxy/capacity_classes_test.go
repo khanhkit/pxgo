@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -59,13 +60,13 @@ func TestConnectionClassOverBudgetDoesNotDenyPromotion(t *testing.T) {
 		leases[i].classifyRequest(&http.Request{Method: http.MethodGet}, now)
 	}
 	m.promoteAged(now.Add(31 * time.Second))
-	if got := m.snapshot(); got.Long != 8 || got.Promoted != 8 || got.LongOverflow != 5 || got.Total != 8 {
+	if got := m.snapshot(); got.Long != 8 || got.Promoted != 8 || got.LongOverflow != 5 || got.LongDebt != 5 || got.Total != 8 {
 		t.Fatalf("debt/migration wrong: %+v", got)
 	}
 	for _, l := range leases {
 		l.finish()
 	}
-	if got := m.snapshot(); got.Total != 0 || got.Long != 0 || got.Short != 0 {
+	if got := m.snapshot(); got.Total != 0 || got.Long != 0 || got.Short != 0 || got.LongDebt != 0 {
 		t.Fatal(got)
 	}
 }
@@ -211,4 +212,40 @@ func TestConnectionClassHTTPAndCONNECTLifecycle(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("classifier/global permit leaked: %+v capacity=%+v", px.capacity.classes.snapshot(), px.capacity.snapshot())
+}
+
+// A real listener can acquire a physical token before Shutdown closes the
+// class registration. This deterministic fixture forces that exact order.
+type classesOnceListener struct {
+	connection net.Conn
+	returned   bool
+}
+
+func (l *classesOnceListener) Accept() (net.Conn, error) {
+	if l.returned {
+		return nil, net.ErrClosed
+	}
+	l.returned = true
+	return l.connection, nil
+}
+func (l *classesOnceListener) Close() error   { return l.connection.Close() }
+func (l *classesOnceListener) Addr() net.Addr { return l.connection.LocalAddr() }
+
+func TestConnectionClassRegistrationClosedAfterPhysicalAcquire(t *testing.T) {
+	t.Setenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES", "1")
+	g := newCapacityGovernor(modeAuto, config.Default())
+	if g.classes == nil {
+		t.Fatal("classifier not opted in")
+	}
+	server, peer := net.Pipe()
+	defer peer.Close()
+	ln := newDynamicAdmissionListener(&classesOnceListener{connection: server}, g, time.Second)
+	g.classes.close() // global governor could still have a stale open window
+	accepted, err := ln.Accept()
+	if accepted != nil || !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("shutdown registration race wrongly admitted %v: %v", accepted, err)
+	}
+	if got := g.snapshot(); got.ActiveDownstream != 0 || got.ClassPools == nil || got.ClassPools.Total != 0 {
+		t.Fatalf("physical/class permit leaked on shutdown race: %+v", got)
+	}
 }

@@ -35,6 +35,7 @@ type CapacityClassSnapshot struct {
 	LongSoftBudget  int    `json:"long_soft_budget"`
 	Promoted        uint64 `json:"short_to_long_promotions"`
 	LongOverflow    uint64 `json:"long_soft_overflow_events"`
+	LongDebt        int    `json:"long_current_debt"`
 	Total           int    `json:"total_classified_and_provisional"`
 }
 

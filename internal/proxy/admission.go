@@ -34,6 +34,13 @@ func (l *admissionListener) Accept() (net.Conn, error) {
 		}
 		if classes := l.governor.classes; classes != nil {
 			lease := classes.open(time.Now())
+			if lease == nil {
+				// Shutdown won the race after the physical admission permit
+				// was acquired. Fail closed, return that EXACT permit once.
+				l.governor.release()
+				_ = conn.Close()
+				return nil, net.ErrClosed
+			}
 			return &admissionConn{Conn: conn, classification: lease, release: func() { lease.finish(); l.governor.release() }}, nil
 		}
 		return &admissionConn{Conn: conn, release: l.governor.release}, nil

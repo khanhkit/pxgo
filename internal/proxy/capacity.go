@@ -425,7 +425,7 @@ func (g *capacityGovernor) snapshot() diagnostic.CapacitySnapshot {
 	snapshot := diagnostic.CapacitySnapshot{Mode: string(g.mode), State: g.state, ActiveDownstream: g.active, SoftWindow: g.soft, HardEnvelope: g.hard, EffectiveLimit: g.effective, ManualCeiling: g.manual, ManualCeilingEnabled: g.manual > 0, PressureReason: g.reason, AdmissionWaits: g.waits, AdmissionTimeouts: g.timeouts, SensorAvailability: g.sensor, LastTransition: g.lastTransition}
 	if g.classes != nil {
 		c := g.classes.snapshot()
-		snapshot.ClassPools = &diagnostic.CapacityClassSnapshot{Provisional: c.Provisional, Short: c.Short, Long: c.Long, ShortSoftBudget: c.ShortBudget, LongSoftBudget: c.LongBudget, Promoted: c.Promoted, LongOverflow: c.LongOverflow, Total: c.Total}
+		snapshot.ClassPools = &diagnostic.CapacityClassSnapshot{Provisional: c.Provisional, Short: c.Short, Long: c.Long, ShortSoftBudget: c.ShortBudget, LongSoftBudget: c.LongBudget, Promoted: c.Promoted, LongOverflow: c.LongOverflow, LongDebt: c.LongDebt, Total: c.Total}
 	}
 	return snapshot
 }

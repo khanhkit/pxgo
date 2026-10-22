@@ -49,6 +49,7 @@ type connectionClassSnapshot struct {
 	Provisional, Short, Long int
 	ShortBudget, LongBudget  int
 	Promoted, LongOverflow   uint64
+	LongDebt                 int
 	Total                    int
 }
 
@@ -179,7 +180,7 @@ func (m *connectionClassManager) snapshot() connectionClassSnapshot {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return connectionClassSnapshot{Provisional: m.provisional, Short: m.short, Long: m.long, ShortBudget: m.shortBudget, LongBudget: m.longBudget, Promoted: m.promoted, LongOverflow: m.longOverflow, Total: len(m.live)}
+	return connectionClassSnapshot{Provisional: m.provisional, Short: m.short, Long: m.long, ShortBudget: m.shortBudget, LongBudget: m.longBudget, Promoted: m.promoted, LongOverflow: m.longOverflow, LongDebt: max(0, m.long-m.longBudget), Total: len(m.live)}
 }
 
 func (m *connectionClassManager) close() {
