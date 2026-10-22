@@ -454,3 +454,24 @@ func TestCapacityRecoveryProbeNeverExceedsSoftHardOrManual(t *testing.T) {
 		t.Fatalf("probe should reopen below manual limit: %+v", snap)
 	}
 }
+
+func TestCapacityInvalidSampleRevokesOutstandingRecoveryProbe(t *testing.T) {
+	g := newCapacityGovernor(modeAuto, config.Default())
+	g.recordAcceptError(syscall.EMFILE)
+	g.mu.Lock()
+	late := g.cooldown.Add(time.Millisecond)
+	g.mu.Unlock()
+	g.sample(capacitySample{reason: "sensor unavailable"}, late)
+	if g.snapshot().EffectiveLimit != 1 {
+		t.Fatal("expected one pending probe")
+	}
+	// An available-but-contradictory sensor sample must withdraw that probe
+	// even when the sensor transport itself cannot establish a valid envelope.
+	g.sample(capacitySample{available: true, totalFD: 100, freeFD: 101}, late.Add(time.Second))
+	if snap := g.snapshot(); snap.SensorAvailability != "invalid" || snap.EffectiveLimit != 0 {
+		t.Fatalf("stale probe remains open after contradictory sample: %+v", snap)
+	}
+	if err := g.acquire(make(chan struct{}), 5*time.Millisecond); err == nil {
+		t.Fatal("invalid sensor permitted admission")
+	}
+}

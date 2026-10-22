@@ -240,6 +240,9 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		g.sensor = "invalid"
 		g.healthy = 0
 		g.pressured = 0
+		// A contradictory measurement revokes any unconsumed emergency probe;
+		// recompute under the same mutex to withdraw a previously opened slot.
+		g.recomputeLocked()
 		return
 	}
 	hard := g.active + max(0, (s.freeFD-reserveFD)/fdPerConnection)
