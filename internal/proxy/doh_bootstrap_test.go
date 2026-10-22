@@ -23,6 +23,8 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
+const systemRuleResolver = "system"
+
 // A parent proxy rejecting CONNECT is enough to prove that DoH no longer
 // attempts direct 1.1.1.1:443. No network access or TLS bypass is needed.
 func TestDoHBootstrapUsesUpstreamCONNECT(t *testing.T) {
@@ -52,7 +54,7 @@ func TestDoHBootstrapUsesUpstreamCONNECT(t *testing.T) {
 					cfg.DNSRules = []config.DNSRule{{Resolver: cfg.DNS, Only: []string{"*.test"}}}
 				}
 				if mode == "mixed-rules" {
-					cfg.DNSRules = []config.DNSRule{{Resolver: "system", Only: []string{"*.ordinary.example"}}, {Resolver: cfg.DNS, Only: []string{"*.test"}}}
+					cfg.DNSRules = []config.DNSRule{{Resolver: systemRuleResolver, Only: []string{"*.ordinary.example"}}, {Resolver: cfg.DNS, Only: []string{"*.test"}}}
 				}
 			} else {
 				pacPath := filepath.Join(t.TempDir(), "proxy.pac")
@@ -234,7 +236,7 @@ func TestDoHBootstrapAuthenticatedCONNECTTLSRoundTrip(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			cfg := cfg
 			if mode == "trusted-rules-success" {
-				cfg.DNSRules = []config.DNSRule{{Resolver: "system", Only: []string{"*.ordinary.example"}}, {Resolver: cfg.DNS, Only: []string{"*.test"}}}
+				cfg.DNSRules = []config.DNSRule{{Resolver: systemRuleResolver, Only: []string{"*.ordinary.example"}}, {Resolver: cfg.DNS, Only: []string{"*.test"}}}
 			}
 			px, err := New(cfg)
 			if err != nil {
