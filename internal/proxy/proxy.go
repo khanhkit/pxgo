@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -140,8 +141,15 @@ func New(cfg config.Config) (*Server, error) {
 					return nil, errors.New("DoH bootstrap proxy points back to PxGo listener")
 				}
 			}
-			conn, _, connectErr := bootstrapServer.connectWithProxyFallbackDial(ctx, addr, "", proxies, bootstrapDialer)
-			return conn, connectErr
+			// Proxy names are resolved with the OS resolver and pinned to the
+			// checked IPs for the actual dial, preventing hostname aliases and
+			// DNS rebinding from bypassing the local-listener recursion guard.
+			safeDial := newDoHBootstrapSafeDialer(proxies, cfg.Port, bootstrapDialer)
+			conn, leftover, connectErr := bootstrapServer.connectWithProxyFallbackDial(ctx, addr, "", proxies, safeDial)
+			if connectErr != nil || len(leftover) == 0 {
+				return conn, connectErr
+			}
+			return &dohBufferedConn{Conn: conn, pending: bytes.NewReader(leftover)}, nil
 		})
 	}
 	wp, err := buildWproxy(cfg, dnsCache)

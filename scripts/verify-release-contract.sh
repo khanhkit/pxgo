@@ -201,17 +201,17 @@ fi
 # TC-CI-REG-010: the minimum Go toolchain must include all reachable stdlib
 # security fixes currently required by the project.
 required_go_major=1
-required_go_minor=25
-required_go_patch=14
+required_go_minor=26
+required_go_patch=10
 go_version="$(awk '$1 == "go" { print $2; exit }' go.mod)"
 IFS=. read -r go_major go_minor go_patch <<<"$go_version"
 go_patch="${go_patch:-0}"
 if (( go_major < required_go_major ||
       (go_major == required_go_major && go_minor < required_go_minor) ||
       (go_major == required_go_major && go_minor == required_go_minor && go_patch < required_go_patch) )); then
-  bad "Go toolchain minimum ${go_version} is below security floor 1.25.14"
+  bad "Go toolchain minimum ${go_version} is below security floor 1.26.10"
 else
-  ok "Go toolchain minimum satisfies security floor 1.25.14"
+  ok "Go toolchain minimum satisfies security floor 1.26.10"
 fi
 
 # Distribution identity contract.

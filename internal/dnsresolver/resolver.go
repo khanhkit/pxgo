@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -191,6 +193,32 @@ func newPolicy(raw string, timeout time.Duration, client *http.Client) (*Policy,
 		client = &http.Client{Transport: transport}
 	}
 	return &Policy{endpoints: endpoints, timeout: normalizedTimeout(timeout), http: client}, nil
+}
+
+// SetDoHRootCAs installs explicit trusted roots for private DoH servers.
+// Configure only before issuing queries; certificate verification remains enabled.
+func (p *Policy) SetDoHRootCAs(roots *x509.CertPool) {
+	if p == nil || roots == nil {
+		return
+	}
+	for _, rule := range p.rules {
+		rule.resolver.SetDoHRootCAs(roots)
+	}
+	if p.system || p.http == nil {
+		return
+	}
+	transport, ok := p.http.Transport.(*http.Transport)
+	if !ok {
+		return
+	}
+	cloned := transport.Clone()
+	if cloned.TLSClientConfig == nil {
+		cloned.TLSClientConfig = &tls.Config{}
+	} else {
+		cloned.TLSClientConfig = cloned.TLSClientConfig.Clone()
+	}
+	cloned.TLSClientConfig.RootCAs = roots
+	p.http = &http.Client{Transport: cloned}
 }
 
 // SetDoHDialContext installs a bootstrap-safe HTTPS dialer before DNS lookups.
