@@ -84,3 +84,8 @@ A CONNECT is counted as admitted only **after an application payload completes a
 The Windows native source now uses an injectable read-handle/read-memory seam to test API failures, zero handles, invalid/contradictory `MEMORYSTATUSEX`, load over 100%, low available memory, handle-policy ceiling, and a healthy bounded case. All such inputs leave no inferred new capacity except for independently plausible valid readings. The seam does not modify actual process/kernel handles and uses no mutable global test hooks.
 
 These tests strengthen **preview safety evidence** only. Native Windows Job Object process memory limits, realistic corporate authentication, independent process RSS/handle attribution, long-run mixed traffic and real AD/SSPI remain separate release gates.
+
+
+### R11 verify liveness both before and after the 2,560-tunnel plateau
+
+R9 checked an echo at CONNECT establishment. R11 additionally sends a **distinct, per-tunnel payload after the shared plateau release barrier** and verifies that exact echo before closing each connection. A tunnel can be counted as established but lose its data plane during the 18-second plateau; this second challenge detects that failure. The overload harness counts legacy/shadow expected queued handshake timeouts separately from data-plane corruption, and *every established tunnel* must pass both payload checks. AUTO requires all 2,560 tunnel handshakes and the second payload challenge. Windows backlog burst behavior and `pxgo-ad` AD release gates remain separate.

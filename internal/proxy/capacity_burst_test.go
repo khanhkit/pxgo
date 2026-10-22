@@ -18,6 +18,33 @@ import (
 	"github.com/khanhkit/pxgo/internal/config"
 )
 
+func capacityLatencySummary(latencies []time.Duration) (p50, p95, p99 time.Duration) {
+	if len(latencies) == 0 {
+		return 0, 0, 0
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	n := len(latencies)
+	return latencies[n/2], latencies[(95*n+99)/100-1], latencies[(99*n+99)/100-1]
+}
+
+func verifyCapacityHeldTunnel(conn net.Conn, clientIndex int) error {
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return err
+	}
+	challenge := []byte(fmt.Sprintf("pxgo-held-live-%08d", clientIndex))
+	if _, err := conn.Write(challenge); err != nil {
+		return err
+	}
+	echo := make([]byte, len(challenge))
+	if _, err := io.ReadFull(conn, echo); err != nil {
+		return err
+	}
+	if !bytes.Equal(echo, challenge) {
+		return fmt.Errorf("held CONNECT tunnel %d changed payload", clientIndex)
+	}
+	return nil
+}
+
 // TestCapacityBurst2560 runs a tenfold oversubscription experiment against
 // a 256-permit legacy baseline and experimental AUTO. It is opt-in because
 // 2,560 simultaneous sockets plus upstream tunnel sockets can exceed CI
@@ -79,11 +106,13 @@ func TestCapacityBurst2560(t *testing.T) {
 		starts[i] = make(chan struct{})
 	}
 	type outcome struct {
-		success       bool
-		latency       time.Duration
-		dialError     bool
-		dialMessage   string
-		beforeRelease bool
+		success        bool
+		latency        time.Duration
+		dialError      bool
+		dialMessage    string
+		handshakeError bool
+		dataError      string
+		beforeRelease  bool
 	}
 	results := make(chan outcome, attempts)
 	var admitted atomic.Int64
@@ -91,7 +120,7 @@ func TestCapacityBurst2560(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(attempts)
 	for i := 0; i < attempts; i++ {
-		go func(batchIndex int) {
+		go func(batchIndex, clientIndex int) {
 			defer wg.Done()
 			<-starts[batchIndex]
 			begun := time.Now()
@@ -114,18 +143,18 @@ func TestCapacityBurst2560(t *testing.T) {
 				}
 			}
 			if e != nil {
-				results <- outcome{}
+				results <- outcome{handshakeError: true}
 				return
 			}
 			latency := time.Since(begun)
 			const echoProbe = "pxgo-capacity-health-check"
 			if _, e = conn.Write([]byte(echoProbe)); e != nil {
-				results <- outcome{}
+				results <- outcome{dataError: e.Error()}
 				return
 			}
 			response := make([]byte, len(echoProbe))
 			if _, e = io.ReadFull(conn, response); e != nil || !bytes.Equal(response, []byte(echoProbe)) {
-				results <- outcome{}
+				results <- outcome{dataError: fmt.Sprintf("initial echo mismatch: %v", e)}
 				return
 			}
 			// The established tunnel must remain genuinely live until release.
@@ -134,8 +163,14 @@ func TestCapacityBurst2560(t *testing.T) {
 			beforeRelease := !released.Load()
 			admitted.Add(1)
 			<-release
+			// Prove the *held* session still transports data after the common
+			// 2,560-tunnel plateau; initial handshake echo alone cannot show this.
+			if err := verifyCapacityHeldTunnel(conn, clientIndex); err != nil {
+				results <- outcome{dataError: err.Error()}
+				return
+			}
 			results <- outcome{success: true, latency: latency, beforeRelease: beforeRelease}
-		}(i / batch)
+		}(i/batch, i)
 	}
 	var memAt runtime.MemStats
 	begun := time.Now()
@@ -173,7 +208,8 @@ func TestCapacityBurst2560(t *testing.T) {
 		t.Fatal("burst clients did not drain")
 	}
 	close(results)
-	var successes, dialErrors, otherErrors int
+	var successes, dialErrors, handshakeErrors, payloadErrors int
+	var firstPayloadError string
 	var firstDialError string
 	latencies := make([]time.Duration, 0, attempts)
 	preReleaseLatencies := make([]time.Duration, 0, attempts)
@@ -190,33 +226,31 @@ func TestCapacityBurst2560(t *testing.T) {
 			if firstDialError == "" {
 				firstDialError = result.dialMessage
 			}
+		case result.handshakeError:
+			handshakeErrors++
 		default:
-			otherErrors++
+			payloadErrors++
+			if firstPayloadError == "" {
+				firstPayloadError = result.dataError
+			}
 		}
 	}
-	if successes+dialErrors+otherErrors != attempts {
+	if successes+dialErrors+handshakeErrors+payloadErrors != attempts {
 		t.Fatal("outcomes do not total 2560")
 	}
-	var p50, p95, p99 time.Duration
-	if len(latencies) > 0 {
-		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-		p50 = latencies[len(latencies)/2]
-		p95 = latencies[(95*len(latencies)+99)/100-1]
-		p99 = latencies[(99*len(latencies)+99)/100-1]
-	}
-	var preReleaseP95 time.Duration
-	if len(preReleaseLatencies) > 0 {
-		sort.Slice(preReleaseLatencies, func(i, j int) bool { return preReleaseLatencies[i] < preReleaseLatencies[j] })
-		preReleaseP95 = preReleaseLatencies[(95*len(preReleaseLatencies)+99)/100-1]
-	}
-	t.Logf("RESULT platform=%s mode=%s attempted=%d accepted_before_release=%d successful_total=%d dial_errors=%d other_errors=%d tunnels_at_peak=%d admission_active_peak=%d soft=%d hard=%d waits=%d timeouts=%d pre_release_p95=%s full_run_p50=%s full_run_p95=%s full_run_p99=%s goroutines_peak=%d shared_heap_alloc_at_peak=%d fd_free_at_peak=%d duration=%s", runtime.GOOS, mode, attempts, successBeforeRelease, successes, dialErrors, otherErrors, tunnelsBeforeRelease, peak.ActiveDownstream, peak.SoftWindow, peak.HardEnvelope, peak.AdmissionWaits, peak.AdmissionTimeouts, preReleaseP95, p50, p95, p99, goroutinesBeforeRelease, memAt.Alloc, fdAt.freeFD, time.Since(begun))
+	p50, p95, p99 := capacityLatencySummary(latencies)
+	_, preReleaseP95, _ := capacityLatencySummary(preReleaseLatencies)
+	t.Logf("RESULT platform=%s mode=%s attempted=%d accepted_before_release=%d successful_total=%d dial_errors=%d handshake_errors=%d payload_errors=%d tunnels_at_peak=%d admission_active_peak=%d soft=%d hard=%d waits=%d timeouts=%d pre_release_p95=%s full_run_p50=%s full_run_p95=%s full_run_p99=%s goroutines_peak=%d shared_heap_alloc_at_peak=%d fd_free_at_peak=%d duration=%s", runtime.GOOS, mode, attempts, successBeforeRelease, successes, dialErrors, handshakeErrors, payloadErrors, tunnelsBeforeRelease, peak.ActiveDownstream, peak.SoftWindow, peak.HardEnvelope, peak.AdmissionWaits, peak.AdmissionTimeouts, preReleaseP95, p50, p95, p99, goroutinesBeforeRelease, memAt.Alloc, fdAt.freeFD, time.Since(begun))
 	if (mode == string(modeLegacy) || mode == string(modeShadow)) && peak.ActiveDownstream > 256 {
 		t.Fatalf("fixed legacy budget violated: %+v", peak)
+	}
+	if payloadErrors > 0 {
+		t.Fatalf("held CONNECT payload integrity failed for %d tunnels: first=%q", payloadErrors, firstPayloadError)
 	}
 	if dialErrors > 0 {
 		t.Logf("FIRST_DIAL_ERROR platform=%s mode=%s count=%d example=%q", runtime.GOOS, mode, dialErrors, firstDialError)
 	}
-	if mode == "auto" && (successBeforeRelease != attempts || tunnelsBeforeRelease != attempts) {
+	if mode == "auto" && (successBeforeRelease != attempts || tunnelsBeforeRelease != attempts || successes != attempts) {
 		t.Fatalf("AUTO 2560 simultaneous CONNECT admission NOT VERIFIED (attempted=%d admitted_before_release=%d live_tunnels_at_release=%d dial_errors=%d first_error=%q sensor=%s); leave release gate BLOCKED", attempts, successBeforeRelease, tunnelsBeforeRelease, dialErrors, firstDialError, peak.SensorAvailability)
 	}
 }
