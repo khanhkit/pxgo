@@ -262,7 +262,7 @@ func assertCapacityBurstClassAccounting(t *testing.T, px *Server, mode string, a
 		return
 	}
 	classes := px.capacity.classes.snapshot()
-	t.Logf("CLASS_POOLS total=%d provisional=%d short=%d long=%d short_soft=%d long_soft=%d promoted=%d long_debt=%d", classes.Total, classes.Provisional, classes.Short, classes.Long, classes.ShortBudget, classes.LongBudget, classes.Promoted, classes.LongOverflow)
+	t.Logf("CLASS_POOLS total=%d provisional=%d short=%d long=%d short_soft=%d long_soft=%d promoted=%d long_overflow_events=%d long_current_debt=%d", classes.Total, classes.Provisional, classes.Short, classes.Long, classes.ShortBudget, classes.LongBudget, classes.Promoted, classes.LongOverflow, classes.LongDebt)
 	if classes.Total != attempts || classes.Long != attempts || classes.Provisional != 0 {
 		t.Fatalf("all %d CONNECT tunnels must be long in a single permit budget: %+v", attempts, classes)
 	}

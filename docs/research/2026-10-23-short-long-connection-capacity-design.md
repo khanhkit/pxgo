@@ -48,3 +48,6 @@ Interpretation must not silently assume performance benefit: 32-SYN pacing can h
 
 
 Audit R1 correction: when shutdown closes class registration between physical `acquire` and classifier `open`, an absent lease **fails admission** and immediately returns the sole global permit, never passing an untracked connection into `net/http`. `long_current_debt=max(0,long-long_soft_budget)` is distinct from cumulative `long_soft_overflow_events`; neither permits bypassing the global safety gate. Added deterministic shutdown-race and debt-drain tests.
+
+
+R3 metrics clarification: the `CLASS_POOLS` log prints `long_overflow_events` (cumulative count of transitions beyond the soft quota) and `long_current_debt` (actual `max(0,long-longSoft)` at the snapshot). For example, at 2,560 long tunnels, R11 long soft quota=2,124 -> **current debt=436**, whereas 2,348 is the number of cumulative overflow *events*. For fast growth, long soft quota=2,304 -> **current debt=256**; 1,856 overflow events. They must never share the same column name or be treated as physical permit overcommit.
