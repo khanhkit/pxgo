@@ -472,6 +472,12 @@ func (s *Server) listenHosts() []string {
 }
 
 func (s *Server) Start() error {
+	// Check live FD headroom before exposing AUTO's higher cold-start target.
+	// If the Linux sensor is unavailable, the finite provisional window is
+	// retained; unknown data never authorizes subsequent automatic growth.
+	if s.capacity != nil && s.capacity.mode == modeAuto {
+		s.capacity.sample(readCapacitySample(), time.Now())
+	}
 	port := s.cfg.Port
 	var listeners []net.Listener
 	var admissionSlots chan struct{}
@@ -742,10 +748,22 @@ func (s *Server) cachedHostIPs() []net.IP {
 func (s *Server) maintenanceLoop() {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
+	// Opt-in AUTO can react to burst demand faster without increasing the
+	// existing once-per-second PAC/Kerberos/Guardian housekeeping cadence or
+	// creating a new worker/goroutine pool. Only the cheap local FD sensor is
+	// sampled at the faster rate.
+	var capacityTick <-chan time.Time
+	if s.capacity != nil && s.capacity.mode == modeAuto {
+		fast := time.NewTicker(capacityControlInterval)
+		defer fast.Stop()
+		capacityTick = fast.C
+	}
 	for {
 		select {
+		case now := <-capacityTick:
+			s.capacity.sample(readCapacitySample(), now)
 		case now := <-t.C:
-			if s.capacity != nil {
+			if s.capacity != nil && s.capacity.mode != modeAuto {
 				s.capacity.sample(readCapacitySample(), now)
 			}
 			if err := s.reloadProxyIfDue(); err != nil {

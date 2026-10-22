@@ -41,9 +41,15 @@ func experimentalCapacityMode() (capacityMode, error) {
 	return "", fmt.Errorf("invalid PXGO_EXPERIMENTAL_CAPACITY_MODE %q: expected legacy, shadow or auto", value)
 }
 
-// This conservative fallback mirrors the existing default budget during the
-// opt-in trial; it is not a release-calibrated automatic capacity or user target.
-const capacityColdStartWindow = 32
+const (
+	capacityControlInterval = 250 * time.Millisecond
+	capacityGrowthCooldown  = 500 * time.Millisecond
+)
+
+// Owner-requested provisional startup target for opt-in AUTO. The Linux
+// preflight sample can reduce the effective limit below this target when the
+// real per-process FD budget cannot safely support 256 downstream sockets.
+const capacityColdStartWindow = 256
 
 type capacitySample struct {
 	available bool
@@ -275,13 +281,20 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 			g.state = capacityStateNormal
 			g.lastTransition = now
 		}
+		// A valid OS measurement can raise the hard envelope immediately; the
+		// demand-controlled soft window still waits for consecutive healthy
+		// samples to avoid growing on a transient sensor reading.
+		if hard > g.hard {
+			g.hard = hard
+		}
 		if g.healthy >= 3 && !now.Before(g.cooldown) {
-			if hard > g.hard {
-				g.hard = hard
-			}
 			if g.state == capacityStateNormal && (g.active >= g.effective || g.waiting > 0) && g.soft < g.hard {
-				g.soft += 8
-				g.cooldown = now.Add(time.Second)
+				// Fast additive/multiplicative increase under verified FD headroom.
+				// No goroutine scheduler or per-route limits: the server-scoped
+				// downstream gate remains the single authority.
+				step := max(32, min(g.soft/2, 512))
+				g.soft += min(step, g.hard-g.soft)
+				g.cooldown = now.Add(capacityGrowthCooldown)
 			}
 		}
 		if g.state == capacityStateNormal {

@@ -475,3 +475,37 @@ func TestCapacityInvalidSampleRevokesOutstandingRecoveryProbe(t *testing.T) {
 		t.Fatal("invalid sensor permitted admission")
 	}
 }
+
+func TestCapacityFastGrowthRequiresHeadroomAndSustainedDemand(t *testing.T) {
+	g := newCapacityGovernor(modeAuto, config.Default())
+	if got := g.snapshot(); got.SoftWindow != 256 || got.HardEnvelope != 256 {
+		t.Fatalf("start target not 256: %+v", got)
+	}
+	now := time.Unix(10000, 0)
+	ample := capacitySample{available: true, totalFD: 32768, freeFD: 30000}
+	g.sample(ample, now)
+	if snap := g.snapshot(); snap.SoftWindow != 256 || snap.HardEnvelope <= 256 {
+		t.Fatalf("unsafe immediate growth or stale hard envelope: %+v", snap)
+	}
+	for i := 1; i <= 15; i++ {
+		// Deterministically model sustained queued demand without needing
+		// thousands of sockets in a unit test; real traffic has a separate gate.
+		g.mu.Lock()
+		g.waiting = 1
+		g.mu.Unlock()
+		g.sample(ample, now.Add(time.Duration(i)*time.Second))
+	}
+	if snap := g.snapshot(); snap.SoftWindow < 2560 {
+		t.Fatalf("AUTO failed to grow toward 2560 with healthy headroom and demand: %+v", snap)
+	}
+	capped := newCapacityGovernor(modeAuto, config.Config{MaxConnections: 96})
+	capped.sample(ample, now)
+	if snap := capped.snapshot(); snap.EffectiveLimit != 96 {
+		t.Fatalf("manual ceiling not effective with 256 start: %+v", snap)
+	}
+	small := newCapacityGovernor(modeAuto, config.Default())
+	small.sample(capacitySample{available: true, totalFD: 128, freeFD: 121}, now)
+	if snap := small.snapshot(); snap.EffectiveLimit >= 256 || snap.EffectiveLimit <= 0 {
+		t.Fatalf("small RLIMIT not respected at startup: %+v", snap)
+	}
+}

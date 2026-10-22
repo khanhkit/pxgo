@@ -248,6 +248,46 @@ jobs:
       - name: Build
         run: go build ./...
 
+  capacity-burst-2560:
+    # Keep a heavy 2,560-connection test scoped to the capacity hotfix PR.
+    # Do not impose this resource requirement on unrelated PRs or main.
+    name: Capacity burst 2560 (${{ matrix.os }})
+    if: github.event_name == 'pull_request' && github.head_ref == 'hotfix/performance-capacity-20261022'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify immutable candidate HEAD
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Exercise 2560 simultaneous legacy, shadow, and AUTO CONNECTs
+        shell: bash
+        env:
+          PXGO_CAPACITY_BURST_2560: "1"
+        run: |
+          for mode in legacy shadow auto; do
+            echo "--- MODE: $mode (2,560 simultaneous CONNECT attempts) ---"
+            PXGO_CAPACITY_BENCH_MODE="$mode" go test ./internal/proxy \
+              -run '^TestCapacityBurst2560$' -count=1 -v -timeout=55s
+          done
+
   windows-native-sspi:
     name: Native Windows SSPI gate
     if: github.event_name == 'workflow_dispatch' && inputs.native_sspi
