@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -365,4 +366,51 @@ func TestCapacityAutoCanAdmitBeyondLegacy32WithFreshLinuxHeadroom(t *testing.T) 
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+}
+
+func TestCapacityEMFILEUnavailableSensorUsesOneBoundedRecoveryProbe(t *testing.T) {
+	cfg := config.Default()
+	g := newCapacityGovernor(modeAuto, cfg)
+	g.recordAcceptError(syscall.EMFILE)
+	if snap := g.snapshot(); snap.State != capacityStatePressure || snap.EffectiveLimit != 0 {
+		t.Fatalf("emergency must close new admission: %+v", snap)
+	}
+	g.mu.Lock()
+	early := g.cooldown.Add(-time.Millisecond)
+	late := g.cooldown.Add(time.Millisecond)
+	g.mu.Unlock()
+	g.sample(capacitySample{reason: "fd sensor unavailable"}, early)
+	if g.snapshot().EffectiveLimit != 0 {
+		t.Fatal("admitted before emergency cooldown")
+	}
+	g.sample(capacitySample{reason: "fd sensor unavailable"}, late)
+	if snap := g.snapshot(); snap.EffectiveLimit != 1 {
+		t.Fatalf("single recovery probe missing: %+v", snap)
+	}
+	done := make(chan struct{})
+	if err := g.acquire(done, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if snap := g.snapshot(); snap.ActiveDownstream != 1 || snap.EffectiveLimit != 0 {
+		t.Fatalf("probe not consumed atomically: %+v", snap)
+	}
+	if err := g.acquire(done, time.Millisecond); err == nil {
+		t.Fatal("unbounded second probe")
+	}
+	g.release()
+	g.mu.Lock()
+	late = g.cooldown.Add(time.Millisecond)
+	g.mu.Unlock()
+	g.sample(capacitySample{reason: "fd sensor unavailable"}, late)
+	if g.snapshot().EffectiveLimit != 1 {
+		t.Fatal("cooldown cannot autonomously probe recovery")
+	}
+	if err := g.acquire(done, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	g.recordAcceptError(syscall.ENFILE)
+	if g.snapshot().EffectiveLimit != 0 {
+		t.Fatal("repeat exhaustion did not fence new admission")
+	}
+	g.release()
 }

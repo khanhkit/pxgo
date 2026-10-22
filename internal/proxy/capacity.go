@@ -25,6 +25,7 @@ const (
 	capacityStateNormal                  = "normal"
 	capacityStatePressure                = "pressure"
 	capacityStateRecovering              = "recovering"
+	capacityEmergencyFD                  = "emergency-fd"
 )
 
 func experimentalCapacityMode() (capacityMode, error) {
@@ -70,6 +71,8 @@ type capacityGovernor struct {
 	healthy        int
 	pressured      int
 	cooldown       time.Time
+	lastSample     time.Time
+	probeAllowed   bool // at most one post-cooldown new socket when sensors are unavailable
 	closed         bool
 }
 
@@ -90,8 +93,16 @@ func (g *capacityGovernor) recomputeLocked() {
 	if g.manual > 0 && g.manual < n {
 		n = g.manual
 	}
-	if g.state == capacityStatePressure && g.reason == "emergency-fd" {
+	if g.state == capacityStatePressure && g.reason == capacityEmergencyFD {
 		n = 0
+		if g.probeAllowed {
+			// An already established tunnel does not consume the bounded recovery
+			// probe, which allows exactly one additional downstream socket.
+			n = g.active + 1
+			if g.manual > 0 && n > g.manual {
+				n = g.manual
+			}
+		}
 	}
 	if n < 0 {
 		n = 0
@@ -135,8 +146,12 @@ func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) err
 	if wait <= 0 {
 		return capacityWaitTimeout{}
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	registered := false
 	defer func() {
 		if registered {
@@ -157,6 +172,11 @@ func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) err
 		} // shadow never acquires; legacy channel remains authoritative
 		if g.active < limit {
 			g.active++
+			if g.probeAllowed {
+				g.probeAllowed = false
+				g.cooldown = g.lastSample.Add(3 * time.Second)
+				g.recomputeLocked()
+			}
 			g.mu.Unlock()
 			return nil
 		}
@@ -164,6 +184,8 @@ func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) err
 			g.waits++
 			g.waiting++
 			registered = true
+			// No timer allocation on the successful uncontended hot path.
+			timer = time.NewTimer(wait)
 		}
 		changed := g.changed
 		g.mu.Unlock()
@@ -191,14 +213,21 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 	if g.closed {
 		return
 	}
+	g.lastSample = now
 	if !s.available {
 		g.sensor = "unsupported"
 		g.healthy = 0
 		g.pressured = 0
+		if g.state == capacityStatePressure && g.reason == capacityEmergencyFD && !now.Before(g.cooldown) {
+			// When FD instrumentation also fails during exhaustion, allow one
+			// bounded recovery probe after cooldown, never an uncontrolled reopen.
+			g.probeAllowed = true
+		}
 		g.recomputeLocked()
 		return
 	}
 	g.sensor = "fresh"
+	g.probeAllowed = false // fresh instrumentation supersedes an unverified probe
 	// FD headroom is a conservative trial estimate (4 descriptors per new
 	// CONNECT and 256 descriptors reserved for all other process traffic).
 	const reserveFD = 256
@@ -264,11 +293,12 @@ func (g *capacityGovernor) recordAcceptError(err error) {
 		return
 	}
 	g.state = capacityStatePressure
-	g.reason = "emergency-fd"
+	g.reason = capacityEmergencyFD
 	g.sensor = "critical"
 	g.lastTransition = time.Now()
 	g.healthy = 0
 	g.cooldown = time.Now().Add(3 * time.Second)
+	g.probeAllowed = false
 	g.recomputeLocked()
 }
 
