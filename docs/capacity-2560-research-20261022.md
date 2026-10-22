@@ -76,3 +76,11 @@ Before production AUTO promotion, measure server process separated from the clie
 ### R8 safety-review correction: hard window versus free slots
 
 Raw native Windows CI at R8 SHA `681890d` confirmed `active=2560` but logged `hard_envelope=6656` (2560 + 4096 incremental headroom). The trial ceiling of 4096 must **not** silently convert into 4096 *new* slots beyond active. The corrected R9 governor clamps normal Windows hard envelope to 4096 total admitted sockets, while never evicting already-active useful sockets if the resource envelope is reduced. This is a provisional experiment limit, **not a production-calibrated Windows handle quota**.
+
+### R9 data-plane and native-failure coverage (2026-10-23)
+
+A CONNECT is counted as admitted only **after an application payload completes a bidirectional echo round-trip through PxGo**, not merely after `HTTP 200 Connection Established`. The 2,560 counted echo-verified tunnels remain held together until the common release barrier. Linux local opt-in test: 2,560/2,560 echo-verified tunnels, zero dial errors, p95 handshake+echo approximately 37ms (co-located benchmark, not a production latency SLO).
+
+The Windows native source now uses an injectable read-handle/read-memory seam to test API failures, zero handles, invalid/contradictory `MEMORYSTATUSEX`, load over 100%, low available memory, handle-policy ceiling, and a healthy bounded case. All such inputs leave no inferred new capacity except for independently plausible valid readings. The seam does not modify actual process/kernel handles and uses no mutable global test hooks.
+
+These tests strengthen **preview safety evidence** only. Native Windows Job Object process memory limits, realistic corporate authentication, independent process RSS/handle attribution, long-run mixed traffic and real AD/SSPI remain separate release gates.

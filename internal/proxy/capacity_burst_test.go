@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -52,7 +53,9 @@ func TestCapacityBurst2560(t *testing.T) {
 			if e != nil {
 				return
 			}
-			go func(c net.Conn) { defer c.Close(); _, _ = io.Copy(io.Discard, c) }(c)
+			// Echo a real payload through CONNECT to verify each held tunnel is
+			// bidirectionally operational, not merely counted by the proxy.
+			go func(c net.Conn) { defer c.Close(); _, _ = io.Copy(c, c) }(c)
 		}
 	}()
 	cfg := config.Default()
@@ -115,6 +118,16 @@ func TestCapacityBurst2560(t *testing.T) {
 				return
 			}
 			latency := time.Since(begun)
+			const echoProbe = "pxgo-capacity-health-check"
+			if _, e = conn.Write([]byte(echoProbe)); e != nil {
+				results <- outcome{}
+				return
+			}
+			response := make([]byte, len(echoProbe))
+			if _, e = io.ReadFull(conn, response); e != nil || !bytes.Equal(response, []byte(echoProbe)) {
+				results <- outcome{}
+				return
+			}
 			// The established tunnel must remain genuinely live until release.
 			// The handshake-only timeout must not terminate a healthy tunnel.
 			_ = conn.SetDeadline(time.Time{})

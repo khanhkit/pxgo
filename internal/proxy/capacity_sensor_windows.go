@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 
@@ -31,18 +32,43 @@ type capacityWindowsMemory struct {
 }
 
 func readCapacitySample() capacitySample {
-	process, err := windows.GetCurrentProcess()
-	if err != nil {
-		return capacitySample{reason: "windows-process-handle-unavailable"}
-	}
-	var handles uint32
-	ok, _, _ := capacityGetProcessHandleCount.Call(uintptr(process), uintptr(unsafe.Pointer(&handles)))
-	if ok == 0 {
+	return readCapacitySampleWindows(
+		func() (uint32, error) {
+			process, err := windows.GetCurrentProcess()
+			if err != nil {
+				return 0, err
+			}
+			var handles uint32
+			ok, _, _ := capacityGetProcessHandleCount.Call(uintptr(process), uintptr(unsafe.Pointer(&handles)))
+			if ok == 0 {
+				return 0, errors.New("GetProcessHandleCount failed")
+			}
+			return handles, nil
+		},
+		func() (capacityWindowsMemory, error) {
+			mem := capacityWindowsMemory{length: uint32(unsafe.Sizeof(capacityWindowsMemory{}))}
+			ok, _, _ := capacityGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&mem)))
+			if ok == 0 {
+				return capacityWindowsMemory{}, errors.New("GlobalMemoryStatusEx failed")
+			}
+			return mem, nil
+		},
+	)
+}
+
+// Injectable native input permits deterministic API failure/invalid-result
+// testing without modifying the OS process, kernel handles, or global state.
+func readCapacitySampleWindows(
+	readHandles func() (uint32, error),
+	readMemory func() (capacityWindowsMemory, error),
+) capacitySample {
+	handles, err := readHandles()
+	if err != nil || handles == 0 {
 		return capacitySample{reason: "windows-native-handles-unavailable"}
 	}
-	mem := capacityWindowsMemory{length: uint32(unsafe.Sizeof(capacityWindowsMemory{}))}
-	ok, _, _ = capacityGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&mem)))
-	if ok == 0 || mem.totalPhys == 0 || mem.totalPageFile == 0 || mem.load > 100 {
+	mem, err := readMemory()
+	if err != nil || mem.totalPhys == 0 || mem.totalPageFile == 0 || mem.load > 100 ||
+		mem.availPhys > mem.totalPhys || mem.availPageFile > mem.totalPageFile {
 		return capacitySample{reason: "windows-native-memory-unavailable"}
 	}
 
