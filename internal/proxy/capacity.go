@@ -3,6 +3,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"strings"
@@ -51,7 +52,11 @@ const (
 // Owner-requested provisional startup target for opt-in AUTO. The Linux
 // preflight sample can reduce the effective limit below this target when the
 // real per-process FD budget cannot safely support 256 downstream sockets.
-const capacityColdStartWindow = 256
+const (
+	capacityColdStartWindow    = 256
+	researchPolicyPID          = "pid"
+	researchPolicyProportional = "proportional"
+)
 
 type capacitySample struct {
 	available        bool
@@ -83,8 +88,14 @@ type capacityGovernor struct {
 	pressured      int
 	cooldown       time.Time
 	lastSample     time.Time
-	probeAllowed   bool // at most one post-cooldown new socket when sensors are unavailable
-	closed         bool
+	probeAllowed   bool                    // at most one post-cooldown new socket when sensors are unavailable
+	classes        *connectionClassManager // opt-in accounting ONLY, same physical permit
+	// Research-only: synthetic PI/PID alternatives; NOT shipped or proposed
+	// for release, isolated experiment policy gated by PXGO_RESEARCH_CAPACITY_POLICY.
+	researchIntegral     float64
+	researchDeriv        float64
+	researchPrevMeasured float64
+	closed               bool
 }
 
 func newCapacityGovernor(mode capacityMode, cfg config.Config) *capacityGovernor {
@@ -92,6 +103,10 @@ func newCapacityGovernor(mode capacityMode, cfg config.Config) *capacityGovernor
 		return nil
 	}
 	g := &capacityGovernor{changed: make(chan struct{}), mode: mode, manual: cfg.MaxConnections, soft: capacityColdStartWindow, hard: capacityColdStartWindow, state: capacityStateNormal, sensor: "cold-start", lastTransition: time.Now()}
+	if mode == modeAuto && experimentalConnectionClassesEnabled() {
+		g.classes = newConnectionClassManager()
+		g.classes.sampleBudgets(g.soft)
+	}
 	g.recomputeLocked()
 	return g
 }
@@ -301,6 +316,8 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 			}
 			g.reason = "fd-headroom"
 			g.soft = max(1, g.soft/2)
+			g.researchIntegral = 0
+			g.researchDeriv = 0
 			g.cooldown = now.Add(3 * time.Second)
 		}
 	} else {
@@ -327,6 +344,48 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 				// No goroutine scheduler or per-route limits: the server-scoped
 				// downstream gate remains the single authority.
 				step := max(32, min(g.soft/2, 512))
+				// RESEARCH MODE ONLY: leave R11 unchanged without an explicit
+				// local experiment env. Run an identical real 2,560-CONNECT test
+				// against PI/PID/HPA policies in this isolated lab checkout.
+				switch os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY") {
+				case "fast_saturation":
+					// Lab-only faster multiplicative ramp, still clipped by true
+					// resource hard ceiling and all original overload safety gates.
+					step = max(64, min(g.soft, 1024))
+				case "pi", researchPolicyPID, researchPolicyProportional:
+					backlog := float64(g.waiting)
+					if backlog <= 0 {
+						backlog = float64(max(0, g.active-g.effective+1))
+					}
+					// Integral is conditional: while saturating, freeze it;
+					// derivative is on measured active sockets to avoid setpoint kick.
+					dMeasured := (float64(g.active) - g.researchPrevMeasured) / .5
+					g.researchDeriv = .75*g.researchDeriv + .25*dMeasured
+					g.researchPrevMeasured = float64(g.active)
+					kp, ki, kd := .55, .02, 0.
+					policy := os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY")
+					if policy == researchPolicyPID {
+						kp = .55
+						ki = .02
+						kd = .12
+					}
+					if policy == researchPolicyProportional {
+						kp = .55
+						ki = 0
+						kd = 0
+					}
+					unclipped := kp*backlog + ki*g.researchIntegral - kd*g.researchDeriv
+					if policy == researchPolicyPID && unclipped < 0 {
+						unclipped = 0
+					}
+					step = max(32, min(512, int(math.Round(unclipped))))
+					if step < 512 && g.soft+step < g.hard {
+						g.researchIntegral = math.Min(3000, g.researchIntegral+backlog*.5)
+					}
+				case "hpa":
+					// Demand-ratio controller with work-conserving, bounded slew.
+					step = max(32, min(512, g.active+g.waiting-g.soft))
+				}
 				g.soft += min(step, g.hard-g.soft)
 				g.cooldown = now.Add(capacityGrowthCooldown)
 			}
@@ -363,7 +422,12 @@ func (g *capacityGovernor) snapshot() diagnostic.CapacitySnapshot {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return diagnostic.CapacitySnapshot{Mode: string(g.mode), State: g.state, ActiveDownstream: g.active, SoftWindow: g.soft, HardEnvelope: g.hard, EffectiveLimit: g.effective, ManualCeiling: g.manual, ManualCeilingEnabled: g.manual > 0, PressureReason: g.reason, AdmissionWaits: g.waits, AdmissionTimeouts: g.timeouts, SensorAvailability: g.sensor, LastTransition: g.lastTransition}
+	snapshot := diagnostic.CapacitySnapshot{Mode: string(g.mode), State: g.state, ActiveDownstream: g.active, SoftWindow: g.soft, HardEnvelope: g.hard, EffectiveLimit: g.effective, ManualCeiling: g.manual, ManualCeilingEnabled: g.manual > 0, PressureReason: g.reason, AdmissionWaits: g.waits, AdmissionTimeouts: g.timeouts, SensorAvailability: g.sensor, LastTransition: g.lastTransition}
+	if g.classes != nil {
+		c := g.classes.snapshot()
+		snapshot.ClassPools = &diagnostic.CapacityClassSnapshot{Provisional: c.Provisional, Short: c.Short, Long: c.Long, ShortSoftBudget: c.ShortBudget, LongSoftBudget: c.LongBudget, Promoted: c.Promoted, LongOverflow: c.LongOverflow, Total: c.Total}
+	}
+	return snapshot
 }
 
 func (s *Server) capacityDiagnosticSnapshot() diagnostic.CapacitySnapshot {

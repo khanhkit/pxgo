@@ -196,6 +196,7 @@ func TestCapacityBurst2560(t *testing.T) {
 	peak := px.capacityDiagnosticSnapshot()
 	successBeforeRelease := admitted.Load()
 	tunnelsBeforeRelease := px.ActiveTunnels()
+	assertCapacityBurstClassAccounting(t, px, mode, attempts)
 	goroutinesBeforeRelease := runtime.NumGoroutine()
 	fdAt := readCapacitySample()
 	released.Store(true)
@@ -252,5 +253,17 @@ func TestCapacityBurst2560(t *testing.T) {
 	}
 	if mode == "auto" && (successBeforeRelease != attempts || tunnelsBeforeRelease != attempts || successes != attempts) {
 		t.Fatalf("AUTO 2560 simultaneous CONNECT admission NOT VERIFIED (attempted=%d admitted_before_release=%d live_tunnels_at_release=%d dial_errors=%d first_error=%q sensor=%s); leave release gate BLOCKED", attempts, successBeforeRelease, tunnelsBeforeRelease, dialErrors, firstDialError, peak.SensorAvailability)
+	}
+}
+
+func assertCapacityBurstClassAccounting(t *testing.T, px *Server, mode string, attempts int) {
+	t.Helper()
+	if mode != "auto" || px.capacity == nil || px.capacity.classes == nil {
+		return
+	}
+	classes := px.capacity.classes.snapshot()
+	t.Logf("CLASS_POOLS total=%d provisional=%d short=%d long=%d short_soft=%d long_soft=%d promoted=%d long_debt=%d", classes.Total, classes.Provisional, classes.Short, classes.Long, classes.ShortBudget, classes.LongBudget, classes.Promoted, classes.LongOverflow)
+	if classes.Total != attempts || classes.Long != attempts || classes.Provisional != 0 {
+		t.Fatalf("all %d CONNECT tunnels must be long in a single permit budget: %+v", attempts, classes)
 	}
 }

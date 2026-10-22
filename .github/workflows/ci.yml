@@ -288,6 +288,68 @@ jobs:
               -run '^TestCapacityBurst2560$' -count=1 -v -timeout=55s
           done
 
+  windows-connection-class-research:
+    name: Windows capacity research (${{ matrix.policy }}, classes=${{ matrix.class_mode }})
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 24
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: [r11, fast_saturation]
+        class_mode: [off, 'on']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify SHA and collect Windows runner metadata
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable HEAD mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/runner.txt
+          "go=$(go version)" | Add-Content benchmarks/runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
+          "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
+          Get-Content benchmarks/runner.txt
+      - name: Native Windows R11 versus guarded fast-ramp and two-class tracking
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_BURST_2560: '1'
+          PXGO_CAPACITY_BENCH_MODE: 'auto'
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
+        run: |
+          # Bounded SYN waves isolate 2,560 simultaneously held live tunnels
+          # from the separate known Windows SOMAXCONN 2,560-SYN burst limit.
+          $env:PXGO_CAPACITY_SYN_SPIKE = '0'
+          foreach ($run in 1,2) {
+            go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=70s 2>&1 |
+              Tee-Object -FilePath "benchmarks/2560-$run.log"
+            if ($LASTEXITCODE -ne 0) { throw "2560 Windows live-tunnel benchmark failed run $run" }
+          }
+          go test ./internal/proxy -run '^TestConnectionClass' -count=5 -v -timeout=60s 2>&1 |
+            Tee-Object -FilePath benchmarks/class-lifecycle.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows two-class lifecycle failed' }
+          go test ./internal/proxy -run '^$' -bench '^BenchmarkConnectionClass' -benchmem -count=3 2>&1 |
+            Tee-Object -FilePath benchmarks/class-microbenchmark.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows class microbenchmarks failed' }
+      - name: Preserve benchmark and failure evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-capacity-${{ matrix.policy }}-classes-${{ matrix.class_mode }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-native-sspi:
     name: Native Windows SSPI gate
     if: github.event_name == 'workflow_dispatch' && inputs.native_sspi

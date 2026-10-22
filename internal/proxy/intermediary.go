@@ -13,6 +13,7 @@ const (
 	pxgoVia          = "1.1 pxgo"
 	headerConnection = "Connection"
 	headerKeepAlive  = "Keep-Alive"
+	headerUpgrade    = "Upgrade"
 )
 
 var fixedHopByHopHeaders = []string{
@@ -21,7 +22,7 @@ var fixedHopByHopHeaders = []string{
 	"Proxy-Connection",
 	"TE",
 	"Transfer-Encoding",
-	"Upgrade",
+	headerUpgrade,
 }
 
 func stripIntermediaryHeaders(header http.Header, stripProxyAuth bool) {

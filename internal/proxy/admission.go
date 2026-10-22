@@ -32,6 +32,10 @@ func (l *admissionListener) Accept() (net.Conn, error) {
 			_ = conn.Close()
 			return nil, err
 		}
+		if classes := l.governor.classes; classes != nil {
+			lease := classes.open(time.Now())
+			return &admissionConn{Conn: conn, classification: lease, release: func() { lease.finish(); l.governor.release() }}, nil
+		}
 		return &admissionConn{Conn: conn, release: l.governor.release}, nil
 	}
 	select {
@@ -58,8 +62,9 @@ func (l *admissionListener) Close() error {
 
 type admissionConn struct {
 	net.Conn
-	release     func()
-	releaseOnce sync.Once
+	release        func()
+	classification *connectionClassLease
+	releaseOnce    sync.Once
 }
 
 func (c *admissionConn) Close() error {
