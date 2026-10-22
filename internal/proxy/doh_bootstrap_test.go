@@ -372,3 +372,69 @@ func TestDoHBootstrapPACReloadKeepsRoutingConsistent(t *testing.T) {
 		t.Fatalf("valid bootstrap route was discarded: second hits=%d", secondHits.Load())
 	}
 }
+
+// A slow PAC fetch begun before Shutdown must not resurrect either routing
+// snapshot after the server has entered its terminal state.
+func TestDoHBootstrapPACReloadCannotResurrectAfterShutdown(t *testing.T) {
+	var fetches atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	pacServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if fetches.Add(1) == 3 {
+			close(entered) // first two requests built the initial ordinary+bootstrap proxies
+			<-release
+		}
+		_, _ = io.WriteString(w, `function FindProxyForURL(url, host) { return "DIRECT"; }`)
+	}))
+	defer pacServer.Close()
+	cfg := config.Default()
+	cfg.DNS = "https://203.0.113.77/dns-query"
+	cfg.PAC = pacServer.URL
+	cfg.ProxyReload = 1
+	cfg.SockTimeout = 2
+	px, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- px.reloadProxy(ctx, true) }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("PAC reload did not start")
+	}
+	if err := px.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	select {
+	case err := <-reloadDone:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("reload error=%v, want terminal fence", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("reload did not observe shutdown fence")
+	}
+	px.wmu.RLock()
+	defer px.wmu.RUnlock()
+	if !px.routingClosed || px.w != nil {
+		t.Fatalf("ordinary route resurrected after shutdown: closed=%v, route=%p", px.routingClosed, px.w)
+	}
+	if px.dohBootstrap == nil {
+		t.Fatal("expected a DoH bootstrap route holder")
+	}
+	px.dohBootstrap.mu.RLock()
+	defer px.dohBootstrap.mu.RUnlock()
+	if px.dohBootstrap.current != nil {
+		t.Fatal("DoH bootstrap route resurrected after shutdown")
+	}
+}

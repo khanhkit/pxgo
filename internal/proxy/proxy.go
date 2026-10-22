@@ -50,6 +50,7 @@ type Server struct {
 	cfg           config.Config
 	w             *wproxy.Wproxy
 	wmu           sync.RWMutex
+	routingClosed bool // protected by wmu; publication is terminal after Shutdown begins
 	lastReload    time.Time
 	startedAt     time.Time
 	srv           *http.Server
@@ -137,6 +138,9 @@ func New(cfg config.Config) (*Server, error) {
 			return nil, fmt.Errorf("DoH bootstrap proxy: %w", buildErr)
 		}
 		dohBootstrap = &dohBootstrapRoute{current: bootstrapWproxy}
+		// This outbound-only helper relies on cfg, krb and the zero-value
+		// authMechanism tracker; supervisor hooks are explicitly nil-safe.
+		// It never acts as an HTTP listener or owns Server lifecycle state.
 		bootstrapServer = &Server{cfg: cfg}
 		dnsPolicy.SetDoHDialContext(func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if network != "tcp" {
@@ -514,6 +518,11 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	var err error
 	s.once.Do(func() {
+		// Fence concurrent reloads before shutdown waits on listeners/tunnels.
+		// Publication checks the same lock, so no route can be resurrected.
+		s.wmu.Lock()
+		s.routingClosed = true
+		s.wmu.Unlock()
 		tunnelsDone := s.beginTunnelShutdown()
 		s.stateMu.RLock()
 		srv := s.srv
@@ -729,6 +738,10 @@ func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 		return nil
 	}
 	s.wmu.RLock()
+	if s.routingClosed {
+		s.wmu.RUnlock()
+		return net.ErrClosed
+	}
 	reloadable := s.proxyReloadableLocked()
 	due := force || time.Since(s.lastReload) >= time.Duration(s.cfg.ProxyReload)*time.Second
 	s.wmu.RUnlock()
@@ -762,6 +775,14 @@ func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 		return err
 	}
 	s.wmu.Lock()
+	if s.routingClosed {
+		s.wmu.Unlock()
+		_ = wp.Close()
+		if freshBootstrap != nil {
+			_ = freshBootstrap.Close()
+		}
+		return net.ErrClosed
+	}
 	if s.dohBootstrap != nil {
 		s.dohBootstrap.mu.Lock()
 	}
