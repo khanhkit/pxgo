@@ -483,3 +483,45 @@ func TestDNSPolicyDomainMatcher(t *testing.T) {
 		}
 	}
 }
+
+// The custom dialer must carry a complete validated TLS/DoH exchange, not
+// just reach the upstream CONNECT proxy. Preserve the caller's TLS roots.
+func TestDoHDialerPreservesValidatedTLSAndDNSPayload(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/dns-message" {
+			t.Errorf("unexpected DoH request: %s %s", r.Method, r.Header.Get("Content-Type"))
+		}
+		query, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		response, err := fixtureResponse(query, net.IPv4(198, 51, 100, 42), false)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/dns-message")
+		_, _ = w.Write(response)
+	}))
+	defer server.Close()
+	p, err := newPolicy(server.URL+"/dns-query", time.Second, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	p.SetDoHDialContext(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		calls.Add(1)
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	})
+	ips, err := p.LookupIP(context.Background(), "doh-through-dialer.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ips) != 1 || !ips[0].Equal(net.IPv4(198, 51, 100, 42)) {
+		t.Fatalf("ips=%v", ips)
+	}
+	if calls.Load() == 0 {
+		t.Fatal("DoH bypassed custom bootstrap dialer")
+	}
+}

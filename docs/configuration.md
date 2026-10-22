@@ -98,6 +98,8 @@ Multiple non-system endpoints inside one `dns` value may be comma-separated. The
 
 INI files may repeat `dns` to create ordered resolver rules. `dns_only` limits the immediately preceding rule to matching domains; if it does not match, evaluation continues to the next rule and ultimately the OS resolver if no rule matches. `dns_bypass` is terminal for matching domains and sends them directly to the OS resolver. `*.example.com` matches subdomains only; `example.com` matches both the apex and its subdomains. If both selectors are present on one rule, `dns_bypass` wins.
 
+DoH HTTPS requests follow PxGo upstream proxy/PAC routing, using authenticated CONNECT where required. Proxy hostname and PAC bootstrap use system DNS, independently of the selected DoH rule; this avoids recursive DoH resolution while preserving system/VPN split DNS for bootstrap. DIRECT DoH endpoints with hostnames also use system DNS to bootstrap the endpoint. DoH transport never consults process HTTP proxy environment settings directly (which might point back to PxGo).
+
 Remote HTTP(S) PAC source loading is a control-plane bootstrap and always uses the OS resolver, so an internal PAC URL remains reachable on split-DNS/VPN networks. PAC `dnsResolve()`, ordinary destinations, upstream-proxy hostnames, and noproxy address lookups use the ordered DNS policy above. A configured rule itself remains fail-closed; there is no implicit system-DNS fallback after that rule has been selected.
 
 Examples:

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -42,12 +43,14 @@ const (
 	maxMemoryBody    = 1 << 20
 	goosWindows      = "windows"
 	quitControlPath  = "/PxgoQuit"
+	localhostName    = "localhost"
 )
 
 type Server struct {
 	cfg           config.Config
 	w             *wproxy.Wproxy
 	wmu           sync.RWMutex
+	routingClosed bool // protected by wmu; publication is terminal after Shutdown begins
 	lastReload    time.Time
 	startedAt     time.Time
 	srv           *http.Server
@@ -63,6 +66,7 @@ type Server struct {
 	active        int64
 	transports    *boundedTransportCache
 	dnsResolver   *dnsresolver.Policy
+	dohBootstrap  *dohBootstrapRoute // independently resolved, reloadable OS-DNS routing
 	dnsCache      *dnscache.Cache
 
 	tunnelMu           sync.Mutex
@@ -76,6 +80,14 @@ type Server struct {
 	clientAuthList []string
 	allowSet       wproxy.IPSet
 	hostIPs        atomic.Pointer[hostIPEntry]
+}
+
+// A DoH request retains a read lease until its proxy route and CONNECT are
+// established. Reload and shutdown retire obsolete OS-DNS routing only after
+// in-flight bootstrap users finish, never leaving a closed resolver in use.
+type dohBootstrapRoute struct {
+	mu      sync.RWMutex
+	current *wproxy.Wproxy
 }
 
 // hostIPEntry caches the local interface addresses used by --hostonly checks;
@@ -115,30 +127,85 @@ func New(cfg config.Config) (*Server, error) {
 	if !dnsPolicy.IsSystem() {
 		dnsCache = dnscache.NewWithTTL(dnsPolicy.LookupIPTTL)
 	}
+	var dohBootstrap *dohBootstrapRoute
+	var bootstrapServer *Server
+	if mode := dnsPolicy.Status().Mode; mode == "doh" || mode == "mixed" {
+		// Bootstrap PAC/noproxy and upstream proxy hosts independently using
+		// OS DNS. Never resolve the proxy required by DoH through DoH itself.
+		bootstrapDialer := (&net.Dialer{Timeout: configuredSockTimeout(cfg), KeepAlive: 30 * time.Second}).DialContext
+		bootstrapWproxy, buildErr := buildWproxy(cfg, dnscache.New(nil))
+		if buildErr != nil {
+			return nil, fmt.Errorf("DoH bootstrap proxy: %w", buildErr)
+		}
+		dohBootstrap = &dohBootstrapRoute{current: bootstrapWproxy}
+		// This outbound-only helper relies on cfg, krb and the zero-value
+		// authMechanism tracker; supervisor hooks are explicitly nil-safe.
+		// It never acts as an HTTP listener or owns Server lifecycle state.
+		bootstrapServer = &Server{cfg: cfg}
+		dnsPolicy.SetDoHDialContext(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if network != "tcp" {
+				return nil, fmt.Errorf("DoH bootstrap requires TCP, got %s", network)
+			}
+			dohBootstrap.mu.RLock()
+			defer dohBootstrap.mu.RUnlock()
+			if dohBootstrap.current == nil {
+				return nil, errors.New("DoH bootstrap proxy routing is closed")
+			}
+			proxies, _, _, routeErr := dohBootstrap.current.FindProxyForURL("https://" + addr)
+			if routeErr != nil {
+				return nil, fmt.Errorf("DoH bootstrap route: %w", routeErr)
+			}
+			for _, candidate := range proxies {
+				if isLocalDoHProxyLoop(candidate, cfg.Port) {
+					return nil, errors.New("DoH bootstrap proxy points back to PxGo listener")
+				}
+			}
+			// Proxy names are resolved with the OS resolver and pinned to the
+			// checked IPs for the actual dial, preventing hostname aliases and
+			// DNS rebinding from bypassing the local-listener recursion guard.
+			safeDial := newDoHBootstrapSafeDialer(proxies, cfg.Port, bootstrapDialer)
+			conn, leftover, connectErr := bootstrapServer.connectWithProxyFallbackDial(ctx, addr, "", proxies, safeDial)
+			if connectErr != nil || len(leftover) == 0 {
+				return conn, connectErr
+			}
+			return &dohBufferedConn{Conn: conn, pending: bytes.NewReader(leftover)}, nil
+		})
+	}
 	wp, err := buildWproxy(cfg, dnsCache)
 	if err != nil {
+		if dohBootstrap != nil {
+			_ = dohBootstrap.current.Close()
+		}
 		return nil, err
 	}
 	krb, err := buildKerberosManager(cfg)
 	if err != nil {
+		_ = wp.Close()
+		if dohBootstrap != nil {
+			_ = dohBootstrap.current.Close()
+		}
 		return nil, err
 	}
 	if krb != nil {
 		krb.Check(true)
 	}
+	if bootstrapServer != nil {
+		bootstrapServer.krb = krb
+	}
 	s := &Server{
-		cfg:         cfg,
-		w:           wp,
-		lastReload:  time.Now(),
-		startedAt:   time.Now(),
-		port:        cfg.Port,
-		krb:         krb,
-		closed:      make(chan struct{}),
-		transports:  newBoundedTransportCache(maxCachedTransports),
-		dnsResolver: dnsPolicy,
-		dnsCache:    dnsCache,
-		tunnels:     make(map[*managedTunnel]struct{}),
-		tunnelZero:  closedSignal(),
+		cfg:          cfg,
+		w:            wp,
+		lastReload:   time.Now(),
+		startedAt:    time.Now(),
+		port:         cfg.Port,
+		krb:          krb,
+		closed:       make(chan struct{}),
+		transports:   newBoundedTransportCache(maxCachedTransports),
+		dnsResolver:  dnsPolicy,
+		dohBootstrap: dohBootstrap,
+		dnsCache:     dnsCache,
+		tunnels:      make(map[*managedTunnel]struct{}),
+		tunnelZero:   closedSignal(),
 	}
 	s.sup = newRuntimeSupervisor(s)
 	s.clientAuthList = clientAuthMethods(cfg.ClientAuth)
@@ -222,7 +289,7 @@ func isRemotePlaintextExposure(cfg config.Config) bool {
 		if host == "" {
 			continue
 		}
-		if strings.EqualFold(host, "localhost") {
+		if strings.EqualFold(host, localhostName) {
 			continue
 		}
 		ip := net.ParseIP(host)
@@ -266,6 +333,19 @@ func configuredSockTimeout(cfg config.Config) time.Duration {
 
 func configuredWriteTimeout(cfg config.Config) time.Duration {
 	return 2 * configuredSockTimeout(cfg)
+}
+
+// Reject an upstream proxy pointing at the local PxGo listener.
+func isLocalDoHProxyLoop(candidate wproxy.Server, listenerPort int) bool {
+	if candidate == wproxy.Direct || candidate.Port != listenerPort {
+		return false
+	}
+	host := strings.Trim(strings.ToLower(candidate.Host), "[]")
+	if host == localhostName || host == localhostName+"." {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
 
 func newDNSPolicy(cfg config.Config) (*dnsresolver.Policy, error) {
@@ -438,6 +518,11 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	var err error
 	s.once.Do(func() {
+		// Fence concurrent reloads before shutdown waits on listeners/tunnels.
+		// Publication checks the same lock, so no route can be resurrected.
+		s.wmu.Lock()
+		s.routingClosed = true
+		s.wmu.Unlock()
 		tunnelsDone := s.beginTunnelShutdown()
 		s.stateMu.RLock()
 		srv := s.srv
@@ -452,6 +537,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			s.sup.Close()
 		}
 		s.clearTransports()
+		if s.dohBootstrap != nil {
+			s.dohBootstrap.mu.Lock()
+			oldBootstrap := s.dohBootstrap.current
+			s.dohBootstrap.current = nil
+			if oldBootstrap != nil {
+				if closeErr := oldBootstrap.Close(); closeErr != nil && err == nil {
+					err = fmt.Errorf("close DoH bootstrap resolver: %w", closeErr)
+				}
+			}
+			s.dohBootstrap.mu.Unlock()
+		}
 		s.wmu.Lock()
 		wp := s.w
 		s.w = nil
@@ -642,6 +738,10 @@ func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 		return nil
 	}
 	s.wmu.RLock()
+	if s.routingClosed {
+		s.wmu.RUnlock()
+		return net.ErrClosed
+	}
 	reloadable := s.proxyReloadableLocked()
 	due := force || time.Since(s.lastReload) >= time.Duration(s.cfg.ProxyReload)*time.Second
 	s.wmu.RUnlock()
@@ -657,18 +757,55 @@ func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
+	var freshBootstrap *wproxy.Wproxy
+	if s.dohBootstrap != nil {
+		// Prepare both routing snapshots before publication. A failed bootstrap
+		// refresh cannot leave normal and DoH routes on different generations.
+		freshBootstrap, err = buildWproxy(s.cfg, dnscache.New(nil))
+		if err != nil {
+			_ = wp.Close()
+			return fmt.Errorf("reload DoH bootstrap proxy: %w", err)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		_ = wp.Close()
+		if freshBootstrap != nil {
+			_ = freshBootstrap.Close()
+		}
 		return err
 	}
 	s.wmu.Lock()
+	if s.routingClosed {
+		s.wmu.Unlock()
+		_ = wp.Close()
+		if freshBootstrap != nil {
+			_ = freshBootstrap.Close()
+		}
+		return net.ErrClosed
+	}
+	if s.dohBootstrap != nil {
+		s.dohBootstrap.mu.Lock()
+	}
 	old := s.w
 	changed := old == nil || wp.Mode != old.Mode || !equalServers(wp.Servers, old.Servers)
 	s.w = wp
+	var oldBootstrap *wproxy.Wproxy
+	if s.dohBootstrap != nil {
+		oldBootstrap = s.dohBootstrap.current
+		s.dohBootstrap.current = freshBootstrap
+	}
 	s.lastReload = time.Now()
 	var closeErr error
 	if old != nil {
 		closeErr = old.Close()
+	}
+	if oldBootstrap != nil {
+		if err := oldBootstrap.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	if s.dohBootstrap != nil {
+		s.dohBootstrap.mu.Unlock()
 	}
 	s.wmu.Unlock()
 	if changed {

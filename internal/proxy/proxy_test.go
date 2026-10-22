@@ -1160,6 +1160,13 @@ func TestUpstreamProxyBasicAuthHTTPAndConnect(t *testing.T) {
 		{httpUp.URL, "http parent auth ok"},
 		{httpsUp.URL, "connect parent auth ok"},
 	} {
+		if strings.HasPrefix(tc.url, "https://") {
+			mock := newPersistentAuthConnectParent(t, "Basic")
+			defer mock.Close()
+			childCfg.Server = strings.TrimPrefix(mock.URL, "http://")
+			child = startTestProxy(t, childCfg)
+			client = proxyClient(t, child.Port())
+		}
 		resp, err := client.Get(tc.url)
 		if err != nil {
 			t.Fatal(err)
@@ -1208,6 +1215,13 @@ func TestUpstreamProxyDigestAuthHTTPAndConnect(t *testing.T) {
 				{httpUp.URL, "http parent digest ok"},
 				{httpsUp.URL, "connect parent digest ok"},
 			} {
+				if strings.HasPrefix(tc.url, "https://") {
+					mock := newPersistentAuthConnectParent(t, "Digest")
+					defer mock.Close()
+					childCfg.Server = strings.TrimPrefix(mock.URL, "http://")
+					child = startTestProxy(t, childCfg)
+					client = proxyClient(t, child.Port())
+				}
 				resp, err := client.Get(tc.url)
 				if err != nil {
 					t.Fatal(err)
@@ -1362,7 +1376,7 @@ func TestUpstreamNegotiateFailureForcesKerberosReloadHTTP(t *testing.T) {
 }
 
 func TestUpstreamNegotiateFailureForcesKerberosReloadConnect(t *testing.T) {
-	parent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	parent := newPersistentConnectTestProxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect {
 			t.Fatalf("expected CONNECT, got %s", r.Method)
 		}
@@ -1540,7 +1554,7 @@ func runUpstreamSPNEGOAuthHTTP(t *testing.T) {
 func runUpstreamConnectionAuthConnect(t *testing.T, scheme string) {
 	t.Helper()
 	var authHeaders []string
-	parent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	parent := newPersistentConnectTestProxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect {
 			t.Fatalf("expected CONNECT, got %s", r.Method)
 		}
@@ -1592,7 +1606,7 @@ func runUpstreamConnectionAuthConnect(t *testing.T, scheme string) {
 func runUpstreamSPNEGOAuthConnect(t *testing.T) {
 	t.Helper()
 	var authHeaders []string
-	parent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	parent := newPersistentConnectTestProxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect {
 			t.Fatalf("expected CONNECT, got %s", r.Method)
 		}
