@@ -56,6 +56,7 @@ const (
 	keyKerberos        = "kerberos"
 	keyWorkers         = "workers"
 	keyThreads         = "threads"
+	keyMaxConnections  = "max_connections"
 	keyIdle            = "idle"
 	keySockTimeout     = "socktimeout"
 	keyProxyReload     = "proxyreload"
@@ -101,6 +102,7 @@ var Defaults = map[string]string{
 	keyKerberos:        "0",
 	keyWorkers:         "1",
 	keyThreads:         "32",
+	keyMaxConnections:  "0",
 	keyIdle:            "30",
 	keySockTimeout:     "20.0",
 	keyProxyReload:     "60",
@@ -147,6 +149,7 @@ type Config struct {
 	Kerberos             bool
 	Workers              int
 	Threads              int
+	MaxConnections       int
 	Idle                 int
 	SockTimeout          float64
 	ProxyReload          int
@@ -192,6 +195,7 @@ func Default() Config {
 	port, _ := strconv.Atoi(Defaults[keyPort])
 	workers, _ := strconv.Atoi(Defaults[keyWorkers])
 	threads, _ := strconv.Atoi(Defaults[keyThreads])
+	maxConnections, _ := strconv.Atoi(Defaults[keyMaxConnections])
 	idle, _ := strconv.Atoi(Defaults[keyIdle])
 	sockTimeout, _ := strconv.ParseFloat(Defaults[keySockTimeout], 64)
 	proxyReload, _ := strconv.Atoi(Defaults[keyProxyReload])
@@ -207,6 +211,7 @@ func Default() Config {
 		Allow:           Defaults[keyAllow],
 		Workers:         workers,
 		Threads:         threads,
+		MaxConnections:  maxConnections,
 		Idle:            idle,
 		SockTimeout:     sockTimeout,
 		ProxyReload:     proxyReload,
@@ -437,6 +442,9 @@ func ParseArgs(args []string) (Config, error) {
 		}
 		name, val, ok := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
 		if !ok {
+			if name == "max-connections" || name == "max_connections" {
+				return cfg, fmt.Errorf("command line --%s requires a value", name)
+			}
 			name, val = strings.TrimPrefix(arg, "--"), "1"
 		}
 		if err := applyValueFrom(&cfg, strings.ReplaceAll(name, "-", "_"), val, configSourceCLI); err != nil {
@@ -592,7 +600,7 @@ func applyMap(cfg *Config, values map[string]string, source string) error {
 
 func isAuxiliaryEnvKey(name string) bool {
 	switch name {
-	case keySave, keyDotenv, "keyring_file", "keyring_plaintext", "kerberos_flavor", "kerberos_password", "kerberos_principal", "bin":
+	case keySave, keyDotenv, "keyring_file", "keyring_plaintext", "kerberos_flavor", "kerberos_password", "kerberos_principal", "bin", "experimental_capacity_mode":
 		return true
 	default:
 		return false
@@ -691,6 +699,9 @@ func canonicalConfigKey(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "proxy" {
 		return keyServer
+	}
+	if name == "max-connections" {
+		return keyMaxConnections
 	}
 	return name
 }
@@ -841,6 +852,12 @@ func applyValue(cfg *Config, name, val string) error {
 			return err
 		}
 		cfg.Threads = parsed
+	case keyMaxConnections:
+		parsed, err := parseIntValue(name, val)
+		if err != nil || parsed < 0 {
+			return fmt.Errorf("invalid max-connections %q: expected a nonnegative integer", val)
+		}
+		cfg.MaxConnections = parsed
 	case keyIdle:
 		parsed, err := parseIntValue(name, val)
 		if err != nil {
@@ -1238,6 +1255,12 @@ client_nosspi = %d
 [settings]
 workers = %d
 threads = %d
+; Dynamic connection capacity is recommended; manual configuration is NOT recommended.
+; Set a manual ceiling only to diagnose/mitigate PxGo resource/performance problems.
+; Positive max-connections is a HARD CEILING, not a concurrency target.
+; 0 disables the manual limit; experimental AUTO uses its safety envelope.
+; Shipped default is still legacy admission until native release gates pass.
+max-connections = %d
 idle = %d
 socktimeout = %g
 proxyreload = %d
@@ -1248,7 +1271,7 @@ update_interval = %s
 update_channel = %s
 install_provider = %s
 `, cfg.Server, cfg.PAC, cfg.PACEncoding, cfg.Port, listen, btoi(cfg.Gateway), btoi(cfg.Hostonly), cfg.Allow, cfg.NoProxy, dnsINIBlock(cfg),
-		cfg.UserAgent, cfg.Username, cfg.Auth, btoi(cfg.Kerberos), cfg.ClientAuth, cfg.ClientUsername, btoi(cfg.ClientNoSSPI), cfg.Workers, cfg.Threads, cfg.Idle,
+		cfg.UserAgent, cfg.Username, cfg.Auth, btoi(cfg.Kerberos), cfg.ClientAuth, cfg.ClientUsername, btoi(cfg.ClientNoSSPI), cfg.Workers, cfg.Threads, cfg.MaxConnections, cfg.Idle,
 		cfg.SockTimeout, cfg.ProxyReload, btoi(cfg.Foreground), cfg.Log, cfg.AutoUpdate, cfg.UpdateInterval.String(), cfg.UpdateChannel, cfg.InstallProvider)
 	return writeFileWithBackup(path, []byte(content), 0o600)
 }

@@ -174,3 +174,34 @@ A result is publishable only when all of the following are attached:
 A summary table should be generated from those artifacts and should link back
 to the run ID. Until an authorized Windows/domain run exists, corporate-auth
 performance remains **unmeasured**, not inferred from the local benchmark.
+
+## AP-ISS-0035 staged governor comparison
+
+See [the experimental capacity runbook](capacity-experimental.md). Keep the
+shipped/default `legacy` run as the control; collect separate `shadow` and
+`auto` runs with `PXGO_EXPERIMENTAL_CAPACITY_MODE` injected into each actual
+PxGo child process (the existing `bench-e2e.sh` deliberately strips inherited
+`PXGO_*` environment variables). Retain SHA-pinned raw logs/manifests for all
+three variants and do not report latency/throughput improvements without
+Windows and Linux platform evidence. Experimental FD constants and automatic
+production defaults remain uncalibrated and therefore release-blocked.
+
+
+### 2,560-simultaneous-CONNECT overload comparison (AP-ISS-0035)
+
+See `docs/capacity-2560-research-20261022.md` and `TestCapacityBurst2560`.
+On supported, resource-sufficient benchmark runners, run real CONNECTs with a
+shared start barrier. `legacy` and `shadow` use a 256-slot control, while
+`auto` targets a startup soft window of 256 and may increase *only under
+observed resource headroom*. The test is opt-in to protect small CI runners:
+
+```sh
+PXGO_CAPACITY_BURST_2560=1 PXGO_CAPACITY_BENCH_MODE=legacy go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=55s
+PXGO_CAPACITY_BURST_2560=1 PXGO_CAPACITY_BENCH_MODE=shadow go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=55s
+PXGO_CAPACITY_BURST_2560=1 PXGO_CAPACITY_BENCH_MODE=auto go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=55s
+```
+
+Keep pre-release admissions separate from late completions after the release
+barrier. Co-located clients, proxy and origin cannot provide PxGo-only RSS,
+FD or goroutine footprints. Separate process/host measurement is mandatory
+before default activation or release.
