@@ -231,9 +231,11 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 	}
 	g.sensor = "fresh"
 	g.probeAllowed = false // fresh instrumentation supersedes an unverified probe
-	// FD headroom is a conservative trial estimate (4 descriptors per new
-	// CONNECT and 256 descriptors reserved for all other process traffic).
-	const reserveFD = 256
+	// FD headroom is a provisional trial estimate. Reserve up to 256 FDs
+	// for other traffic, but never more than half a small RLIMIT_NOFILE:
+	// a fixed 256-FD reserve would permanently disable an otherwise healthy
+	// process configured with a 64/128/192 descriptor limit.
+	reserveFD := min(256, max(16, s.totalFD/2))
 	const fdPerConnection = 4
 	available := s.totalFD - s.freeFD
 	if s.freeFD < 0 || s.totalFD <= 0 || available < 0 || available > s.totalFD {
@@ -321,7 +323,7 @@ func (s *Server) capacityDiagnosticSnapshot() diagnostic.CapacitySnapshot {
 	if s.capacity != nil {
 		return s.capacity.snapshot()
 	}
-	snap := diagnostic.CapacitySnapshot{Mode: string(modeLegacy), State: capacityStateNormal, SensorAvailability: "legacy"}
+	snap := diagnostic.CapacitySnapshot{Mode: string(modeLegacy), State: capacityStateNormal, SensorAvailability: string(modeLegacy)}
 	if s.legacySlots != nil {
 		snap.ActiveDownstream = len(s.legacySlots)
 		snap.EffectiveLimit = cap(s.legacySlots)
