@@ -468,7 +468,7 @@ func TestCapacityInvalidSampleRevokesOutstandingRecoveryProbe(t *testing.T) {
 	// An available-but-contradictory sensor sample must withdraw that probe
 	// even when the sensor transport itself cannot establish a valid envelope.
 	g.sample(capacitySample{available: true, totalFD: 100, freeFD: 101}, late.Add(time.Second))
-	if snap := g.snapshot(); snap.SensorAvailability != "invalid" || snap.EffectiveLimit != 0 {
+	if snap := g.snapshot(); snap.SensorAvailability != capacityInvalidSensor || snap.EffectiveLimit != 0 {
 		t.Fatalf("stale probe remains open after contradictory sample: %+v", snap)
 	}
 	if err := g.acquire(make(chan struct{}), 5*time.Millisecond); err == nil {
@@ -507,5 +507,35 @@ func TestCapacityFastGrowthRequiresHeadroomAndSustainedDemand(t *testing.T) {
 	small.sample(capacitySample{available: true, totalFD: 128, freeFD: 121}, now)
 	if snap := small.snapshot(); snap.EffectiveLimit >= 256 || snap.EffectiveLimit <= 0 {
 		t.Fatalf("small RLIMIT not respected at startup: %+v", snap)
+	}
+}
+
+func TestCapacityWindowsMemoryHandlesEnvelopeIsFiniteAndFailClosed(t *testing.T) {
+	g := newCapacityGovernor(modeAuto, config.Default())
+	now := time.Unix(20000, 0)
+	s := capacitySample{available: true, resource: capacityWindowsSensor, freeSlots: 3000}
+	for i := 0; i < 4; i++ {
+		g.sample(s, now.Add(time.Duration(i)*time.Second))
+	}
+	if snap := g.snapshot(); snap.HardEnvelope <= 256 || snap.SensorAvailability != capacityWindowsSensor {
+		t.Fatalf("native resources did not enable bounded headroom: %+v", snap)
+	}
+	g.mu.Lock()
+	g.waiting = 1
+	g.mu.Unlock()
+	for i := 4; i < 10; i++ {
+		g.sample(s, now.Add(time.Duration(i)*time.Second))
+	}
+	if snap := g.snapshot(); snap.SoftWindow <= 256 {
+		t.Fatalf("Windows healthy-demand AUTO stuck at 256: %+v", snap)
+	}
+	g.sample(capacitySample{available: true, resource: capacityWindowsSensor, freeSlots: -1}, now.Add(11*time.Second))
+	if snap := g.snapshot(); snap.SensorAvailability != capacityInvalidSensor {
+		t.Fatalf("invalid native sensor not rejected: %+v", snap)
+	}
+	g.sample(capacitySample{available: true, resource: capacityWindowsSensor, freeSlots: 0, resourcePressure: true}, now.Add(12*time.Second))
+	g.sample(capacitySample{available: true, resource: capacityWindowsSensor, freeSlots: 0, resourcePressure: true}, now.Add(13*time.Second))
+	if snap := g.snapshot(); snap.State != "pressure" {
+		t.Fatalf("native resource pressure ignored: %+v", snap)
 	}
 }

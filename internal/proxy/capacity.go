@@ -26,6 +26,8 @@ const (
 	capacityStatePressure                = "pressure"
 	capacityStateRecovering              = "recovering"
 	capacityEmergencyFD                  = "emergency-fd"
+	capacityInvalidSensor                = "invalid"
+	capacityWindowsSensor                = "windows-memory-handles"
 )
 
 func experimentalCapacityMode() (capacityMode, error) {
@@ -52,10 +54,13 @@ const (
 const capacityColdStartWindow = 256
 
 type capacitySample struct {
-	available bool
-	freeFD    int
-	totalFD   int
-	reason    string
+	available        bool
+	freeFD           int
+	totalFD          int
+	resource         string // empty on Linux; windows-memory-handles for experimental native envelope
+	freeSlots        int
+	resourcePressure bool
+	reason           string
 }
 
 type capacityGovernor struct {
@@ -237,27 +242,47 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 	}
 	g.sensor = "fresh"
 	g.probeAllowed = false // fresh instrumentation supersedes an unverified probe
-	// FD headroom is a provisional trial estimate. Reserve up to 256 FDs
-	// for other traffic, but never more than half a small RLIMIT_NOFILE:
-	// a fixed 256-FD reserve would permanently disable an otherwise healthy
-	// process configured with a 64/128/192 descriptor limit.
-	reserveFD := min(256, max(16, s.totalFD/2))
-	const fdPerConnection = 4
-	available := s.totalFD - s.freeFD
-	if s.freeFD < 0 || s.totalFD <= 0 || available < 0 || available > s.totalFD {
-		g.sensor = "invalid"
+	var hard int
+	var pressured bool
+	switch s.resource {
+	case "": // Real Linux RLIMIT_NOFILE /proc/self/fd sensor
+		// Reserve at most 256 FDs, scaling the margin down for low nofile.
+		reserveFD := min(256, max(16, s.totalFD/2))
+		const fdPerConnection = 4
+		available := s.totalFD - s.freeFD
+		if s.freeFD < 0 || s.totalFD <= 0 || available < 0 || available > s.totalFD {
+			g.sensor = capacityInvalidSensor
+			g.healthy = 0
+			g.pressured = 0
+			g.recomputeLocked() // withdraw any outstanding recovery probe
+			return
+		}
+		hard = g.active + max(0, (s.freeFD-reserveFD)/fdPerConnection)
+		pressured = s.freeFD <= reserveFD
+	case capacityWindowsSensor:
+		// Windows handle counts have no portable RLIMIT analogue. Use only
+		// the separately bounded native memory+handle headroom estimate.
+		if s.freeSlots < 0 || s.freeSlots > 4096 {
+			g.sensor = capacityInvalidSensor
+			g.healthy = 0
+			g.pressured = 0
+			g.recomputeLocked()
+			return
+		}
+		hard = g.active + s.freeSlots
+		pressured = s.resourcePressure
+		g.sensor = capacityWindowsSensor
+	default:
+		g.sensor = capacityInvalidSensor
 		g.healthy = 0
 		g.pressured = 0
-		// A contradictory measurement revokes any unconsumed emergency probe;
-		// recompute under the same mutex to withdraw a previously opened slot.
 		g.recomputeLocked()
 		return
 	}
-	hard := g.active + max(0, (s.freeFD-reserveFD)/fdPerConnection)
 	if hard < g.hard {
 		g.hard = hard
 	}
-	if s.freeFD <= reserveFD {
+	if pressured {
 		g.pressured++
 		g.healthy = 0
 		if g.pressured >= 2 && !now.Before(g.cooldown) {

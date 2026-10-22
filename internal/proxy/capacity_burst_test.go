@@ -65,8 +65,16 @@ func TestCapacityBurst2560(t *testing.T) {
 		cfg.Threads = 256
 	}
 	px := startTestProxy(t, cfg)
-	start := make(chan struct{})
 	release := make(chan struct{})
+	// The SYN-spike mode exercises TCP backlog separately from the actual
+	// 2,560-established-CONNECT plateau. Windows SOMAXCONN defaults can refuse
+	// a 2,560-SYN spike independently of PxGo's admission controller.
+	spike := os.Getenv("PXGO_CAPACITY_SYN_SPIKE") == "1"
+	const batch = 32
+	starts := make([]chan struct{}, (attempts+batch-1)/batch)
+	for i := range starts {
+		starts[i] = make(chan struct{})
+	}
 	type outcome struct {
 		success       bool
 		latency       time.Duration
@@ -80,9 +88,9 @@ func TestCapacityBurst2560(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(attempts)
 	for i := 0; i < attempts; i++ {
-		go func() {
+		go func(batchIndex int) {
 			defer wg.Done()
-			<-start
+			<-starts[batchIndex]
 			begun := time.Now()
 			conn, e := net.DialTimeout("tcp", px.ListenAddr(), 3*time.Second)
 			if e != nil {
@@ -107,17 +115,35 @@ func TestCapacityBurst2560(t *testing.T) {
 				return
 			}
 			latency := time.Since(begun)
+			// The established tunnel must remain genuinely live until release.
+			// The handshake-only timeout must not terminate a healthy tunnel.
+			_ = conn.SetDeadline(time.Time{})
 			beforeRelease := !released.Load()
 			admitted.Add(1)
 			<-release
 			results <- outcome{success: true, latency: latency, beforeRelease: beforeRelease}
-		}()
+		}(i / batch)
 	}
 	var memAt runtime.MemStats
 	begun := time.Now()
-	close(start) // all 2560 goroutines attempt a socket concurrently
-	const phase = 13 * time.Second
-	time.Sleep(phase)
+	if spike || mode != "auto" {
+		for _, start := range starts {
+			close(start)
+		}
+	} else {
+		// Bounded 32-SYN waves avoid confusing Windows' provider backlog with
+		// the sustained concurrent capacity of already established CONNECTs.
+		// Waves do NOT close previous tunnels. The final barrier still requires
+		// 2,560 live, established, healthy CONNECTs *at the same instant*.
+		for _, start := range starts {
+			close(start)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	const phase = 18 * time.Second
+	if elapsed := time.Since(begun); elapsed < phase {
+		time.Sleep(phase - elapsed)
+	}
 	runtime.ReadMemStats(&memAt)
 	peak := px.capacityDiagnosticSnapshot()
 	successBeforeRelease := admitted.Load()
