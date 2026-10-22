@@ -273,3 +273,102 @@ func TestDoHBootstrapAuthenticatedCONNECTTLSRoundTrip(t *testing.T) {
 		}
 	})
 }
+
+func TestDoHBootstrapPACReloadKeepsRoutingConsistent(t *testing.T) {
+	var firstHits, secondHits atomic.Int32
+	firstEntered := make(chan struct{}, 1)
+	releaseFirst := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseFirst:
+		default:
+			close(releaseFirst)
+		}
+	}()
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstHits.Add(1)
+		select {
+		case firstEntered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-releaseFirst:
+		case <-r.Context().Done():
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondHits.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer second.Close()
+	var script atomic.Value
+	setScript := func(proxyURL string) {
+		script.Store(fmt.Sprintf(`function FindProxyForURL(url, host) { return "PROXY %s"; }`, strings.TrimPrefix(proxyURL, "http://")))
+	}
+	setScript(first.URL)
+	var pacUnavailable atomic.Bool
+	pacServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if pacUnavailable.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = io.WriteString(w, script.Load().(string))
+	}))
+	defer pacServer.Close()
+	cfg := config.Default()
+	cfg.DNS = "https://203.0.113.77/dns-query"
+	cfg.PAC = pacServer.URL
+	cfg.ProxyReload = 1
+	cfg.SockTimeout = 2
+	px, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer px.Shutdown(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	firstDone := make(chan error, 1)
+	go func() { _, err := px.dnsResolver.LookupIP(ctx, "pac-before-reload.test"); firstDone <- err }()
+	select {
+	case <-firstEntered:
+	case <-ctx.Done():
+		t.Fatal("first proxy not reached")
+	}
+	setScript(second.URL)
+	reloadDone := make(chan error, 1)
+	go func() { reloadDone <- px.reloadProxy(ctx, true) }()
+	select {
+	case err := <-reloadDone:
+		t.Fatalf("reload retired active bootstrap early: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err == nil {
+		t.Fatal("expected first proxy to reject CONNECT")
+	}
+	if err := <-reloadDone; err != nil {
+		t.Fatal(err)
+	}
+	before := firstHits.Load()
+	if _, err := px.dnsResolver.LookupIP(ctx, "pac-after-reload.test"); err == nil {
+		t.Fatal("expected second proxy to reject CONNECT")
+	}
+	if secondHits.Load() == 0 || firstHits.Load() != before {
+		t.Fatalf("stale DoH routing after reload: first=%d (was %d), second=%d", firstHits.Load(), before, secondHits.Load())
+	}
+	// A failed PAC reload must leave both ordinary and bootstrap routes intact.
+	pacUnavailable.Store(true)
+	if err := px.reloadProxy(ctx, true); err == nil {
+		t.Fatal("invalid PAC should abort both route updates")
+	}
+	if _, err := px.dnsResolver.LookupIP(ctx, "pac-after-reload-failed.test"); err == nil {
+		t.Fatal("expected retained proxy to reject CONNECT")
+	}
+	if secondHits.Load() < 2 {
+		t.Fatalf("valid bootstrap route was discarded: second hits=%d", secondHits.Load())
+	}
+}

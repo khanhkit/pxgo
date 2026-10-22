@@ -65,7 +65,7 @@ type Server struct {
 	active        int64
 	transports    *boundedTransportCache
 	dnsResolver   *dnsresolver.Policy
-	dohBootstrap  *wproxy.Wproxy // OS-DNS routing; never uses DoH cache
+	dohBootstrap  *dohBootstrapRoute // independently resolved, reloadable OS-DNS routing
 	dnsCache      *dnscache.Cache
 
 	tunnelMu           sync.Mutex
@@ -79,6 +79,14 @@ type Server struct {
 	clientAuthList []string
 	allowSet       wproxy.IPSet
 	hostIPs        atomic.Pointer[hostIPEntry]
+}
+
+// A DoH request retains a read lease until its proxy route and CONNECT are
+// established. Reload and shutdown retire obsolete OS-DNS routing only after
+// in-flight bootstrap users finish, never leaving a closed resolver in use.
+type dohBootstrapRoute struct {
+	mu      sync.RWMutex
+	current *wproxy.Wproxy
 }
 
 // hostIPEntry caches the local interface addresses used by --hostonly checks;
@@ -118,22 +126,28 @@ func New(cfg config.Config) (*Server, error) {
 	if !dnsPolicy.IsSystem() {
 		dnsCache = dnscache.NewWithTTL(dnsPolicy.LookupIPTTL)
 	}
-	var dohBootstrap *wproxy.Wproxy
+	var dohBootstrap *dohBootstrapRoute
 	var bootstrapServer *Server
 	if mode := dnsPolicy.Status().Mode; mode == "doh" || mode == "mixed" {
 		// Bootstrap PAC/noproxy and upstream proxy hosts independently using
 		// OS DNS. Never resolve the proxy required by DoH through DoH itself.
 		bootstrapDialer := (&net.Dialer{Timeout: configuredSockTimeout(cfg), KeepAlive: 30 * time.Second}).DialContext
-		dohBootstrap, err = buildWproxy(cfg, dnscache.New(nil))
-		if err != nil {
-			return nil, fmt.Errorf("DoH bootstrap proxy: %w", err)
+		bootstrapWproxy, buildErr := buildWproxy(cfg, dnscache.New(nil))
+		if buildErr != nil {
+			return nil, fmt.Errorf("DoH bootstrap proxy: %w", buildErr)
 		}
+		dohBootstrap = &dohBootstrapRoute{current: bootstrapWproxy}
 		bootstrapServer = &Server{cfg: cfg}
 		dnsPolicy.SetDoHDialContext(func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if network != "tcp" {
 				return nil, fmt.Errorf("DoH bootstrap requires TCP, got %s", network)
 			}
-			proxies, _, _, routeErr := dohBootstrap.FindProxyForURL("https://" + addr)
+			dohBootstrap.mu.RLock()
+			defer dohBootstrap.mu.RUnlock()
+			if dohBootstrap.current == nil {
+				return nil, errors.New("DoH bootstrap proxy routing is closed")
+			}
+			proxies, _, _, routeErr := dohBootstrap.current.FindProxyForURL("https://" + addr)
 			if routeErr != nil {
 				return nil, fmt.Errorf("DoH bootstrap route: %w", routeErr)
 			}
@@ -156,7 +170,7 @@ func New(cfg config.Config) (*Server, error) {
 	wp, err := buildWproxy(cfg, dnsCache)
 	if err != nil {
 		if dohBootstrap != nil {
-			_ = dohBootstrap.Close()
+			_ = dohBootstrap.current.Close()
 		}
 		return nil, err
 	}
@@ -164,7 +178,7 @@ func New(cfg config.Config) (*Server, error) {
 	if err != nil {
 		_ = wp.Close()
 		if dohBootstrap != nil {
-			_ = dohBootstrap.Close()
+			_ = dohBootstrap.current.Close()
 		}
 		return nil, err
 	}
@@ -515,9 +529,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 		s.clearTransports()
 		if s.dohBootstrap != nil {
-			if closeErr := s.dohBootstrap.Close(); closeErr != nil && err == nil {
-				err = fmt.Errorf("close DoH bootstrap resolver: %w", closeErr)
+			s.dohBootstrap.mu.Lock()
+			oldBootstrap := s.dohBootstrap.current
+			s.dohBootstrap.current = nil
+			if oldBootstrap != nil {
+				if closeErr := oldBootstrap.Close(); closeErr != nil && err == nil {
+					err = fmt.Errorf("close DoH bootstrap resolver: %w", closeErr)
+				}
 			}
+			s.dohBootstrap.mu.Unlock()
 		}
 		s.wmu.Lock()
 		wp := s.w
@@ -724,18 +744,47 @@ func (s *Server) reloadProxy(ctx context.Context, force bool) error {
 	if err != nil {
 		return err
 	}
+	var freshBootstrap *wproxy.Wproxy
+	if s.dohBootstrap != nil {
+		// Prepare both routing snapshots before publication. A failed bootstrap
+		// refresh cannot leave normal and DoH routes on different generations.
+		freshBootstrap, err = buildWproxy(s.cfg, dnscache.New(nil))
+		if err != nil {
+			_ = wp.Close()
+			return fmt.Errorf("reload DoH bootstrap proxy: %w", err)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		_ = wp.Close()
+		if freshBootstrap != nil {
+			_ = freshBootstrap.Close()
+		}
 		return err
 	}
 	s.wmu.Lock()
+	if s.dohBootstrap != nil {
+		s.dohBootstrap.mu.Lock()
+	}
 	old := s.w
 	changed := old == nil || wp.Mode != old.Mode || !equalServers(wp.Servers, old.Servers)
 	s.w = wp
+	var oldBootstrap *wproxy.Wproxy
+	if s.dohBootstrap != nil {
+		oldBootstrap = s.dohBootstrap.current
+		s.dohBootstrap.current = freshBootstrap
+	}
 	s.lastReload = time.Now()
 	var closeErr error
 	if old != nil {
 		closeErr = old.Close()
+	}
+	if oldBootstrap != nil {
+		if err := oldBootstrap.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	if s.dohBootstrap != nil {
+		s.dohBootstrap.mu.Unlock()
 	}
 	s.wmu.Unlock()
 	if changed {
