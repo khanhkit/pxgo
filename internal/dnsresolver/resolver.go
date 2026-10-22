@@ -193,6 +193,28 @@ func newPolicy(raw string, timeout time.Duration, client *http.Client) (*Policy,
 	return &Policy{endpoints: endpoints, timeout: normalizedTimeout(timeout), http: client}, nil
 }
 
+// SetDoHDialContext installs a bootstrap-safe HTTPS dialer before DNS lookups.
+// The caller must not use this DNS policy to resolve upstream proxy hosts.
+func (p *Policy) SetDoHDialContext(dial func(context.Context, string, string) (net.Conn, error)) {
+	if p == nil || dial == nil {
+		return
+	}
+	for _, rule := range p.rules {
+		rule.resolver.SetDoHDialContext(dial)
+	}
+	if p.system || p.http == nil {
+		return
+	}
+	base, ok := p.http.Transport.(*http.Transport)
+	if !ok {
+		base = http.DefaultTransport.(*http.Transport)
+	}
+	transport := base.Clone()
+	transport.Proxy = nil // never use OS proxy settings (may point back to PxGo)
+	transport.DialContext = dial
+	p.http = &http.Client{Transport: transport}
+}
+
 func normalizedTimeout(timeout time.Duration) time.Duration {
 	if timeout <= 0 {
 		return defaultLookupTimeout

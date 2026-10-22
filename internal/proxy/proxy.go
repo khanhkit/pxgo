@@ -63,6 +63,7 @@ type Server struct {
 	active        int64
 	transports    *boundedTransportCache
 	dnsResolver   *dnsresolver.Policy
+	dohBootstrap  *wproxy.Wproxy // OS-DNS routing; never uses DoH cache
 	dnsCache      *dnscache.Cache
 
 	tunnelMu           sync.Mutex
@@ -115,30 +116,69 @@ func New(cfg config.Config) (*Server, error) {
 	if !dnsPolicy.IsSystem() {
 		dnsCache = dnscache.NewWithTTL(dnsPolicy.LookupIPTTL)
 	}
+	var dohBootstrap *wproxy.Wproxy
+	var bootstrapServer *Server
+	if mode := dnsPolicy.Status().Mode; mode == "doh" || mode == "mixed" {
+		// Bootstrap PAC/noproxy and upstream proxy hosts independently using
+		// OS DNS. Never resolve the proxy required by DoH through DoH itself.
+		bootstrapDialer := (&net.Dialer{Timeout: configuredSockTimeout(cfg), KeepAlive: 30 * time.Second}).DialContext
+		dohBootstrap, err = buildWproxy(cfg, dnscache.New(nil))
+		if err != nil {
+			return nil, fmt.Errorf("DoH bootstrap proxy: %w", err)
+		}
+		bootstrapServer = &Server{cfg: cfg}
+		dnsPolicy.SetDoHDialContext(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if network != "tcp" {
+				return nil, fmt.Errorf("DoH bootstrap requires TCP, got %s", network)
+			}
+			proxies, _, _, routeErr := dohBootstrap.FindProxyForURL("https://" + addr)
+			if routeErr != nil {
+				return nil, fmt.Errorf("DoH bootstrap route: %w", routeErr)
+			}
+			for _, candidate := range proxies {
+				if isLocalDoHProxyLoop(candidate, cfg.Port) {
+					return nil, errors.New("DoH bootstrap proxy points back to PxGo listener")
+				}
+			}
+			conn, _, connectErr := bootstrapServer.connectWithProxyFallbackDial(ctx, addr, "", proxies, bootstrapDialer)
+			return conn, connectErr
+		})
+	}
 	wp, err := buildWproxy(cfg, dnsCache)
 	if err != nil {
+		if dohBootstrap != nil {
+			_ = dohBootstrap.Close()
+		}
 		return nil, err
 	}
 	krb, err := buildKerberosManager(cfg)
 	if err != nil {
+		_ = wp.Close()
+		if dohBootstrap != nil {
+			_ = dohBootstrap.Close()
+		}
 		return nil, err
 	}
 	if krb != nil {
 		krb.Check(true)
 	}
+	if bootstrapServer != nil {
+		bootstrapServer.krb = krb
+	}
 	s := &Server{
-		cfg:         cfg,
-		w:           wp,
-		lastReload:  time.Now(),
-		startedAt:   time.Now(),
-		port:        cfg.Port,
-		krb:         krb,
-		closed:      make(chan struct{}),
-		transports:  newBoundedTransportCache(maxCachedTransports),
-		dnsResolver: dnsPolicy,
-		dnsCache:    dnsCache,
-		tunnels:     make(map[*managedTunnel]struct{}),
-		tunnelZero:  closedSignal(),
+		cfg:          cfg,
+		w:            wp,
+		lastReload:   time.Now(),
+		startedAt:    time.Now(),
+		port:         cfg.Port,
+		krb:          krb,
+		closed:       make(chan struct{}),
+		transports:   newBoundedTransportCache(maxCachedTransports),
+		dnsResolver:  dnsPolicy,
+		dohBootstrap: dohBootstrap,
+		dnsCache:     dnsCache,
+		tunnels:      make(map[*managedTunnel]struct{}),
+		tunnelZero:   closedSignal(),
 	}
 	s.sup = newRuntimeSupervisor(s)
 	s.clientAuthList = clientAuthMethods(cfg.ClientAuth)
@@ -266,6 +306,19 @@ func configuredSockTimeout(cfg config.Config) time.Duration {
 
 func configuredWriteTimeout(cfg config.Config) time.Duration {
 	return 2 * configuredSockTimeout(cfg)
+}
+
+// Reject an upstream proxy pointing at the local PxGo listener.
+func isLocalDoHProxyLoop(candidate wproxy.Server, listenerPort int) bool {
+	if candidate == wproxy.Direct || candidate.Port != listenerPort {
+		return false
+	}
+	host := strings.Trim(strings.ToLower(candidate.Host), "[]")
+	if host == "localhost" || host == "localhost." {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
 
 func newDNSPolicy(cfg config.Config) (*dnsresolver.Policy, error) {
@@ -452,6 +505,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			s.sup.Close()
 		}
 		s.clearTransports()
+		if s.dohBootstrap != nil {
+			if closeErr := s.dohBootstrap.Close(); closeErr != nil && err == nil {
+				err = fmt.Errorf("close DoH bootstrap resolver: %w", closeErr)
+			}
+		}
 		s.wmu.Lock()
 		wp := s.w
 		s.w = nil
