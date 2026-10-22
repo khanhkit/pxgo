@@ -41,15 +41,18 @@ func TestDoHBootstrapUsesUpstreamCONNECT(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, mode := range []string{"manual", "PAC", "rules"} {
+	for _, mode := range []string{"manual", "PAC", "rules", "mixed-rules"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := config.Default()
 			cfg.DNS = "https://203.0.113.77/dns-query"
 			cfg.SockTimeout = 0.2
-			if mode == "manual" || mode == "rules" {
+			if mode == "manual" || mode == "rules" || mode == "mixed-rules" {
 				cfg.Server = "localhost:" + parentPort // system DNS resolves proxy hostname
 				if mode == "rules" {
 					cfg.DNSRules = []config.DNSRule{{Resolver: cfg.DNS, Only: []string{"*.test"}}}
+				}
+				if mode == "mixed-rules" {
+					cfg.DNSRules = []config.DNSRule{{Resolver: "system", Only: []string{"*.ordinary.example"}}, {Resolver: cfg.DNS, Only: []string{"*.test"}}}
 				}
 			} else {
 				pacPath := filepath.Join(t.TempDir(), "proxy.pac")
@@ -227,28 +230,34 @@ func TestDoHBootstrapAuthenticatedCONNECTTLSRoundTrip(t *testing.T) {
 	cfg.Password = "12345"
 	cfg.SockTimeout = 2
 
-	t.Run("trusted-cert-success", func(t *testing.T) {
-		px, err := New(cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer px.Shutdown(context.Background())
-		roots := x509.NewCertPool()
-		roots.AddCert(dohServer.Certificate())
-		px.dnsResolver.SetDoHRootCAs(roots)
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		defer cancel()
-		got, err := px.dnsResolver.LookupIP(ctx, "bootstrap-integration.test")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got) == 0 || !got[0].Equal(net.IPv4(198, 51, 100, 42)) {
-			t.Fatalf("DoH response addresses=%v", got)
-		}
-		if dohHits.Load() == 0 || connectHits.Load() == 0 {
-			t.Fatalf("DoH hits=%d CONNECT hits=%d", dohHits.Load(), connectHits.Load())
-		}
-	})
+	for _, mode := range []string{"trusted-cert-success", "trusted-rules-success"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := cfg
+			if mode == "trusted-rules-success" {
+				cfg.DNSRules = []config.DNSRule{{Resolver: "system", Only: []string{"*.ordinary.example"}}, {Resolver: cfg.DNS, Only: []string{"*.test"}}}
+			}
+			px, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer px.Shutdown(context.Background())
+			roots := x509.NewCertPool()
+			roots.AddCert(dohServer.Certificate())
+			px.dnsResolver.SetDoHRootCAs(roots)
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			got, err := px.dnsResolver.LookupIP(ctx, "bootstrap-integration.test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) == 0 || !got[0].Equal(net.IPv4(198, 51, 100, 42)) {
+				t.Fatalf("DoH response addresses=%v", got)
+			}
+			if dohHits.Load() == 0 || connectHits.Load() == 0 {
+				t.Fatalf("DoH hits=%d CONNECT hits=%d", dohHits.Load(), connectHits.Load())
+			}
+		})
+	}
 	t.Run("untrusted-cert-rejected", func(t *testing.T) {
 		px, err := New(cfg)
 		if err != nil {

@@ -43,6 +43,7 @@ const (
 	maxMemoryBody    = 1 << 20
 	goosWindows      = "windows"
 	quitControlPath  = "/PxgoQuit"
+	localhostName    = "localhost"
 )
 
 type Server struct {
@@ -270,7 +271,7 @@ func isRemotePlaintextExposure(cfg config.Config) bool {
 		if host == "" {
 			continue
 		}
-		if strings.EqualFold(host, "localhost") {
+		if strings.EqualFold(host, localhostName) {
 			continue
 		}
 		ip := net.ParseIP(host)
@@ -322,7 +323,7 @@ func isLocalDoHProxyLoop(candidate wproxy.Server, listenerPort int) bool {
 		return false
 	}
 	host := strings.Trim(strings.ToLower(candidate.Host), "[]")
-	if host == "localhost" || host == "localhost." {
+	if host == localhostName || host == localhostName+"." {
 		return true
 	}
 	ip := net.ParseIP(host)
