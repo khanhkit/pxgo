@@ -337,28 +337,6 @@ jobs:
               Tee-Object -FilePath "benchmarks/2560-$run.log"
             if ($LASTEXITCODE -ne 0) { throw "2560 Windows live-tunnel benchmark failed run $run" }
           }
-          # 8 independent deterministic intensity seeds x 4 mixed profiles:
-          # short-heavy, balanced, long-heavy and churn (32 mixed samples
-          # per matrix cell, 128 mixed samples across all Windows cells).
-          $env:PXGO_CAPACITY_MIXED_BENCH = '1'
-          foreach ($seed in 0..7) {
-            $env:PXGO_CAPACITY_MIX_SEED = "$seed"
-            go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -timeout=125s 2>&1 |
-              Tee-Object -FilePath "benchmarks/mixed-seed-$seed.log"
-            if ($LASTEXITCODE -ne 0) { throw "Windows mixed traffic seed=$seed failed" }
-            go test ./internal/proxy -run '^TestCapacityMixedCompetingAdmission$' -count=1 -v -timeout=60s 2>&1 |
-              Tee-Object -FilePath "benchmarks/mixed-compete-seed-$seed.log"
-            if ($LASTEXITCODE -ne 0) { throw "Windows competing arrivals seed=$seed failed" }
-          }
-          Remove-Item Env:PXGO_CAPACITY_MIXED_BENCH
-          Remove-Item Env:PXGO_CAPACITY_MIX_SEED
-          if ($env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES -eq '1') {
-            $env:PXGO_CAPACITY_AGING_SOAK = '1'
-            go test ./internal/proxy -run '^TestCapacityMixedRealTimeAgedShortToLong$' -count=1 -v -timeout=55s 2>&1 |
-              Tee-Object -FilePath benchmarks/aged-keepalive-30s.log
-            if ($LASTEXITCODE -ne 0) { throw '30s real-clock short->long promotion failed' }
-            Remove-Item Env:PXGO_CAPACITY_AGING_SOAK
-          }
           go test ./internal/proxy -run '^TestConnectionClass' -count=5 -v -timeout=60s 2>&1 |
             Tee-Object -FilePath benchmarks/class-lifecycle.log
           if ($LASTEXITCODE -ne 0) { throw 'Windows two-class lifecycle failed' }
@@ -370,6 +348,75 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: win-capacity-${{ matrix.policy }}-classes-${{ matrix.class_mode }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-mixed-capacity-research:
+    name: Windows mixed (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, seed=${{ matrix.seed }})
+    # Each seed gets a FRESH VM. Native Windows has a finite ephemeral TCP
+    # port range and TIME_WAIT. Chaining 4 x 2560 CONNECT soak + all eight
+    # mixed seeds in one VM exhausted outgoing ephemeral ports (WSAEADDRINUSE).
+    # Do not mislabel test-runner exhaustion as controller failure, and never
+    # bypass it by forcing abortive RST closes in realistic short-conn tests.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 17
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        policy: [r11, fast_saturation]
+        class_mode: [off, 'on']
+        seed: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify immutable SHA and Windows runner profile
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable HEAD mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/runner.txt
+          "go=$(go version)" | Add-Content benchmarks/runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
+          "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
+          "seed=${{ matrix.seed }} policy=${{ matrix.policy }} classes=${{ matrix.class_mode }}" | Add-Content benchmarks/runner.txt
+          Get-Content benchmarks/runner.txt
+      - name: Concurrent short/long workload and admission competition
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_MIXED_BENCH: '1'
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_CAPACITY_MIX_SEED: ${{ matrix.seed }}
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
+        run: |
+          go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -timeout=125s 2>&1 |
+            Tee-Object -FilePath benchmarks/mixed-profiles.log
+          if ($LASTEXITCODE -ne 0) { throw 'Mixed profiles did not meet native Windows live-tunnel/HTTP integrity gates' }
+          go test ./internal/proxy -run '^TestCapacityMixedCompetingAdmission$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath benchmarks/mixed-competing-arrival.log
+          if ($LASTEXITCODE -ne 0) { throw 'Concurrent short+long admission gate failed' }
+          if ($env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES -eq '1' -and $env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            $env:PXGO_CAPACITY_AGING_SOAK = '1'
+            go test ./internal/proxy -run '^TestCapacityMixedRealTimeAgedShortToLong$' -count=1 -v -timeout=55s 2>&1 |
+              Tee-Object -FilePath benchmarks/real-clock-30s-promotion.log
+            if ($LASTEXITCODE -ne 0) { throw 'Live 30s idle keepalive promotion failed' }
+          }
+      - name: Preserve native Windows evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-mixed-${{ matrix.policy }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
           path: benchmarks/
           retention-days: 14
 
