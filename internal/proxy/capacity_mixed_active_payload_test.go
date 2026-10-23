@@ -18,6 +18,35 @@ import (
 	"github.com/khanhkit/pxgo/internal/config"
 )
 
+// A transfer interval excludes the explicit 12ms idle sleep between long
+// frames and excludes client-side short-HTTP admission queueing. Monotonic Go
+// timestamps allow meaningful cross-goroutine comparison in one test process.
+type capacityActiveInterval struct{ start, end time.Time }
+
+func capacityCountTrueTransferOverlaps(longTransfers, shortHTTP []capacityActiveInterval) int {
+	overlaps := 0
+	for _, short := range shortHTTP {
+		for _, long := range longTransfers {
+			if short.start.Before(long.end) && long.start.Before(short.end) {
+				overlaps++
+				break
+			}
+		}
+	}
+	return overlaps
+}
+
+// Validate the evidence before reporting a benchmark PASS. A live long-worker
+// counter cannot substitute for confirmed short-HTTP/long-I/O time overlap.
+func requireCapacityActiveTransferEvidence(t *testing.T, failure error, shortDone, shortExpected, longDone, longExpected int, shorts, longs []capacityActiveInterval, workerOverlap int64) int {
+	t.Helper()
+	actual := capacityCountTrueTransferOverlaps(longs, shorts)
+	if failure != nil || shortDone != shortExpected || longDone != longExpected || len(shorts) != shortExpected || len(longs) != longExpected || actual == 0 {
+		t.Fatalf("mixed ACTIVE transfer failed: first=%v short=%d/%d long=%d/%d short_spans=%d long_spans=%d actual_overlaps=%d worker_only_overlaps=%d", failure, shortDone, shortExpected, longDone, longExpected, len(shorts), len(longs), actual, workerOverlap)
+	}
+	return actual
+}
+
 // Chunked echo avoids the fake full-duplex deadlock of writing a 10 MiB
 // message before reading anything back through bounded TCP socket buffers.
 func capacityActiveExchange(c net.Conn, index, round, size int) (time.Duration, error) {
@@ -87,12 +116,13 @@ func capacityActiveFullDuplex(c net.Conn, index, round, size int) (time.Duration
 	return time.Since(began), nil
 }
 
-func capacityActiveTransferRounds(c net.Conn, index, frameSize, rounds int, transferring *atomic.Int64, samples chan<- time.Duration) error {
+func capacityActiveTransferRounds(c net.Conn, index, frameSize, rounds int, transferring *atomic.Int64, samples chan<- time.Duration, spans chan<- capacityActiveInterval) error {
 	for round := 0; round < rounds; round++ {
 		size := frameSize
 		if index == 0 && round == 0 {
 			size = 10 << 20
 		}
+		spanStart := time.Now()
 		transferring.Add(1)
 		var latency time.Duration
 		var err error
@@ -102,16 +132,18 @@ func capacityActiveTransferRounds(c net.Conn, index, frameSize, rounds int, tran
 			latency, err = capacityActiveExchange(c, index, round, size)
 		}
 		transferring.Add(-1)
+		spanEnd := time.Now()
 		if err != nil {
 			return err
 		}
 		samples <- latency
+		spans <- capacityActiveInterval{start: spanStart, end: spanEnd}
 		time.Sleep(12 * time.Millisecond)
 	}
 	return c.SetDeadline(time.Time{})
 }
 
-func capacityActiveShortHTTP(proxy, origin string, expected []byte) error {
+func capacityActiveShortHTTP(proxy, origin string, expected []byte, spans chan<- capacityActiveInterval) error {
 	c, err := net.DialTimeout("tcp", proxy, 6*time.Second)
 	if err != nil {
 		return err
@@ -120,6 +152,7 @@ func capacityActiveShortHTTP(proxy, origin string, expected []byte) error {
 	if err = c.SetDeadline(time.Now().Add(20 * time.Second)); err != nil {
 		return err
 	}
+	transferStart := time.Now()
 	if _, err = fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: example.test\r\nConnection: close\r\n\r\n", origin); err != nil {
 		return err
 	}
@@ -138,6 +171,7 @@ func capacityActiveShortHTTP(proxy, origin string, expected []byte) error {
 	if response.StatusCode != http.StatusOK || !bytes.Equal(body, expected) {
 		return fmt.Errorf("short payload mismatched status=%d length=%d expected=%d", response.StatusCode, len(body), len(expected))
 	}
+	spans <- capacityActiveInterval{start: transferStart, end: time.Now()}
 	return nil
 }
 
@@ -237,6 +271,8 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 	var shortEndsDuringTransfer atomic.Int64
 	longErrors := make(chan error, activeCount)
 	longLatency := make(chan time.Duration, activeCount*rounds)
+	longSpans := make(chan capacityActiveInterval, activeCount*rounds)
+	shortSpans := make(chan capacityActiveInterval, shortCount)
 	longStart := make(chan struct{})
 	shortStart := make(chan struct{})
 	longReady := make(chan struct{}, activeCount)
@@ -250,7 +286,7 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 			activeWorkers.Add(1)
 			defer activeWorkers.Add(-1)
 			longReady <- struct{}{}
-			if err := capacityActiveTransferRounds(c, index, payloadSize, rounds, &activeTransfers, longLatency); err != nil {
+			if err := capacityActiveTransferRounds(c, index, payloadSize, rounds, &activeTransfers, longLatency, longSpans); err != nil {
 				longErrors <- err
 			}
 		}(i)
@@ -270,7 +306,7 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 			}
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			if err := capacityActiveShortHTTP(px.ListenAddr(), origin.URL, httpPayload); err != nil {
+			if err := capacityActiveShortHTTP(px.ListenAddr(), origin.URL, httpPayload, shortSpans); err != nil {
 				shortErrors <- err
 				return
 			}
@@ -295,6 +331,8 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 	close(longErrors)
 	close(shortLatencies)
 	close(longLatency)
+	close(shortSpans)
+	close(longSpans)
 	var firstError error
 	for e := range shortErrors {
 		if firstError == nil {
@@ -314,9 +352,18 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 	for v := range longLatency {
 		longs = append(longs, v)
 	}
-	if firstError != nil || len(shorts) != shortCount || len(longs) != activeCount*rounds || overlapShorts.Load() == 0 {
-		t.Fatalf("mixed ACTIVE payload failed: first=%v short=%d/%d long_samples=%d/%d overlapped_short=%d", firstError, len(shorts), shortCount, len(longs), activeCount*rounds, overlapShorts.Load())
+	longIntervals := make([]capacityActiveInterval, 0, activeCount*rounds)
+	for v := range longSpans {
+		longIntervals = append(longIntervals, v)
 	}
+	shortIntervals := make([]capacityActiveInterval, 0, shortCount)
+	for v := range shortSpans {
+		shortIntervals = append(shortIntervals, v)
+	}
+	// Only a short HTTP request whose actual write/response interval crosses
+	// an actual long payload read/write interval counts. A long worker sleeping
+	// between rounds does not prove real concurrent data-plane transfer.
+	trueOverlaps := requireCapacityActiveTransferEvidence(t, firstError, len(shorts), shortCount, len(longs), activeCount*rounds, shortIntervals, longIntervals, overlapShorts.Load())
 	for i, c := range held {
 		if e := verifyCapacityHeldTunnel(c, i); e != nil {
 			t.Fatalf("post-active long tunnel %d failed: %v", i, e)
@@ -337,7 +384,7 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 	_, sp95, sp99 := capacityLatencySummary(shorts)
 	_, lp95, lp99 := capacityLatencySummary(longs)
 	totalBytes := int64(activeCount*rounds*payloadSize - payloadSize + (10 << 20))
-	t.Logf("ACTIVE_PAYLOAD_RESULT seed=%d held_long=%d streaming_long=%d idle_long=%d streamed_bytes=%d per_round_bytes=%d bulk_bytes=%d short_requests=%d short_body_bytes=%d short_complete=%d short_body_total_bytes=%d overlapped_worker_shorts=%d short_starts_during_actual_transfer=%d short_finishes_during_actual_transfer=%d short_offered_p95=%s short_offered_p99=%s long_roundtrip_p95=%s long_roundtrip_p99=%s physical_active=%d elapsed=%s", seed, heldCount, activeCount, heldCount-activeCount, totalBytes, payloadSize, 10<<20, shortCount, shortSize, len(shorts), shortCount*shortSize, overlapShorts.Load(), shortStartsDuringTransfer.Load(), shortEndsDuringTransfer.Load(), sp95, sp99, lp95, lp99, snap.ActiveDownstream, time.Since(startAt))
+	t.Logf("ACTIVE_PAYLOAD_RESULT seed=%d held_long=%d streaming_long=%d idle_long=%d streamed_bytes=%d per_round_bytes=%d bulk_bytes=%d short_requests=%d short_body_bytes=%d short_complete=%d short_body_total_bytes=%d overlapped_worker_shorts=%d short_overlaps_actual_transfer=%d short_starts_during_actual_transfer=%d short_finishes_during_actual_transfer=%d short_offered_p95=%s short_offered_p99=%s long_roundtrip_p95=%s long_roundtrip_p99=%s physical_active=%d elapsed=%s", seed, heldCount, activeCount, heldCount-activeCount, totalBytes, payloadSize, 10<<20, shortCount, shortSize, len(shorts), shortCount*shortSize, overlapShorts.Load(), trueOverlaps, shortStartsDuringTransfer.Load(), shortEndsDuringTransfer.Load(), sp95, sp99, lp95, lp99, snap.ActiveDownstream, time.Since(startAt))
 	for i, c := range held {
 		_ = c.Close()
 		held[i] = nil
