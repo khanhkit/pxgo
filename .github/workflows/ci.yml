@@ -325,6 +325,7 @@ jobs:
         env:
           PXGO_CAPACITY_BURST_2560: '1'
           PXGO_CAPACITY_BENCH_MODE: 'auto'
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
           PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
           PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
         run: |
@@ -345,9 +346,19 @@ jobs:
             go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -timeout=125s 2>&1 |
               Tee-Object -FilePath "benchmarks/mixed-seed-$seed.log"
             if ($LASTEXITCODE -ne 0) { throw "Windows mixed traffic seed=$seed failed" }
+            go test ./internal/proxy -run '^TestCapacityMixedCompetingAdmission$' -count=1 -v -timeout=60s 2>&1 |
+              Tee-Object -FilePath "benchmarks/mixed-compete-seed-$seed.log"
+            if ($LASTEXITCODE -ne 0) { throw "Windows competing arrivals seed=$seed failed" }
           }
           Remove-Item Env:PXGO_CAPACITY_MIXED_BENCH
           Remove-Item Env:PXGO_CAPACITY_MIX_SEED
+          if ($env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES -eq '1') {
+            $env:PXGO_CAPACITY_AGING_SOAK = '1'
+            go test ./internal/proxy -run '^TestCapacityMixedRealTimeAgedShortToLong$' -count=1 -v -timeout=55s 2>&1 |
+              Tee-Object -FilePath benchmarks/aged-keepalive-30s.log
+            if ($LASTEXITCODE -ne 0) { throw '30s real-clock short->long promotion failed' }
+            Remove-Item Env:PXGO_CAPACITY_AGING_SOAK
+          }
           go test ./internal/proxy -run '^TestConnectionClass' -count=5 -v -timeout=60s 2>&1 |
             Tee-Object -FilePath benchmarks/class-lifecycle.log
           if ($LASTEXITCODE -ne 0) { throw 'Windows two-class lifecycle failed' }

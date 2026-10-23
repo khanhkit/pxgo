@@ -6,7 +6,7 @@ Status: **EXPERIMENTAL / unmerged / not production-ready**. This is a separate r
 
 R1–R3 `windows-latest` capacity jobs held **2,560 homogeneous CONNECT tunnels** for ~18 seconds. That proves simultaneous tunnel data-plane liveness and native Windows headroom, not the realistic contention among HTTP short requests, repeated keep-alive sessions, long-lived tunnels and short-to-long migration. The workload also used 32-SYN waves to avoid confusing native Winsock listen-backlog refusals with admission-governor limits.
 
-This suite retains the existing **2,560 held-CONNECT** network gate, increases it from **2 to 4 repeated samples per cell**, and adds **4 mixed workloads × 8 seeded independent samples = 32 more samples per cell**. With R11/fast-saturation crossed with class accounting on/off (4 native `windows-latest` cells), this is **16 homogeneous tunnel runs plus 128 mixed-load runs**, each with named profile, actual network request counts, raw p50/p95/p99 and errors. Distinct GitHub-hosted VM runners are NOT paired experiments; higher sample count improves coverage, not causal guarantees across machines.
+This suite retains the existing **2,560 held-CONNECT** network gate, increases it from **2 to 4 repeated samples per cell**, and adds **4 mixed workloads × 8 seeded independent samples = 32 more samples per cell**. With R11/fast-saturation crossed with class accounting on/off (4 native `windows-latest` cells), this is **16 homogeneous tunnel runs plus 128 mixed-load runs plus 32 competing-admission runs** and 2 real-clock idle keepalive aging soaks (class-on cells only), each with named profile, actual network request counts, raw p50/p95/p99 and errors. Distinct GitHub-hosted VM runners are NOT paired experiments; higher sample count improves coverage, not causal guarantees across machines.
 
 ## Four realistic traffic profiles (each seed scales load 80–120%)
 
@@ -21,7 +21,7 @@ Mechanism: a real loopback HTTP origin replies with a fixed payload, and an inde
 
 ## Measurement and limitations
 
-- Output lines `MIXED_RESULT profile=… seed=…` report CONNECT concurrently held, completed short requests, transient HTTP request latency p50/p95/p99, throughput in requests/sec, promotions, current long debt, historical overflow events, global active sockets, process-shared heap, goroutine count and scenario duration. `RESULT platform=windows` logs from existing 2,560 test still report CONNECT p95/p99 and all echo errors.
+- Output lines `MIXED_RESULT profile=… seed=…` report **both** client-service latency (measured after the local concurrency token) and offered-load end-to-end latency (measured before waiting for the local token), so load-generator queue delay is visible rather than hidden. Values report CONNECT concurrently held, completed short requests, transient HTTP request latency p50/p95/p99, throughput in requests/sec, promotions, current long debt, historical overflow events, global active sockets, process-shared heap, goroutine count and scenario duration. `RESULT platform=windows` logs from existing 2,560 test still report CONNECT p95/p99 and all echo errors.
 - The Go test binary co-locates **proxy, load generator and origins**. Heap and goroutines are intentionally named `*_shared`, NOT PxGo-exclusive; they must not be used as per-proxy memory or CPU budgets.
 - The tests exercise real HTTP/1.1, CONNECT, keep-alive and promotion under load; they do **not** yet exercise authenticated real AD/SSPI, Windows Job Object pressure, encrypted long HTTP/2 streams, real SSE/WebSocket frames, remote Internet packet loss, multi-hour tails, or 2,560 *instantaneous* TCP SYNs.
 - A fail-closed test cannot silently skip native Windows mixed-load under inadequate native resources. All expected requests and sockets are counted. Raw stdout must be uploaded to immutable-SHA CI artifacts for failed as well as successful tests.
@@ -37,3 +37,23 @@ go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -tim
 ```
 
 All changes remain in the dedicated experimental PR. A separate independent KitAuditor must inspect the immutable SHA and actual Windows CI logs; this document alone is not a release gate.
+
+
+### Live clock aging and failure-teardown audit enhancement
+
+As a separate native Windows gate for classifier-ON cells, hold an actual ordinary HTTP/1.1 keepalive for >30s without issuing another request. Verify the maintenance ticker promotes the same physical socket from short to long exactly once, not only a mock-clock test. Also, mixed benchmark CONNECT establishment drains ALL goroutine results before reporting a cohort failure so failures do not leave successful, unowned upstream TCP sockets blocking test cleanup. Both are mandatory test quality safeguards and do not alter production runtime.
+
+
+### R1 review: reproducibility and latency boundaries
+
+The independent R1 audit identified a real error-path ownership bug: the CONNECT cohort previously abandoned successful sockets on first setup error, risking teardown hangs. The corrected fixture collects every result and closes every owned socket before asserting failure. It also records `short_offered_p95/p99` (from submission before the bounded client concurrency token) alongside `short_p95/p99` (socket and HTTP service after acquiring that token), making overload-queue measurement bias explicit. Per-seed keepalive counts and 8-request promotion volume now vary independently of long CONNECT and short transient intensity instead of merely scaling total connections.
+
+
+### R1 warning follow-up: simultaneous class arrivals
+
+An additional `TestCapacityMixedCompetingAdmission` sends actual CONNECT and short GET admission attempts **concurrently** behind separate bounded 16-dial producer queues, for eight seeds. It requires every long and short to complete (even though long remains held at the post-load barrier), sends unique post-load CONNECT echo, and asserts physical/class permits conserve and drain. Its p95 values include the client load-generator queue from submission, unlike client-service-only timing. This covers fairness under overlapping arrivals at the existing **single global gate**; no unsupported claim is made that advisory class budgets enforce strict class fairness.
+
+
+### Windows R1 CI gate defect and R2 fix
+
+Raw first-run exact-SHA Windows workflow 39885079509 confirms the four heavy 2,560 CONNECT load jobs passed their earlier homogeneous portion but **each mixed load failed immediately at setup**, since workflow had not explicitly set `PXGO_EXPERIMENTAL_CAPACITY_MODE=auto`. Homogeneous test hid this by `t.Setenv` internally. R2 explicitly sets AUTO in the research job and retains mixed-test fail-closed validation. Do not count R1's Windows mixed results as benchmark evidence; only an exact R2 green workflow with complete `MIXED_RESULT` lines qualifies.

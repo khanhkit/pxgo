@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"runtime"
-	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -56,6 +55,8 @@ func TestCapacityMixedTrafficBench(t *testing.T) {
 		factor := 80 + (seed*13)%41
 		p.tunnels = max(32, p.tunnels*factor/100)
 		p.churn = max(32, p.churn*factor/100)
+		p.promote = max(8, p.promote*(80+(seed*19+5)%41)/100)
+		p.keepAlive = max(16, p.keepAlive*(80+(seed*7+23)%41)/100)
 		t.Run(p.name, func(t *testing.T) { runCapacityMixedProfile(t, p.name, p.tunnels, p.keepAlive, p.promote, p.churn) })
 	}
 }
@@ -179,12 +180,21 @@ func runCapacityMixedProfile(t *testing.T, name string, tunnels, keepAlive, prom
 			deliveries <- connected{c, e}
 		}(i)
 	}
+	var firstConnectError error
 	for i := 0; i < tunnels; i++ {
 		res := <-deliveries
 		if res.err != nil {
-			t.Fatalf("CONNECT %d/%d: %v", i, tunnels, res.err)
+			if firstConnectError == nil {
+				firstConnectError = res.err
+			}
+			continue
 		}
 		held = append(held, res.conn)
+	}
+	// Drain the entire asynchronous cohort before failing, otherwise a
+	// canceled test leaves unowned successful sockets blocking teardown.
+	if firstConnectError != nil {
+		t.Fatalf("CONNECT setup failures (%d/%d admitted): %v", len(held), tunnels, firstConnectError)
 	}
 	for i := 0; i < keepAlive+promote; i++ {
 		c, e := net.DialTimeout("tcp", px.ListenAddr(), 4*time.Second)
@@ -209,6 +219,7 @@ func runCapacityMixedProfile(t *testing.T, name string, tunnels, keepAlive, prom
 	// and keepalive sockets remain held. Use bounded 32-way dial concurrency on
 	// Windows to avoid conflating pending TCP SYN backlog with governor fairness.
 	latencies := make(chan time.Duration, churn)
+	offeredLatencies := make(chan time.Duration, churn)
 	problems := make(chan error, churn)
 	tokens := make(chan struct{}, 32)
 	var wg sync.WaitGroup
@@ -217,6 +228,7 @@ func runCapacityMixedProfile(t *testing.T, name string, tunnels, keepAlive, prom
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			offeredAt := time.Now()
 			tokens <- struct{}{}
 			defer func() { <-tokens }()
 			begin := time.Now()
@@ -233,11 +245,13 @@ func runCapacityMixedProfile(t *testing.T, name string, tunnels, keepAlive, prom
 				return
 			}
 			latencies <- time.Since(begin)
+			offeredLatencies <- time.Since(offeredAt)
 		}()
 	}
 	wg.Wait()
 	close(problems)
 	close(latencies)
+	close(offeredLatencies)
 	for e := range problems {
 		t.Errorf("short request failed: %v", e)
 	}
@@ -249,7 +263,13 @@ func runCapacityMixedProfile(t *testing.T, name string, tunnels, keepAlive, prom
 	if len(values) != churn {
 		t.Fatalf("short-throughput starvation: completed=%d attempted=%d", len(values), churn)
 	}
-	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	offered := make([]time.Duration, 0, churn)
+	for v := range offeredLatencies {
+		offered = append(offered, v)
+	}
+	if len(offered) != churn {
+		t.Fatalf("offered-latency missing samples: got=%d expected=%d", len(offered), churn)
+	}
 	// Actual held sockets retain a live DATA path after short-load churn.
 	for i := 0; i < tunnels; i++ {
 		if e := verifyCapacityHeldTunnel(held[i], i); e != nil {
@@ -280,12 +300,13 @@ func runCapacityMixedProfile(t *testing.T, name string, tunnels, keepAlive, prom
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	p50, p95, p99 := capacityLatencySummary(values)
+	_, offeredP95, offeredP99 := capacityLatencySummary(offered)
 	debt, events := 0, uint64(0)
 	if c != nil {
 		debt = c.LongDebt
 		events = c.LongOverflow
 	}
-	t.Logf("MIXED_RESULT profile=%s seed=%s held_long_connect=%d held_short=%d promoted_short_to_long=%d short_attempted=%d short_completed=%d short_p50=%s short_p95=%s short_p99=%s short_rps=%.2f class_current_debt=%d class_overflow_events=%d physical_active=%d heap_shared_bytes=%d goroutines_shared=%d duration=%s", name, os.Getenv("PXGO_CAPACITY_MIX_SEED"), tunnels, keepAlive, promote, churn, len(values), p50, p95, p99, float64(churn)/elapsedShort.Seconds(), debt, events, snap, mem.Alloc, runtime.NumGoroutine(), time.Since(start))
+	t.Logf("MIXED_RESULT profile=%s seed=%s held_long_connect=%d held_short=%d promoted_short_to_long=%d short_attempted=%d short_completed=%d short_p50=%s short_p95=%s short_p99=%s short_offered_p95=%s short_offered_p99=%s short_rps=%.2f class_current_debt=%d class_overflow_events=%d physical_active=%d heap_shared_bytes=%d goroutines_shared=%d duration=%s", name, os.Getenv("PXGO_CAPACITY_MIX_SEED"), tunnels, keepAlive, promote, churn, len(values), p50, p95, p99, offeredP95, offeredP99, float64(churn)/elapsedShort.Seconds(), debt, events, snap, mem.Alloc, runtime.NumGoroutine(), time.Since(start))
 	for _, c := range held {
 		_ = c.Close()
 	}
