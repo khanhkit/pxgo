@@ -337,12 +337,6 @@ jobs:
               Tee-Object -FilePath "benchmarks/2560-$run.log"
             if ($LASTEXITCODE -ne 0) { throw "2560 Windows live-tunnel benchmark failed run $run" }
           }
-          go test ./internal/proxy -run '^TestConnectionClass' -count=5 -v -timeout=60s 2>&1 |
-            Tee-Object -FilePath benchmarks/class-lifecycle.log
-          if ($LASTEXITCODE -ne 0) { throw 'Windows two-class lifecycle failed' }
-          go test ./internal/proxy -run '^$' -bench '^BenchmarkConnectionClass' -benchmem -count=3 2>&1 |
-            Tee-Object -FilePath benchmarks/class-microbenchmark.log
-          if ($LASTEXITCODE -ne 0) { throw 'Windows class microbenchmarks failed' }
       - name: Preserve benchmark and failure evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -400,6 +394,17 @@ jobs:
           PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
           PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
         run: |
+          # On seed0, run class lifecycle BEFORE the high-socket-count load.
+          # The heavy 4x2560 test runner has no ephemeral TCP ports left by
+          # its end; putting lifecycle tests there produced WSAEADDRINUSE.
+          if ($env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            go test ./internal/proxy -run '^TestConnectionClass' -count=5 -v -timeout=60s 2>&1 |
+              Tee-Object -FilePath benchmarks/class-lifecycle.log
+            if ($LASTEXITCODE -ne 0) { throw 'Windows class lifecycle failed on fresh runner' }
+            go test ./internal/proxy -run '^$' -bench '^BenchmarkConnectionClass' -benchmem -count=3 2>&1 |
+              Tee-Object -FilePath benchmarks/class-microbenchmark.log
+            if ($LASTEXITCODE -ne 0) { throw 'Windows class microbenchmarks failed on fresh runner' }
+          }
           go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -timeout=125s 2>&1 |
             Tee-Object -FilePath benchmarks/mixed-profiles.log
           if ($LASTEXITCODE -ne 0) { throw 'Mixed profiles did not meet native Windows live-tunnel/HTTP integrity gates' }
