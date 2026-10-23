@@ -55,6 +55,8 @@ func TestCapacityMixedStaggeredLifetimes(t *testing.T) {
 			go func(c net.Conn) { defer originWG.Done(); defer c.Close(); _, _ = io.Copy(c, c) }(c)
 		}
 	}()
+	// Go defers run LIFO: the later held-client cleanup executes BEFORE this
+	// listener close/Wait, so echo handlers cannot be left with owned sockets.
 	defer func() { _ = echo.Close(); originWG.Wait() }()
 	cfg := config.Default()
 	cfg.ProxyReload = 0
@@ -96,11 +98,32 @@ func TestCapacityMixedStaggeredLifetimes(t *testing.T) {
 		held[r.index] = r.socket
 	}
 	if firstOpenError != nil {
+		// A partially admitted cohort must never leave any successful socket
+		// unowned when a later dial fails. Close explicitly before Fatal;
+		// the deferred cleanup is idempotent and also covers any panic.
+		for i, c := range held {
+			if c != nil {
+				_ = c.Close()
+				held[i] = nil
+			}
+		}
 		t.Fatalf("initial live tunnel cohort incomplete: %v", firstOpenError)
 	}
 	opened := time.Now()
 	closed := 0
 	for phase := range counts {
+		if wait := time.Until(opened.Add(targets[phase])); wait > 0 {
+			time.Sleep(wait)
+		}
+		for i := closed; i < closed+counts[phase]; i++ {
+			_ = held[i].Close()
+			held[i] = nil
+		}
+		closed += counts[phase]
+		remaining := total - closed
+		closedAt := time.Since(opened)
+		// Replenish short-lived TCP admission AFTER the long cohort releases
+		// physical permits, while the later long-lived buckets remain active.
 		shortN := 48 + (seed*11+phase*7)%49
 		shortLat := make(chan time.Duration, shortN)
 		failures := make(chan error, shortN)
@@ -141,15 +164,7 @@ func TestCapacityMixedStaggeredLifetimes(t *testing.T) {
 		if firstShortError != nil || len(latency) != shortN {
 			t.Fatalf("phase %d short demand incomplete: %d/%d first=%v", phase, len(latency), shortN, firstShortError)
 		}
-		if wait := time.Until(opened.Add(targets[phase])); wait > 0 {
-			time.Sleep(wait)
-		}
-		for i := closed; i < closed+counts[phase]; i++ {
-			_ = held[i].Close()
-			held[i] = nil
-		}
-		closed += counts[phase]
-		remaining := total - closed
+
 		deadline := time.Now().Add(4 * time.Second)
 		for time.Now().Before(deadline) {
 			snap := px.capacityDiagnosticSnapshot()
@@ -177,7 +192,7 @@ func TestCapacityMixedStaggeredLifetimes(t *testing.T) {
 			}
 		}
 		_, p95, p99 := capacityLatencySummary(latency)
-		t.Logf("LIFETIME_RESULT seed=%d phase=%d lifetime_target=%s short_attempted=%d short_completed=%d short_offered_p95=%s short_offered_p99=%s closed_long=%d remaining_long=%d global_active=%d class_debt=%d", seed, phase, targets[phase], shortN, len(latency), p95, p99, counts[phase], remaining, snap.ActiveDownstream, func() int {
+		t.Logf("LIFETIME_RESULT seed=%d phase=%d lifetime_target=%s actual_close_elapsed=%s short_attempted=%d short_completed=%d short_offered_p95=%s short_offered_p99=%s closed_long=%d remaining_long=%d global_active=%d class_debt=%d", seed, phase, targets[phase], closedAt, shortN, len(latency), p95, p99, counts[phase], remaining, snap.ActiveDownstream, func() int {
 			if snap.ClassPools == nil {
 				return 0
 			}
