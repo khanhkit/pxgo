@@ -331,11 +331,23 @@ jobs:
           # Bounded SYN waves isolate 2,560 simultaneously held live tunnels
           # from the separate known Windows SOMAXCONN 2,560-SYN burst limit.
           $env:PXGO_CAPACITY_SYN_SPIKE = '0'
-          foreach ($run in 1,2) {
+          foreach ($run in 1..4) {
             go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=70s 2>&1 |
               Tee-Object -FilePath "benchmarks/2560-$run.log"
             if ($LASTEXITCODE -ne 0) { throw "2560 Windows live-tunnel benchmark failed run $run" }
           }
+          # 8 independent deterministic intensity seeds x 4 mixed profiles:
+          # short-heavy, balanced, long-heavy and churn (32 mixed samples
+          # per matrix cell, 128 mixed samples across all Windows cells).
+          $env:PXGO_CAPACITY_MIXED_BENCH = '1'
+          foreach ($seed in 0..7) {
+            $env:PXGO_CAPACITY_MIX_SEED = "$seed"
+            go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -timeout=125s 2>&1 |
+              Tee-Object -FilePath "benchmarks/mixed-seed-$seed.log"
+            if ($LASTEXITCODE -ne 0) { throw "Windows mixed traffic seed=$seed failed" }
+          }
+          Remove-Item Env:PXGO_CAPACITY_MIXED_BENCH
+          Remove-Item Env:PXGO_CAPACITY_MIX_SEED
           go test ./internal/proxy -run '^TestConnectionClass' -count=5 -v -timeout=60s 2>&1 |
             Tee-Object -FilePath benchmarks/class-lifecycle.log
           if ($LASTEXITCODE -ne 0) { throw 'Windows two-class lifecycle failed' }
