@@ -52,6 +52,65 @@ func capacityActiveExchange(c net.Conn, index, round, size int) (time.Duration, 
 	return time.Since(began), nil
 }
 
+// Independent reader and writer exercise true full-duplex TCP relay under
+// window/backpressure, distinct from the smaller request/reply chunked echoes.
+// The 10 MiB transfer is bounded by one deadline and verifies every byte.
+func capacityActiveFullDuplex(c net.Conn, index, round, size int) (time.Duration, error) {
+	if err := c.SetDeadline(time.Now().Add(18 * time.Second)); err != nil {
+		return 0, err
+	}
+	original := make([]byte, size)
+	for i := range original {
+		original[i] = byte((index*37 + round*19 + i*13) % 251)
+	}
+	returned := make([]byte, size)
+	sent := make(chan error, 1)
+	began := time.Now()
+	go func() {
+		n, err := io.Copy(c, bytes.NewReader(original))
+		if err == nil && n != int64(size) {
+			err = io.ErrShortWrite
+		}
+		sent <- err
+	}()
+	_, readErr := io.ReadFull(c, returned)
+	writeErr := <-sent
+	if readErr != nil {
+		return 0, fmt.Errorf("duplex read: %w", readErr)
+	}
+	if writeErr != nil {
+		return 0, fmt.Errorf("duplex write: %w", writeErr)
+	}
+	if !bytes.Equal(original, returned) {
+		return 0, fmt.Errorf("duplex tunnel=%d round=%d altered %d bytes", index, round, size)
+	}
+	return time.Since(began), nil
+}
+
+func capacityActiveTransferRounds(c net.Conn, index, frameSize, rounds int, transferring *atomic.Int64, samples chan<- time.Duration) error {
+	for round := 0; round < rounds; round++ {
+		size := frameSize
+		if index == 0 && round == 0 {
+			size = 10 << 20
+		}
+		transferring.Add(1)
+		var latency time.Duration
+		var err error
+		if size == 10<<20 {
+			latency, err = capacityActiveFullDuplex(c, index, round, size)
+		} else {
+			latency, err = capacityActiveExchange(c, index, round, size)
+		}
+		transferring.Add(-1)
+		if err != nil {
+			return err
+		}
+		samples <- latency
+		time.Sleep(12 * time.Millisecond)
+	}
+	return c.SetDeadline(time.Time{})
+}
+
 func capacityActiveShortHTTP(proxy, origin string, expected []byte) error {
 	c, err := net.DialTimeout("tcp", proxy, 6*time.Second)
 	if err != nil {
@@ -172,35 +231,28 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 		t.Fatal("must retain genuinely idle and active long tunnels")
 	}
 	var activeWorkers atomic.Int64
+	var activeTransfers atomic.Int64
 	var overlapShorts atomic.Int64
+	var shortStartsDuringTransfer atomic.Int64
+	var shortEndsDuringTransfer atomic.Int64
 	longErrors := make(chan error, activeCount)
 	longLatency := make(chan time.Duration, activeCount*rounds)
-	start := make(chan struct{})
+	longStart := make(chan struct{})
+	shortStart := make(chan struct{})
+	longReady := make(chan struct{}, activeCount)
 	var longWG sync.WaitGroup
 	for i := 0; i < activeCount; i++ {
 		longWG.Add(1)
 		go func(index int) {
 			defer longWG.Done()
-			<-start
+			<-longStart
 			c := held[index]
 			activeWorkers.Add(1)
 			defer activeWorkers.Add(-1)
-			// One 10 MiB bulk frame amid typical short/medium relay frames, rather
-			// than allocating 10 MiB per tunnel. Explicit payload size is recorded.
-			for round := 0; round < rounds; round++ {
-				n := payloadSize
-				if index == 0 && round == 0 {
-					n = 10 << 20
-				}
-				latency, err := capacityActiveExchange(c, index, round, n)
-				if err != nil {
-					longErrors <- err
-					return
-				}
-				longLatency <- latency
-				time.Sleep(12 * time.Millisecond)
+			longReady <- struct{}{}
+			if err := capacityActiveTransferRounds(c, index, payloadSize, rounds, &activeTransfers, longLatency); err != nil {
+				longErrors <- err
 			}
-			_ = c.SetDeadline(time.Time{})
 		}(i)
 	}
 	shortErrors := make(chan error, shortCount)
@@ -211,8 +263,11 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 		shortWG.Add(1)
 		go func() {
 			defer shortWG.Done()
-			<-start
+			<-shortStart
 			offered := time.Now()
+			if activeTransfers.Load() > 0 {
+				shortStartsDuringTransfer.Add(1)
+			}
 			slots <- struct{}{}
 			defer func() { <-slots }()
 			if err := capacityActiveShortHTTP(px.ListenAddr(), origin.URL, httpPayload); err != nil {
@@ -222,11 +277,18 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 			if activeWorkers.Load() > 0 {
 				overlapShorts.Add(1)
 			}
+			if activeTransfers.Load() > 0 {
+				shortEndsDuringTransfer.Add(1)
+			}
 			shortLatencies <- time.Since(offered)
 		}()
 	}
 	startAt := time.Now()
-	close(start)
+	close(longStart)
+	for i := 0; i < activeCount; i++ {
+		<-longReady
+	}
+	close(shortStart)
 	shortWG.Wait()
 	longWG.Wait()
 	close(shortErrors)
@@ -275,7 +337,7 @@ func TestCapacityMixedActivePayload(t *testing.T) {
 	_, sp95, sp99 := capacityLatencySummary(shorts)
 	_, lp95, lp99 := capacityLatencySummary(longs)
 	totalBytes := int64(activeCount*rounds*payloadSize - payloadSize + (10 << 20))
-	t.Logf("ACTIVE_PAYLOAD_RESULT seed=%d held_long=%d streaming_long=%d idle_long=%d streamed_bytes=%d per_round_bytes=%d bulk_bytes=%d short_requests=%d short_body_bytes=%d short_complete=%d short_body_total_bytes=%d overlapped_worker_shorts=%d short_offered_p95=%s short_offered_p99=%s long_roundtrip_p95=%s long_roundtrip_p99=%s physical_active=%d elapsed=%s", seed, heldCount, activeCount, heldCount-activeCount, totalBytes, payloadSize, 10<<20, shortCount, shortSize, len(shorts), shortCount*shortSize, overlapShorts.Load(), sp95, sp99, lp95, lp99, snap.ActiveDownstream, time.Since(startAt))
+	t.Logf("ACTIVE_PAYLOAD_RESULT seed=%d held_long=%d streaming_long=%d idle_long=%d streamed_bytes=%d per_round_bytes=%d bulk_bytes=%d short_requests=%d short_body_bytes=%d short_complete=%d short_body_total_bytes=%d overlapped_worker_shorts=%d short_starts_during_actual_transfer=%d short_finishes_during_actual_transfer=%d short_offered_p95=%s short_offered_p99=%s long_roundtrip_p95=%s long_roundtrip_p99=%s physical_active=%d elapsed=%s", seed, heldCount, activeCount, heldCount-activeCount, totalBytes, payloadSize, 10<<20, shortCount, shortSize, len(shorts), shortCount*shortSize, overlapShorts.Load(), shortStartsDuringTransfer.Load(), shortEndsDuringTransfer.Load(), sp95, sp99, lp95, lp99, snap.ActiveDownstream, time.Since(startAt))
 	for i, c := range held {
 		_ = c.Close()
 		held[i] = nil
