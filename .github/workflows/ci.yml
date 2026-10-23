@@ -405,6 +405,13 @@ jobs:
               Tee-Object -FilePath benchmarks/class-microbenchmark.log
             if ($LASTEXITCODE -ne 0) { throw 'Windows class microbenchmarks failed on fresh runner' }
           }
+          # Short/medium/long TCP survival (250ms..5.5s), natural releases,
+          # short HTTP churn during every phase and no physical/class leaks.
+          # Run FIRST on a fresh Windows VM to avoid contaminating results
+          # with prior TIME_WAIT/ephemeral port pressure.
+          go test ./internal/proxy -run '^TestCapacityMixedStaggeredLifetimes$' -count=1 -v -timeout=65s 2>&1 |
+            Tee-Object -FilePath benchmarks/staggered-lifetimes.log
+          if ($LASTEXITCODE -ne 0) { throw 'Real short/medium/long lifetime turnover failed' }
           go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -timeout=125s 2>&1 |
             Tee-Object -FilePath benchmarks/mixed-profiles.log
           if ($LASTEXITCODE -ne 0) { throw 'Mixed profiles did not meet native Windows live-tunnel/HTTP integrity gates' }
