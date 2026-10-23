@@ -418,6 +418,13 @@ jobs:
           go test ./internal/proxy -run '^TestCapacityMixedStaggeredLifetimes$' -count=1 -v -timeout=65s 2>&1 |
             Tee-Object -FilePath benchmarks/staggered-lifetimes.log
           if ($LASTEXITCODE -ne 0) { throw 'Real short/medium/long lifetime turnover failed' }
+          # Active bidirectional relays (1 KiB-256 KiB frames and one 10 MiB
+          # bulk transfer) compete with short HTTP 128 B-64 KiB responses.
+          # Long and short classes share physical FD/Job headroom. Verify
+          # p95/p99 and 100% exact payload integrity on the native Win runner.
+          go test ./internal/proxy -run '^TestCapacityMixedActivePayload$' -count=1 -v -timeout=90s 2>&1 |
+            Tee-Object -FilePath benchmarks/active-long-short-data-plane.log
+          if ($LASTEXITCODE -ne 0) { throw 'Concurrent long data-plane and short HTTP integrity/fairness gate failed' }
           go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -timeout=125s 2>&1 |
             Tee-Object -FilePath benchmarks/mixed-profiles.log
           if ($LASTEXITCODE -ne 0) { throw 'Mixed profiles did not meet native Windows live-tunnel/HTTP integrity gates' }
