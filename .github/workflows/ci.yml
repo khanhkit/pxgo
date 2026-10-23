@@ -409,6 +409,12 @@ jobs:
           # short HTTP churn during every phase and no physical/class leaks.
           # Run FIRST on a fresh Windows VM to avoid contaminating results
           # with prior TIME_WAIT/ephemeral port pressure.
+          # Enforce an ACTUALLY saturated global physical limit of 64 long
+          # CONNECTs. Four real short HTTP arrivals must block until a long
+          # tunnel frees a permit, then complete and replenish the long pool.
+          go test ./internal/proxy -run '^TestCapacityShortBorrowsReleasedLongPermit$' -count=1 -v -timeout=55s 2>&1 |
+            Tee-Object -FilePath benchmarks/strict-64-permit-borrowing.log
+          if ($LASTEXITCODE -ne 0) { throw 'Hard-saturated long-to-short permit borrowing failed' }
           go test ./internal/proxy -run '^TestCapacityMixedStaggeredLifetimes$' -count=1 -v -timeout=65s 2>&1 |
             Tee-Object -FilePath benchmarks/staggered-lifetimes.log
           if ($LASTEXITCODE -ne 0) { throw 'Real short/medium/long lifetime turnover failed' }
