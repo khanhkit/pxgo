@@ -539,6 +539,18 @@ jobs:
               Tee-Object -FilePath benchmarks/isolated-negative-cleanup.log
             if ($LASTEXITCODE -ne 0) { throw 'Real early-failure socket cleanup/deadlock gate failed' }
           }
+      - name: Capture Winsock port and socket-state diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          try { netsh int ipv4 show dynamicport tcp 2>&1 | Out-String | Set-Content benchmarks/windows-tcp-dynamic-range.txt } catch { "netsh unavailable: $_" | Set-Content benchmarks/windows-tcp-dynamic-range.txt }
+          try {
+            Get-NetTCPConnection -ErrorAction Stop |
+              Group-Object State | Sort-Object Name |
+              Select-Object Name,Count | Format-Table -AutoSize | Out-String |
+              Set-Content benchmarks/windows-tcp-state-counts.txt
+          } catch { "TCP states unavailable: $_" | Set-Content benchmarks/windows-tcp-state-counts.txt }
       - name: Preserve SHA-qualified isolated process evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

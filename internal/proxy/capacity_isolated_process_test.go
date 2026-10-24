@@ -240,24 +240,24 @@ func TestCapacityIsolatedProcessResourceBench(t *testing.T) {
 	started := time.Now()
 	for i := 0; i < shortN; i++ {
 		load.Add(1)
-		go func() {
+		go func(index int) {
 			defer load.Done()
 			offered := time.Now()
 			shortTokens <- struct{}{}
 			defer func() { <-shortTokens }()
 			c, e := net.DialTimeout("tcp", proxy, 5*time.Second)
 			if e != nil {
-				shortErrors <- e
+				shortErrors <- fmt.Errorf("short[%d] dial: %w", index, e)
 				return
 			}
 			e = capacityMixedHTTP(c, bufio.NewReader(c), origin.URL, false)
 			_ = c.Close()
 			if e != nil {
-				shortErrors <- e
+				shortErrors <- fmt.Errorf("short[%d] HTTP response: %w", index, e)
 				return
 			}
 			shortLatency <- time.Since(offered)
-		}()
+		}(i)
 	}
 	// Resource telemetry is sampled continuously in the child PID by the
 	// independent 25ms sampler, including the earlier CONNECT ramp.
@@ -265,22 +265,23 @@ func TestCapacityIsolatedProcessResourceBench(t *testing.T) {
 	elapsed := time.Since(started)
 	close(shortErrors)
 	close(shortLatency)
-	latencies := make([]time.Duration, 0, shortN)
-	for sample := range shortLatency {
-		latencies = append(latencies, sample)
-	}
-	if len(latencies) != shortN {
-		t.Fatalf("isolation short sample count=%d, want=%d", len(latencies), shortN)
-	}
-	_, p95, p99 := capacityLatencySummary(latencies)
+	shortErrorCount := 0
 	for e := range shortErrors {
+		shortErrorCount++
 		if firstErr == nil {
 			firstErr = e
 		}
 	}
-	if firstErr != nil {
-		t.Fatalf("isolated short HTTP failed: %v", firstErr)
+	latencies := make([]time.Duration, 0, shortN)
+	for sample := range shortLatency {
+		latencies = append(latencies, sample)
 	}
+	if len(latencies) != shortN || shortErrorCount > 0 {
+		// Preserve the exact FIRST native Winsock/HTTP error, not merely the
+		// secondary 599/600 sample count that masked an R15 Windows failure.
+		t.Fatalf("isolated short requests completed=%d/%d error_count=%d first_error=%v", len(latencies), shortN, shortErrorCount, firstErr)
+	}
+	_, p95, p99 := capacityLatencySummary(latencies)
 	for i, c := range held {
 		if e := verifyCapacityHeldTunnel(c, i); e != nil {
 			t.Fatalf("held CONNECT %d post-load payload failed: %v", i, e)
