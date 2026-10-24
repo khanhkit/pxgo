@@ -289,15 +289,17 @@ jobs:
           done
 
   windows-connection-class-research:
-    name: Windows capacity research (${{ matrix.policy }}, classes=${{ matrix.class_mode }})
+    name: Windows capacity research (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, sample=${{ matrix.sample }})
     if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
     runs-on: windows-latest
     timeout-minutes: 24
     strategy:
       fail-fast: false
+      max-parallel: 8
       matrix:
         policy: [r11, fast_saturation]
         class_mode: [off, 'on']
+        sample: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -332,16 +334,17 @@ jobs:
           # Bounded SYN waves isolate 2,560 simultaneously held live tunnels
           # from the separate known Windows SOMAXCONN 2,560-SYN burst limit.
           $env:PXGO_CAPACITY_SYN_SPIKE = '0'
-          foreach ($run in 1..4) {
-            go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=70s 2>&1 |
-              Tee-Object -FilePath "benchmarks/2560-$run.log"
-            if ($LASTEXITCODE -ne 0) { throw "2560 Windows live-tunnel benchmark failed run $run" }
-          }
+          # Four independent samples, each on a FRESH Windows VM. Previously
+          # chaining four 2,560-tunnel soaks polluted later runs with TCP
+          # endpoint/WSAENOBUFS pressure. Do not waive any failed socket.
+          go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath "benchmarks/2560-sample-${{ matrix.sample }}.log"
+          if ($LASTEXITCODE -ne 0) { throw "2560 native Windows live-tunnel sample ${{ matrix.sample }} FAILED" }
       - name: Preserve benchmark and failure evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: win-capacity-${{ matrix.policy }}-classes-${{ matrix.class_mode }}-${{ github.event.pull_request.head.sha }}
+          name: win-capacity-${{ matrix.policy }}-classes-${{ matrix.class_mode }}-sample-${{ matrix.sample }}-${{ github.event.pull_request.head.sha }}
           path: benchmarks/
           retention-days: 14
 
