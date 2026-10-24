@@ -385,6 +385,12 @@ jobs:
           "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
           "seed=${{ matrix.seed }} policy=${{ matrix.policy }} classes=${{ matrix.class_mode }}" | Add-Content benchmarks/runner.txt
           Get-Content benchmarks/runner.txt
+          # Capture ephemeral-port range before the high-socket-count test;
+          # no OS port-range mutation or insecure SO_REUSEADDR workaround.
+          netsh interface ipv4 show dynamicport tcp 2>&1 |
+            Out-File -FilePath benchmarks/windows-ephemeral-range-before.txt
+          netsh interface ipv6 show dynamicport tcp 2>&1 |
+            Add-Content benchmarks/windows-ephemeral-range-before.txt
       - name: Concurrent short/long workload and admission competition
         shell: pwsh
         env:
@@ -437,6 +443,32 @@ jobs:
               Tee-Object -FilePath benchmarks/real-clock-30s-promotion.log
             if ($LASTEXITCODE -ne 0) { throw 'Live 30s idle keepalive promotion failed' }
           }
+      - name: Capture Windows TCP state and port exhaustion diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          # Runs even if a mixed profile failed on WSAEADDRINUSE. Diagnostics
+          # are evidence only, not a PASS waiver and never change socket state.
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          $out = 'benchmarks/windows-tcp-after.txt'
+          "utc=$([DateTime]::UtcNow.ToString('o'))" | Set-Content $out
+          try {
+            '--- IPv4 dynamic ports ---' | Add-Content $out
+            netsh interface ipv4 show dynamicport tcp 2>&1 | Add-Content $out
+            '--- IPv6 dynamic ports ---' | Add-Content $out
+            netsh interface ipv6 show dynamicport tcp 2>&1 | Add-Content $out
+            '--- TCP state counts ---' | Add-Content $out
+            $connections = @(Get-NetTCPConnection -ErrorAction Stop)
+            $connections | Group-Object State | Sort-Object Name |
+              ForEach-Object { "state=$($_.Name) count=$($_.Count)" } | Add-Content $out
+            '--- TIME_WAIT loopback endpoints (sample up to 24) ---' | Add-Content $out
+            $connections | Where-Object { $_.State -eq 'TimeWait' -and $_.LocalAddress -in @('127.0.0.1','::1') } |
+              Select-Object -First 24 LocalAddress,LocalPort,RemoteAddress,RemotePort,State |
+              Format-Table -AutoSize | Out-String | Add-Content $out
+          } catch {
+            "TCP_DIAGNOSTICS_UNAVAILABLE: $($_.Exception.Message)" | Add-Content $out
+          }
+          Get-Content $out
       - name: Preserve native Windows evidence, including failures
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
