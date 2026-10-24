@@ -477,6 +477,65 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  windows-isolated-process-capacity:
+    name: Windows isolated proxy (${{ matrix.policy }}, classes=${{ matrix.classes }}, seed=${{ matrix.seed }})
+    # Proxy-only private commit/RSS/handle/CPU. Distinct child PID, separate
+    # client+upstream parent; never infer these values from co-located heap.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 14
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        policy: [r11, fast_saturation]
+        classes: [off, 'on']
+        seed: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Immutable SHA and Windows identity
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable HEAD mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/isolated-runner.txt
+          "go=$(go version)" | Add-Content benchmarks/isolated-runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/isolated-runner.txt
+          "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/isolated-runner.txt
+          Get-Content benchmarks/isolated-runner.txt
+      - name: Real mixed-load with native process-private resource accounting
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_ISOLATED_BENCH: '1'
+          PXGO_CAPACITY_ISOLATED_SEED: ${{ matrix.seed }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.classes == 'on' && '1' || '0' }}
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+        run: |
+          go test ./internal/proxy -run '^TestCapacityIsolatedProcessResourceBench$' -count=1 -v -timeout=110s 2>&1 |
+            Tee-Object -FilePath benchmarks/isolated-proxy-process.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native isolated PXGO process or resource gate failed' }
+          if (-not (Select-String -Path benchmarks/isolated-proxy-process.log -Pattern 'ISOLATED_RESULT platform=windows' -Quiet)) {
+            throw 'Required native Windows process-private metric row is absent'
+          }
+      - name: Preserve SHA-qualified isolated process evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-isolated-${{ matrix.policy }}-${{ matrix.classes }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-native-sspi:
     name: Native Windows SSPI gate
     if: github.event_name == 'workflow_dispatch' && inputs.native_sspi
