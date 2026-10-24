@@ -484,6 +484,8 @@ jobs:
     name: Windows isolated proxy (${{ matrix.policy }}, classes=${{ matrix.classes }}, seed=${{ matrix.seed }})
     # Proxy-only private commit/RSS/handle/CPU. Distinct child PID, separate
     # client+upstream parent; never infer these values from co-located heap.
+    # Seed 3 measures 2,560 real held CONNECTs plus 600 short HTTP on a
+    # dedicated fresh Windows VM, not an extrapolation from 256–384.
     if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
     runs-on: windows-latest
     timeout-minutes: 14
@@ -493,7 +495,7 @@ jobs:
       matrix:
         policy: [r11, fast_saturation]
         classes: [off, 'on']
-        seed: [0, 1, 2]
+        seed: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

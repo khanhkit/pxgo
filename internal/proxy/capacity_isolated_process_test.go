@@ -175,6 +175,13 @@ func TestCapacityIsolatedProcessResourceBench(t *testing.T) {
 	}()
 	heldN := 256 + (seed%3)*64
 	shortN := 400 + (seed%3)*100
+	if seed == 3 {
+		// One high-density, 2,560-live-CONNECT plateau on a dedicated fresh
+		// Windows VM. The *measured* PID still contains only PXGO; the parent
+		// holds the client dialers, HTTP origin and TCP echo endpoint.
+		heldN = 2560
+		shortN = 600
+	}
 	held := make([]net.Conn, heldN)
 	// Explicit cleanup order on *all* paths (including t.Fatal): close
 	// accepted CONNECT clients, stop echo listener, then join its workers.
