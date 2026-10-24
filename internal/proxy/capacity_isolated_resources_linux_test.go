@@ -21,18 +21,33 @@ func readCapacityIsolatedResources(pid int) (capacityIsolatedResourceSample, err
 	if err != nil {
 		return s, err
 	}
+	seenRSS, seenAnon := false, false
 	for _, line := range strings.Split(string(b), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		if len(fields) == 0 {
 			continue
 		}
-		n, _ := strconv.ParseUint(fields[1], 10, 64)
-		switch fields[0] {
-		case "VmRSS:":
-			s.RSSBytes = n * 1024
-		case "RssAnon:":
-			s.PrivateBytes = n * 1024
+		if fields[0] != "VmRSS:" && fields[0] != "RssAnon:" {
+			continue
 		}
+		if len(fields) != 3 || fields[2] != "kB" {
+			return s, fmt.Errorf("malformed process status metric %q", line)
+		}
+		n, parseErr := strconv.ParseUint(fields[1], 10, 64)
+		if parseErr != nil {
+			return s, fmt.Errorf("malformed process memory field %q: %w", line, parseErr)
+		}
+		if fields[0] == "VmRSS:" {
+			s.RSSBytes = n * 1024
+			seenRSS = true
+		}
+		if fields[0] == "RssAnon:" {
+			s.PrivateBytes = n * 1024
+			seenAnon = true
+		}
+	}
+	if !seenRSS || !seenAnon || s.RSSBytes == 0 || s.PrivateBytes == 0 {
+		return s, fmt.Errorf("missing required VmRSS/RssAnon for pid=%d", pid)
 	}
 	fd, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
 	if err != nil {

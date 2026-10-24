@@ -173,17 +173,22 @@ func TestCapacityIsolatedProcessResourceBench(t *testing.T) {
 			go func(c net.Conn) { defer wg.Done(); defer c.Close(); _, _ = io.Copy(c, c) }(c)
 		}
 	}()
-	defer func() { _ = echo.Close(); wg.Wait() }()
 	heldN := 256 + (seed%3)*64
 	shortN := 400 + (seed%3)*100
 	held := make([]net.Conn, heldN)
+	// Explicit cleanup order on *all* paths (including t.Fatal): close
+	// accepted CONNECT clients, stop echo listener, then join its workers.
 	defer func() {
 		for _, c := range held {
 			if c != nil {
 				_ = c.Close()
 			}
 		}
+		_ = echo.Close()
+		wg.Wait()
 	}()
+	monitor := startCapacityIsolatedSampler(child.cmd.Process.Pid, baseline)
+	defer monitor.stopSampling()
 	type connResult struct {
 		idx  int
 		conn net.Conn
@@ -213,10 +218,14 @@ func TestCapacityIsolatedProcessResourceBench(t *testing.T) {
 	if firstErr != nil {
 		t.Fatalf("isolated CONNECT cohort failed: %v", firstErr)
 	}
+	if os.Getenv("PXGO_CAPACITY_ISOLATED_INJECT_FAILURE") == "post_connect" {
+		t.Fatal("INJECTED_FAILURE_AFTER_CONNECT") // deliberate negative teardown fixture
+	}
 	heldMetrics, err := readCapacityIsolatedResources(child.cmd.Process.Pid)
 	if err != nil {
 		t.Fatal(err)
 	}
+	monitor.setPhase(isolatedMixed)
 	var load sync.WaitGroup
 	shortErrors := make(chan error, shortN)
 	shortLatency := make(chan time.Duration, shortN)
@@ -243,52 +252,10 @@ func TestCapacityIsolatedProcessResourceBench(t *testing.T) {
 			shortLatency <- time.Since(offered)
 		}()
 	}
-	// Sample ONLY the child PID, not the Go test parent or upstream processes.
-	peak := heldMetrics
-	done := make(chan struct{})
-	go func() { load.Wait(); close(done) }()
-	monitor := time.NewTicker(100 * time.Millisecond)
-	defer monitor.Stop()
-	for running := true; running; {
-		select {
-		case <-done:
-			running = false
-		case <-monitor.C:
-			sampled, e := readCapacityIsolatedResources(child.cmd.Process.Pid)
-			if e != nil {
-				t.Fatal(e)
-			}
-			if sampled.PrivateBytes > peak.PrivateBytes {
-				peak.PrivateBytes = sampled.PrivateBytes
-			}
-			if sampled.RSSBytes > peak.RSSBytes {
-				peak.RSSBytes = sampled.RSSBytes
-			}
-			if sampled.Handles > peak.Handles {
-				peak.Handles = sampled.Handles
-			}
-			if sampled.CPUNanos > peak.CPUNanos {
-				peak.CPUNanos = sampled.CPUNanos
-			}
-		}
-	}
+	// Resource telemetry is sampled continuously in the child PID by the
+	// independent 25ms sampler, including the earlier CONNECT ramp.
+	load.Wait()
 	elapsed := time.Since(started)
-	finalResources, e := readCapacityIsolatedResources(child.cmd.Process.Pid)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if finalResources.PrivateBytes > peak.PrivateBytes {
-		peak.PrivateBytes = finalResources.PrivateBytes
-	}
-	if finalResources.RSSBytes > peak.RSSBytes {
-		peak.RSSBytes = finalResources.RSSBytes
-	}
-	if finalResources.Handles > peak.Handles {
-		peak.Handles = finalResources.Handles
-	}
-	if finalResources.CPUNanos > peak.CPUNanos {
-		peak.CPUNanos = finalResources.CPUNanos
-	}
 	close(shortErrors)
 	close(shortLatency)
 	latencies := make([]time.Duration, 0, shortN)
@@ -327,13 +294,7 @@ func TestCapacityIsolatedProcessResourceBench(t *testing.T) {
 	} else if snap.ClassPools != nil {
 		t.Fatalf("classes unexpectedly enabled: %+v", snap.ClassPools)
 	}
-	if peak.RSSBytes <= baseline.RSSBytes || peak.Handles < baseline.Handles {
-		t.Fatalf("isolated child has no resource growth, baseline=%+v peak=%+v", baseline, peak)
-	}
-	if runtime.GOOS == "windows" && peak.CPUNanos <= baseline.CPUNanos {
-		t.Fatalf("native child CPU instrumentation failed: baseline=%+v peak=%+v", baseline, peak)
-	}
-	t.Logf("ISOLATED_RESULT platform=%s seed=%d policy=%s classes=%s held_long=%d completed_short=%d short_rps=%.2f short_offered_p95=%s short_offered_p99=%s baseline_private_bytes=%d held_private_bytes=%d peak_private_bytes=%d baseline_rss_bytes=%d held_rss_bytes=%d peak_rss_bytes=%d baseline_handles=%d held_handles=%d peak_handles=%d proxy_cpu_delta_ns=%d global_hard=%d", runtime.GOOS, seed, os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY"), os.Getenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES"), heldN, shortN, float64(shortN)/elapsed.Seconds(), p95, p99, baseline.PrivateBytes, heldMetrics.PrivateBytes, peak.PrivateBytes, baseline.RSSBytes, heldMetrics.RSSBytes, peak.RSSBytes, baseline.Handles, heldMetrics.Handles, peak.Handles, peak.CPUNanos-baseline.CPUNanos, snap.HardEnvelope)
+	monitor.setPhase(isolatedDrain)
 	for i, c := range held {
 		_ = c.Close()
 		held[i] = nil
@@ -345,9 +306,50 @@ func TestCapacityIsolatedProcessResourceBench(t *testing.T) {
 			t.Fatal(err)
 		}
 		if snap.ActiveDownstream == 0 && (snap.ClassPools == nil || snap.ClassPools.Total == 0) {
+			peak, phasePeak, samples, sampleErr := monitor.stopSampling()
+			if sampleErr != nil {
+				t.Fatal(sampleErr)
+			}
+			for i, n := range samples {
+				if n == 0 {
+					t.Fatalf("missing child-PID samples for phase=%d", i)
+				}
+			}
+			if peak.RSSBytes <= baseline.RSSBytes || peak.Handles < baseline.Handles {
+				t.Fatalf("no child-PID resource growth baseline=%+v peak=%+v", baseline, peak)
+			}
+			if peak.PrivateBytes == 0 {
+				t.Fatal("private memory/anonymous RSS measurement missing")
+			}
+			if runtime.GOOS == "windows" && peak.CPUNanos <= baseline.CPUNanos {
+				t.Fatalf("missing native child CPU delta baseline=%+v peak=%+v", baseline, peak)
+			}
+			t.Logf("ISOLATED_RESULT platform=%s seed=%d policy=%s classes=%s held_long=%d completed_short=%d short_rps=%.2f short_offered_p95=%s short_offered_p99=%s baseline_private_bytes=%d held_private_bytes=%d peak_private_bytes=%d baseline_rss_bytes=%d held_rss_bytes=%d peak_rss_bytes=%d baseline_handles=%d held_handles=%d peak_handles=%d proxy_cpu_delta_ns=%d global_hard=%d ramp_samples=%d mixed_samples=%d drain_samples=%d ramp_peak_private_bytes=%d mixed_peak_private_bytes=%d drain_peak_private_bytes=%d", runtime.GOOS, seed, os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY"), os.Getenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES"), heldN, shortN, float64(shortN)/elapsed.Seconds(), p95, p99, baseline.PrivateBytes, heldMetrics.PrivateBytes, peak.PrivateBytes, baseline.RSSBytes, heldMetrics.RSSBytes, peak.RSSBytes, baseline.Handles, heldMetrics.Handles, peak.Handles, peak.CPUNanos-baseline.CPUNanos, snap.HardEnvelope, samples[0], samples[1], samples[2], phasePeak[0].PrivateBytes, phasePeak[1].PrivateBytes, phasePeak[2].PrivateBytes)
 			return
 		}
 		time.Sleep(40 * time.Millisecond)
 	}
 	t.Fatalf("isolated physical/class permits not fully released: %+v", snap)
+}
+
+// Verify actual t.Fatal after hundreds of live CONNECTs cannot leave echo
+// workers waiting forever. The nested test MUST fail for the injected reason,
+// return promptly, and release both subprocesses; timeout is a hard failure.
+func TestCapacityIsolatedForcedFailureCleanup(t *testing.T) {
+	if os.Getenv("PXGO_CAPACITY_ISOLATED_CLEANUP_TEST") != "1" {
+		t.Skip("opt-in negative teardown test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCapacityIsolatedProcessResourceBench$", "-test.count=1", "-test.v", "-test.timeout=16s")
+	cmd.Env = append(os.Environ(), "PXGO_CAPACITY_ISOLATED_BENCH=1", "PXGO_CAPACITY_ISOLATED_SEED=0", "PXGO_CAPACITY_ISOLATED_INJECT_FAILURE=post_connect", "PXGO_EXPERIMENTAL_CAPACITY_MODE=auto")
+	started := time.Now()
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("cleanup hung after injected failure: %v, output=%q", ctx.Err(), string(out))
+	}
+	if err == nil || !bytes.Contains(out, []byte("INJECTED_FAILURE_AFTER_CONNECT")) {
+		t.Fatalf("negative teardown had wrong result err=%v out=%q", err, string(out))
+	}
+	t.Logf("ISOLATED_CLEANUP_NEGATIVE passed_elapsed=%s expected_failure_reached=true", time.Since(started))
 }

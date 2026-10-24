@@ -528,6 +528,12 @@ jobs:
           if (-not (Select-String -Path benchmarks/isolated-proxy-process.log -Pattern 'ISOLATED_RESULT platform=windows' -Quiet)) {
             throw 'Required native Windows process-private metric row is absent'
           }
+          if ($env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES -eq '1' -and $env:PXGO_CAPACITY_ISOLATED_SEED -eq '0') {
+            $env:PXGO_CAPACITY_ISOLATED_CLEANUP_TEST = '1'
+            go test ./internal/proxy -run '^TestCapacityIsolatedForcedFailureCleanup$' -count=1 -v -timeout=25s 2>&1 |
+              Tee-Object -FilePath benchmarks/isolated-negative-cleanup.log
+            if ($LASTEXITCODE -ne 0) { throw 'Real early-failure socket cleanup/deadlock gate failed' }
+          }
       - name: Preserve SHA-qualified isolated process evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
