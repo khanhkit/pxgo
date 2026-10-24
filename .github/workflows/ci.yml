@@ -288,6 +288,277 @@ jobs:
               -run '^TestCapacityBurst2560$' -count=1 -v -timeout=55s
           done
 
+  windows-connection-class-research:
+    name: Windows capacity research (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, sample=${{ matrix.sample }})
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 24
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        policy: [r11, fast_saturation]
+        class_mode: [off, 'on']
+        sample: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify SHA and collect Windows runner metadata
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable HEAD mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/runner.txt
+          "go=$(go version)" | Add-Content benchmarks/runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
+          "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
+          Get-Content benchmarks/runner.txt
+      - name: Native Windows R11 versus guarded fast-ramp and two-class tracking
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_BURST_2560: '1'
+          PXGO_CAPACITY_BENCH_MODE: 'auto'
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
+        run: |
+          # Bounded SYN waves isolate 2,560 simultaneously held live tunnels
+          # from the separate known Windows SOMAXCONN 2,560-SYN burst limit.
+          $env:PXGO_CAPACITY_SYN_SPIKE = '0'
+          # Four independent samples, each on a FRESH Windows VM. Previously
+          # chaining four 2,560-tunnel soaks polluted later runs with TCP
+          # endpoint/WSAENOBUFS pressure. Do not waive any failed socket.
+          go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath "benchmarks/2560-sample-${{ matrix.sample }}.log"
+          if ($LASTEXITCODE -ne 0) { throw "2560 native Windows live-tunnel sample ${{ matrix.sample }} FAILED" }
+      - name: Preserve benchmark and failure evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-capacity-${{ matrix.policy }}-classes-${{ matrix.class_mode }}-sample-${{ matrix.sample }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-mixed-capacity-research:
+    name: Windows mixed (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, seed=${{ matrix.seed }})
+    # Each seed gets a FRESH VM. Native Windows has a finite ephemeral TCP
+    # port range and TIME_WAIT. Chaining 4 x 2560 CONNECT soak + all eight
+    # mixed seeds in one VM exhausted outgoing ephemeral ports (WSAEADDRINUSE).
+    # Do not mislabel test-runner exhaustion as controller failure, and never
+    # bypass it by forcing abortive RST closes in realistic short-conn tests.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 17
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        policy: [r11, fast_saturation]
+        class_mode: [off, 'on']
+        seed: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify immutable SHA and Windows runner profile
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable HEAD mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/runner.txt
+          "go=$(go version)" | Add-Content benchmarks/runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
+          "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
+          "seed=${{ matrix.seed }} policy=${{ matrix.policy }} classes=${{ matrix.class_mode }}" | Add-Content benchmarks/runner.txt
+          Get-Content benchmarks/runner.txt
+          # Capture ephemeral-port range before the high-socket-count test;
+          # no OS port-range mutation or insecure SO_REUSEADDR workaround.
+          netsh interface ipv4 show dynamicport tcp 2>&1 |
+            Out-File -FilePath benchmarks/windows-ephemeral-range-before.txt
+          netsh interface ipv6 show dynamicport tcp 2>&1 |
+            Add-Content benchmarks/windows-ephemeral-range-before.txt
+      - name: Concurrent short/long workload and admission competition
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_MIXED_BENCH: '1'
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_CAPACITY_MIX_SEED: ${{ matrix.seed }}
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
+        run: |
+          # On seed0, run class lifecycle BEFORE the high-socket-count load.
+          # The heavy 4x2560 test runner has no ephemeral TCP ports left by
+          # its end; putting lifecycle tests there produced WSAEADDRINUSE.
+          if ($env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            go test ./internal/proxy -run '^TestConnectionClass' -count=5 -v -timeout=60s 2>&1 |
+              Tee-Object -FilePath benchmarks/class-lifecycle.log
+            if ($LASTEXITCODE -ne 0) { throw 'Windows class lifecycle failed on fresh runner' }
+            go test ./internal/proxy -run '^$' -bench '^BenchmarkConnectionClass' -benchmem -count=3 2>&1 |
+              Tee-Object -FilePath benchmarks/class-microbenchmark.log
+            if ($LASTEXITCODE -ne 0) { throw 'Windows class microbenchmarks failed on fresh runner' }
+          }
+          # Short/medium/long TCP survival (250ms..5.5s), natural releases,
+          # short HTTP churn during every phase and no physical/class leaks.
+          # Run FIRST on a fresh Windows VM to avoid contaminating results
+          # with prior TIME_WAIT/ephemeral port pressure.
+          # Enforce an ACTUALLY saturated global physical limit of 64 long
+          # CONNECTs. Four real short HTTP arrivals must block until a long
+          # tunnel frees a permit, then complete and replenish the long pool.
+          go test ./internal/proxy -run '^TestCapacityShortBorrowsReleasedLongPermit$' -count=1 -v -timeout=55s 2>&1 |
+            Tee-Object -FilePath benchmarks/strict-64-permit-borrowing.log
+          if ($LASTEXITCODE -ne 0) { throw 'Hard-saturated long-to-short permit borrowing failed' }
+          go test ./internal/proxy -run '^TestCapacityMixedStaggeredLifetimes$' -count=1 -v -timeout=65s 2>&1 |
+            Tee-Object -FilePath benchmarks/staggered-lifetimes.log
+          if ($LASTEXITCODE -ne 0) { throw 'Real short/medium/long lifetime turnover failed' }
+          # Active bidirectional relays (1 KiB-256 KiB frames and one 10 MiB
+          # bulk transfer) compete with short HTTP 128 B-64 KiB responses.
+          # Long and short classes share physical FD/Job headroom. Verify
+          # p95/p99 and 100% exact payload integrity on the native Win runner.
+          go test ./internal/proxy -run '^TestCapacityMixedActivePayload$' -count=1 -v -timeout=90s 2>&1 |
+            Tee-Object -FilePath benchmarks/active-long-short-data-plane.log
+          if ($LASTEXITCODE -ne 0) { throw 'Concurrent long data-plane and short HTTP integrity/fairness gate failed' }
+          go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -timeout=125s 2>&1 |
+            Tee-Object -FilePath benchmarks/mixed-profiles.log
+          if ($LASTEXITCODE -ne 0) { throw 'Mixed profiles did not meet native Windows live-tunnel/HTTP integrity gates' }
+          go test ./internal/proxy -run '^TestCapacityMixedCompetingAdmission$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath benchmarks/mixed-competing-arrival.log
+          if ($LASTEXITCODE -ne 0) { throw 'Concurrent short+long admission gate failed' }
+          if ($env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES -eq '1' -and $env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            $env:PXGO_CAPACITY_AGING_SOAK = '1'
+            go test ./internal/proxy -run '^TestCapacityMixedRealTimeAgedShortToLong$' -count=1 -v -timeout=55s 2>&1 |
+              Tee-Object -FilePath benchmarks/real-clock-30s-promotion.log
+            if ($LASTEXITCODE -ne 0) { throw 'Live 30s idle keepalive promotion failed' }
+          }
+      - name: Capture Windows TCP state and port exhaustion diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          # Runs even if a mixed profile failed on WSAEADDRINUSE. Diagnostics
+          # are evidence only, not a PASS waiver and never change socket state.
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          $out = 'benchmarks/windows-tcp-after.txt'
+          "utc=$([DateTime]::UtcNow.ToString('o'))" | Set-Content $out
+          try {
+            '--- IPv4 dynamic ports ---' | Add-Content $out
+            netsh interface ipv4 show dynamicport tcp 2>&1 | Add-Content $out
+            '--- IPv6 dynamic ports ---' | Add-Content $out
+            netsh interface ipv6 show dynamicport tcp 2>&1 | Add-Content $out
+            '--- TCP state counts ---' | Add-Content $out
+            $connections = @(Get-NetTCPConnection -ErrorAction Stop)
+            $connections | Group-Object State | Sort-Object Name |
+              ForEach-Object { "state=$($_.Name) count=$($_.Count)" } | Add-Content $out
+            '--- TIME_WAIT loopback endpoints (sample up to 24) ---' | Add-Content $out
+            $connections | Where-Object { $_.State -eq 'TimeWait' -and $_.LocalAddress -in @('127.0.0.1','::1') } |
+              Select-Object -First 24 LocalAddress,LocalPort,RemoteAddress,RemotePort,State |
+              Format-Table -AutoSize | Out-String | Add-Content $out
+          } catch {
+            "TCP_DIAGNOSTICS_UNAVAILABLE: $($_.Exception.Message)" | Add-Content $out
+          }
+          Get-Content $out
+      - name: Preserve native Windows evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-mixed-${{ matrix.policy }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-isolated-process-capacity:
+    name: Windows isolated proxy (${{ matrix.policy }}, classes=${{ matrix.classes }}, seed=${{ matrix.seed }})
+    # Proxy-only private commit/RSS/handle/CPU. Distinct child PID, separate
+    # client+upstream parent; never infer these values from co-located heap.
+    # Seed 3 measures 2,560 real held CONNECTs plus 600 short HTTP on a
+    # dedicated fresh Windows VM, not an extrapolation from 256–384.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 14
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        policy: [r11, fast_saturation]
+        classes: [off, 'on']
+        seed: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Immutable SHA and Windows identity
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable HEAD mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/isolated-runner.txt
+          "go=$(go version)" | Add-Content benchmarks/isolated-runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/isolated-runner.txt
+          "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/isolated-runner.txt
+          Get-Content benchmarks/isolated-runner.txt
+      - name: Real mixed-load with native process-private resource accounting
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_ISOLATED_BENCH: '1'
+          PXGO_CAPACITY_ISOLATED_SEED: ${{ matrix.seed }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.classes == 'on' && '1' || '0' }}
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+        run: |
+          go test ./internal/proxy -run '^TestCapacityIsolatedProcessResourceBench$' -count=1 -v -timeout=110s 2>&1 |
+            Tee-Object -FilePath benchmarks/isolated-proxy-process.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native isolated PXGO process or resource gate failed' }
+          if (-not (Select-String -Path benchmarks/isolated-proxy-process.log -Pattern 'ISOLATED_RESULT platform=windows' -Quiet)) {
+            throw 'Required native Windows process-private metric row is absent'
+          }
+          if ($env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES -eq '1' -and $env:PXGO_CAPACITY_ISOLATED_SEED -eq '0') {
+            $env:PXGO_CAPACITY_ISOLATED_CLEANUP_TEST = '1'
+            go test ./internal/proxy -run '^TestCapacityIsolatedForcedFailureCleanup$' -count=1 -v -timeout=25s 2>&1 |
+              Tee-Object -FilePath benchmarks/isolated-negative-cleanup.log
+            if ($LASTEXITCODE -ne 0) { throw 'Real early-failure socket cleanup/deadlock gate failed' }
+          }
+      - name: Capture Winsock port and socket-state diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          try { netsh int ipv4 show dynamicport tcp 2>&1 | Out-String | Set-Content benchmarks/windows-tcp-dynamic-range.txt } catch { "netsh unavailable: $_" | Set-Content benchmarks/windows-tcp-dynamic-range.txt }
+          try {
+            Get-NetTCPConnection -ErrorAction Stop |
+              Group-Object State | Sort-Object Name |
+              Select-Object Name,Count | Format-Table -AutoSize | Out-String |
+              Set-Content benchmarks/windows-tcp-state-counts.txt
+          } catch { "TCP states unavailable: $_" | Set-Content benchmarks/windows-tcp-state-counts.txt }
+      - name: Preserve SHA-qualified isolated process evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-isolated-${{ matrix.policy }}-${{ matrix.classes }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-native-sspi:
     name: Native Windows SSPI gate
     if: github.event_name == 'workflow_dispatch' && inputs.native_sspi

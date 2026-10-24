@@ -73,3 +73,15 @@ func TestMaxConnectionsEnvAndCLIPrecedence(t *testing.T) {
 		t.Fatal("bare CLI setting must be rejected")
 	}
 }
+
+func TestExperimentalClassAndResearchPolicyEnvAreAuxiliary(t *testing.T) {
+	t.Setenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES", "1")
+	t.Setenv("PXGO_RESEARCH_CAPACITY_POLICY", "fast_saturation")
+	cfg, err := ParseArgs(nil)
+	if err != nil {
+		t.Fatalf("documented internal preview-only environment keys must not break parsing: %v", err)
+	}
+	if cfg.MaxConnections != 0 {
+		t.Fatalf("research environment changed public config: %+v", cfg)
+	}
+}

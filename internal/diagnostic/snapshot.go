@@ -27,20 +27,33 @@ type DNSSnapshot struct {
 	Source    string   `json:"source,omitempty"`
 }
 
+type CapacityClassSnapshot struct {
+	Provisional     int    `json:"provisional"`
+	Short           int    `json:"short"`
+	Long            int    `json:"long"`
+	ShortSoftBudget int    `json:"short_soft_budget"`
+	LongSoftBudget  int    `json:"long_soft_budget"`
+	Promoted        uint64 `json:"short_to_long_promotions"`
+	LongOverflow    uint64 `json:"long_soft_overflow_events"`
+	LongDebt        int    `json:"long_current_debt"`
+	Total           int    `json:"total_classified_and_provisional"`
+}
+
 type CapacitySnapshot struct {
-	Mode                 string    `json:"mode"`
-	State                string    `json:"state"`
-	ActiveDownstream     int       `json:"active_downstream"`
-	SoftWindow           int       `json:"soft_window"`
-	HardEnvelope         int       `json:"hard_envelope"`
-	EffectiveLimit       int       `json:"effective_limit"`
-	ManualCeilingEnabled bool      `json:"manual_ceiling_enabled"`
-	ManualCeiling        int       `json:"manual_ceiling,omitempty"`
-	PressureReason       string    `json:"governing_pressure_reason,omitempty"`
-	AdmissionWaits       uint64    `json:"admission_waits"`
-	AdmissionTimeouts    uint64    `json:"admission_timeouts"`
-	SensorAvailability   string    `json:"sensor_availability"`
-	LastTransition       time.Time `json:"last_transition,omitempty"`
+	ClassPools           *CapacityClassSnapshot `json:"class_pools,omitempty"`
+	Mode                 string                 `json:"mode"`
+	State                string                 `json:"state"`
+	ActiveDownstream     int                    `json:"active_downstream"`
+	SoftWindow           int                    `json:"soft_window"`
+	HardEnvelope         int                    `json:"hard_envelope"`
+	EffectiveLimit       int                    `json:"effective_limit"`
+	ManualCeilingEnabled bool                   `json:"manual_ceiling_enabled"`
+	ManualCeiling        int                    `json:"manual_ceiling,omitempty"`
+	PressureReason       string                 `json:"governing_pressure_reason,omitempty"`
+	AdmissionWaits       uint64                 `json:"admission_waits"`
+	AdmissionTimeouts    uint64                 `json:"admission_timeouts"`
+	SensorAvailability   string                 `json:"sensor_availability"`
+	LastTransition       time.Time              `json:"last_transition,omitempty"`
 }
 
 type UpdateSnapshot struct {
