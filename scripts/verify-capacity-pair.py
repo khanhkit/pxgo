@@ -23,6 +23,14 @@ TIME_KEYS = ("short_p50", "short_p95", "short_p99", "short_offered_p95", "short_
 TOKEN = re.compile(r"([a-z][a-z_0-9]*)=([^\s]+)")
 METRIC = re.compile(r"\bMIXED_RESULT\s+([^\r\n]+)")
 DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(ns|µs|us|ms|s|m|h)")
+# PowerShell emits exactly these five fields in this order. Requiring an
+# entire native record (not TOKEN.findall snippets) rejects unparsed text and
+# ambiguous fields even when every expected key is also present.
+ORDER_ROW = re.compile(
+    r"^PAIR_POLICY profile=(?P<profile>\S+) class=(?P<class>on|off) "
+    r"seed=(?P<seed>[0-9]+) policy=(?P<policy>r11|fast_saturation) "
+    r"timewait_before=(?P<timewait_before>-?[0-9]+)$"
+)
 
 
 class InvalidEvidence(ValueError):
@@ -94,6 +102,33 @@ def parse_log(raw: str, *, profile: str, seed: int, classes: str, policy: str) -
     return parsed
 
 
+def verify_execution_order(raw: str, *, profile: str, seed: int, classes: str, order: str) -> dict:
+    expected = ["r11", "fast_saturation"] if order == "r11_first" else ["fast_saturation", "r11"]
+    rows = raw.splitlines()  # Handles PowerShell CRLF without relaxing record syntax.
+    if len(rows) != 2:
+        raise InvalidEvidence(f"expected exactly 2 native PAIR_POLICY rows, got {len(rows)}")
+    observed = []
+    for row in rows:
+        match = ORDER_ROW.fullmatch(row)
+        if match is None:
+            raise InvalidEvidence(f"malformed native PAIR_POLICY row: {row!r}")
+        fields = match.groupdict()
+        for key, value in (("profile", profile), ("class", classes), ("seed", str(seed))):
+            if fields[key] != value:
+                raise InvalidEvidence(f"native order {key}={fields[key]!r} expected {value!r}")
+        count = int(fields["timewait_before"])
+        # The workflow emits nonnegative counts, or -1 if the native Windows
+        # sensor itself is unavailable. Other negative counts cannot be real.
+        if count < -1:
+            raise InvalidEvidence(f"impossible native TIME_WAIT baseline {count}")
+        observed.append({"policy": fields["policy"], "timewait_before": count})
+    actual_order = [row["policy"] for row in observed]
+    if actual_order != expected:
+        raise InvalidEvidence(f"native policy order {actual_order}, expected {expected}")
+    return {"observed_order": actual_order, "before_each_policy": observed,
+            "timewait_measurement_available": all(x["timewait_before"] >= 0 for x in observed)}
+
+
 def verify(r11_raw: str, fast_raw: str, *, profile: str, seed: int, classes: str,
            order: str, order_log: str) -> dict:
     if classes not in ("on", "off"):
@@ -104,22 +139,8 @@ def verify(r11_raw: str, fast_raw: str, *, profile: str, seed: int, classes: str
         raise InvalidEvidence(f"invalid seed {seed}")
     if order not in ("r11_first", "fast_first"):
         raise InvalidEvidence(f"invalid paired execution order {order!r}")
-    expected_order = ["r11", "fast_saturation"] if order == "r11_first" else ["fast_saturation", "r11"]
-    observed_order = []
-    for line in order_log.splitlines():
-        fields = dict(TOKEN.findall(line))
-        if not line.startswith("PAIR_POLICY "):
-            raise InvalidEvidence(f"unexpected paired-order manifest line {line!r}")
-        for k, v in (("profile", profile), ("class", classes), ("seed", str(seed))):
-            if fields.get(k) != v:
-                raise InvalidEvidence(f"order manifest {k} does not match {v!r}")
-        if fields.get("policy") not in ("r11", "fast_saturation"):
-            raise InvalidEvidence("order manifest omitted valid policy")
-        if not re.fullmatch(r"-?\d+", fields.get("timewait_before", "")):
-            raise InvalidEvidence("order manifest lacks integer TIME_WAIT baseline")
-        observed_order.append(fields["policy"])
-    if observed_order != expected_order:
-        raise InvalidEvidence(f"manifest policy order {observed_order}, expected {expected_order}")
+    execution = verify_execution_order(order_log, profile=profile, seed=seed,
+                                       classes=classes, order=order)
     r11 = parse_log(r11_raw, profile=profile, seed=seed, classes=classes, policy="r11")
     fast = parse_log(fast_raw, profile=profile, seed=seed, classes=classes, policy="fast_saturation")
     workload_fields = ("held_long_connect", "held_short", "promoted_short_to_long", "short_attempted")
@@ -128,7 +149,8 @@ def verify(r11_raw: str, fast_raw: str, *, profile: str, seed: int, classes: str
         raise InvalidEvidence(f"paired workloads differ in {differences}")
     return {
         "profile": profile, "seed": seed, "classes": classes,
-        "expected_order": expected_order,
+        "expected_order": execution["observed_order"],
+        "actual_execution": execution,
         "r11": r11, "fast_saturation": fast,
         "fast_minus_r11_offered_p95_s": fast["short_offered_p95_s"] - r11["short_offered_p95_s"],
         "fast_minus_r11_offered_p99_s": fast["short_offered_p99_s"] - r11["short_offered_p99_s"],

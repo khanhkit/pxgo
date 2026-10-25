@@ -43,6 +43,53 @@ class StrictEvidenceTests(unittest.TestCase):
     def test_wrong_order_fails(self):
         with self.assertRaises(module.InvalidEvidence): self.verify(order="fast_first")
 
+    def test_duplicate_policy_field_is_rejected(self):
+        bad = ("PAIR_POLICY profile=balanced class=on seed=0 policy=fast_saturation policy=r11 timewait_before=3\n"
+               "PAIR_POLICY profile=balanced class=on seed=0 policy=r11 policy=fast_saturation timewait_before=8\n")
+        with self.assertRaises(module.InvalidEvidence): self.verify(order_log=bad)
+
+    def test_duplicate_timewait_field_is_rejected(self):
+        bad = ("PAIR_POLICY profile=balanced class=on seed=0 policy=r11 timewait_before=3 timewait_before=4\n"
+               "PAIR_POLICY profile=balanced class=on seed=0 policy=fast_saturation timewait_before=8\n")
+        with self.assertRaises(module.InvalidEvidence): self.verify(order_log=bad)
+
+    def test_impossible_negative_timewait_is_rejected(self):
+        bad = ("PAIR_POLICY profile=balanced class=on seed=0 policy=r11 timewait_before=-2\n"
+               "PAIR_POLICY profile=balanced class=on seed=0 policy=fast_saturation timewait_before=8\n")
+        with self.assertRaises(module.InvalidEvidence): self.verify(order_log=bad)
+
+    def test_unparsed_garbage_before_or_after_fields_is_rejected(self):
+        manifest = ("PAIR_POLICY profile=balanced class=on seed=0 policy=r11 timewait_before=5\n"
+                    "PAIR_POLICY profile=balanced class=on seed=0 policy=fast_saturation timewait_before=8\n")
+        for bad in (
+            manifest.replace(" class=on", " unknown_fragment class=on", 1),
+            manifest.replace("policy=r11 ", "policy=r11 ignoredword ", 1),
+            manifest.replace("timewait_before=8", "timewait_before=8 garbage", 1),
+            "garbage\n" + manifest,
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(module.InvalidEvidence): self.verify(order_log=bad)
+
+    def test_malformed_manifest_field_is_rejected(self):
+        original = ("PAIR_POLICY profile=balanced class=on seed=0 policy=r11 timewait_before=5\n"
+                    "PAIR_POLICY profile=balanced class=on seed=0 policy=fast_saturation timewait_before=8\n")
+        for replacement in ("policy:r11", "policy=r11,", "poliCy=r11", "policy=r11'"):
+            with self.subTest(replacement=replacement):
+                with self.assertRaises(module.InvalidEvidence):
+                    self.verify(order_log=original.replace("policy=r11",replacement,1))
+
+    def test_native_powershell_crlf_manifest_passes(self):
+        original = ("PAIR_POLICY profile=balanced class=on seed=0 policy=r11 timewait_before=5\n"
+                    "PAIR_POLICY profile=balanced class=on seed=0 policy=fast_saturation timewait_before=8\n")
+        self.assertEqual(self.verify(order_log=original.replace("\n","\r\n"))["expected_order"], ["r11","fast_saturation"])
+
+    def test_unavailable_timewait_is_disclosed_not_zero(self):
+        manifest = ("PAIR_POLICY profile=balanced class=on seed=0 policy=r11 timewait_before=-1\n"
+                    "PAIR_POLICY profile=balanced class=on seed=0 policy=fast_saturation timewait_before=18\n")
+        evidence = self.verify(order_log=manifest)
+        self.assertFalse(evidence["actual_execution"]["timewait_measurement_available"])
+        self.assertEqual(evidence["actual_execution"]["before_each_policy"][0]["timewait_before"], -1)
+
     def test_missing_timewait_fails(self):
         with self.assertRaises(module.InvalidEvidence): self.verify(order_log="PAIR_POLICY profile=balanced class=on seed=0 policy=r11\n")
 
