@@ -26,10 +26,25 @@ def log(policy="r11", *, profile="balanced", seed=0, classes="on"):
 
 
 class StrictEvidenceTests(unittest.TestCase):
-    def verify(self, r11=None, fast=None, profile="balanced", seed=0, classes="on"):
+    def verify(self, r11=None, fast=None, profile="balanced", seed=0, classes="on",
+               order="r11_first", order_log=None):
+        manifest = (f"PAIR_POLICY profile={profile} class={classes} seed={seed} policy=r11 timewait_before=100\n"
+                    f"PAIR_POLICY profile={profile} class={classes} seed={seed} policy=fast_saturation timewait_before=200\n")
         return module.verify(log("r11") if r11 is None else r11,
                              log("fast_saturation") if fast is None else fast,
-                             profile=profile, seed=seed, classes=classes)
+                             profile=profile, seed=seed, classes=classes, order=order,
+                             order_log=manifest if order_log is None else order_log)
+
+    def test_reversed_matched_order_passes(self):
+        manifest = ("PAIR_POLICY profile=balanced class=on seed=0 policy=fast_saturation timewait_before=18\n"
+                    "PAIR_POLICY profile=balanced class=on seed=0 policy=r11 timewait_before=24\n")
+        self.assertEqual(self.verify(order="fast_first", order_log=manifest)["expected_order"], ["fast_saturation", "r11"])
+
+    def test_wrong_order_fails(self):
+        with self.assertRaises(module.InvalidEvidence): self.verify(order="fast_first")
+
+    def test_missing_timewait_fails(self):
+        with self.assertRaises(module.InvalidEvidence): self.verify(order_log="PAIR_POLICY profile=balanced class=on seed=0 policy=r11\n")
 
     def test_matching_pair_passes(self):
         evidence = self.verify()

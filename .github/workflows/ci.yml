@@ -481,12 +481,14 @@ jobs:
           retention-days: 14
 
   windows-paired-policy-research:
-    name: Windows paired (${{ matrix.profile }}, classes=${{ matrix.class_mode }}, seed=${{ matrix.seed }})
+    name: Windows paired (${{ matrix.profile }}, classes=${{ matrix.class_mode }}, seed=${{ matrix.seed }}, order=${{ matrix.order }})
     # Controlled same-runner paired R11 versus fast-saturation. Previous
     # independent-VM matrix reported policy-dependent p95 distributions but
     # did not provide a comparable-host causal comparison. Run both policies
     # as separate processes on ONE immutable Windows VM, same exact seed,
     # same profile and Go test binary; reverse order by seed parity.
+    # Fully cross each SAME seed with BOTH orders on separate fresh VMs,
+    # rather than confounding policy order and offered-load seed parity.
     # Keep only two matched workloads per fresh VM to limit native Windows
     # loopback ephemeral-port/TIME_WAIT contamination. No PASS waiver.
     if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
@@ -499,6 +501,7 @@ jobs:
         profile: [short_heavy, balanced, long_heavy, churn]
         class_mode: [off, 'on']
         seed: [0, 1]
+        order: [r11_first, fast_first]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -521,7 +524,7 @@ jobs:
           "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
           "cpu_count=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
           "python=$(python --version 2>&1)" | Add-Content benchmarks/runner.txt
-          "profile=${{ matrix.profile }} seed=${{ matrix.seed }} classes=${{ matrix.class_mode }}" | Add-Content benchmarks/runner.txt
+          "profile=${{ matrix.profile }} seed=${{ matrix.seed }} classes=${{ matrix.class_mode }} order=${{ matrix.order }}" | Add-Content benchmarks/runner.txt
           go test ./internal/proxy -c -o benchmarks/capacity-paired.test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Exact-SHA native Windows test build failed' }
           # Exercise the compiled binary's real Go flags before any workload.
@@ -545,7 +548,7 @@ jobs:
           PXGO_CAPACITY_MIX_SEED: ${{ matrix.seed }}
         run: |
           $policies = @('r11', 'fast_saturation')
-          if ([int]'${{ matrix.seed }}' % 2 -eq 1) { $policies = @('fast_saturation', 'r11') }
+          if ('${{ matrix.order }}' -eq 'fast_first') { $policies = @('fast_saturation', 'r11') }
           foreach ($policy in $policies) {
             $env:PXGO_RESEARCH_CAPACITY_POLICY = $policy
             $timewaitBefore = try { @(Get-NetTCPConnection -State TimeWait -ErrorAction Stop).Count } catch { -1 }
@@ -564,7 +567,8 @@ jobs:
           # negative fixtures and is itself tested in a separate step.
           python scripts/verify-capacity-pair.py `
             --profile '${{ matrix.profile }}' --seed '${{ matrix.seed }}' `
-            --classes '${{ matrix.class_mode }}' `
+            --classes '${{ matrix.class_mode }}' --order '${{ matrix.order }}' `
+            --order-log benchmarks/paired-order.txt `
             --r11 benchmarks/paired-r11.log `
             --fast benchmarks/paired-fast_saturation.log `
             --output benchmarks/paired-evidence.json
@@ -585,7 +589,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: win-paired-${{ matrix.profile }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
+          name: win-paired-${{ matrix.profile }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ matrix.order }}-${{ github.event.pull_request.head.sha }}
           path: |
             benchmarks/*.txt
             benchmarks/*.json
@@ -594,7 +598,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: win-paired-logs-${{ matrix.profile }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
+          name: win-paired-logs-${{ matrix.profile }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ matrix.order }}-${{ github.event.pull_request.head.sha }}
           path: benchmarks/*.log
           retention-days: 14
 

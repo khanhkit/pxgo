@@ -94,13 +94,32 @@ def parse_log(raw: str, *, profile: str, seed: int, classes: str, policy: str) -
     return parsed
 
 
-def verify(r11_raw: str, fast_raw: str, *, profile: str, seed: int, classes: str) -> dict:
+def verify(r11_raw: str, fast_raw: str, *, profile: str, seed: int, classes: str,
+           order: str, order_log: str) -> dict:
     if classes not in ("on", "off"):
         raise InvalidEvidence(f"invalid class mode {classes!r}")
     if profile not in ("short_heavy", "balanced", "long_heavy", "churn"):
         raise InvalidEvidence(f"invalid profile {profile!r}")
     if seed < 0 or seed > 7:
         raise InvalidEvidence(f"invalid seed {seed}")
+    if order not in ("r11_first", "fast_first"):
+        raise InvalidEvidence(f"invalid paired execution order {order!r}")
+    expected_order = ["r11", "fast_saturation"] if order == "r11_first" else ["fast_saturation", "r11"]
+    observed_order = []
+    for line in order_log.splitlines():
+        fields = dict(TOKEN.findall(line))
+        if not line.startswith("PAIR_POLICY "):
+            raise InvalidEvidence(f"unexpected paired-order manifest line {line!r}")
+        for k, v in (("profile", profile), ("class", classes), ("seed", str(seed))):
+            if fields.get(k) != v:
+                raise InvalidEvidence(f"order manifest {k} does not match {v!r}")
+        if fields.get("policy") not in ("r11", "fast_saturation"):
+            raise InvalidEvidence("order manifest omitted valid policy")
+        if not re.fullmatch(r"-?\d+", fields.get("timewait_before", "")):
+            raise InvalidEvidence("order manifest lacks integer TIME_WAIT baseline")
+        observed_order.append(fields["policy"])
+    if observed_order != expected_order:
+        raise InvalidEvidence(f"manifest policy order {observed_order}, expected {expected_order}")
     r11 = parse_log(r11_raw, profile=profile, seed=seed, classes=classes, policy="r11")
     fast = parse_log(fast_raw, profile=profile, seed=seed, classes=classes, policy="fast_saturation")
     workload_fields = ("held_long_connect", "held_short", "promoted_short_to_long", "short_attempted")
@@ -109,7 +128,7 @@ def verify(r11_raw: str, fast_raw: str, *, profile: str, seed: int, classes: str
         raise InvalidEvidence(f"paired workloads differ in {differences}")
     return {
         "profile": profile, "seed": seed, "classes": classes,
-        "expected_order": ["r11", "fast_saturation"] if seed % 2 == 0 else ["fast_saturation", "r11"],
+        "expected_order": expected_order,
         "r11": r11, "fast_saturation": fast,
         "fast_minus_r11_offered_p95_s": fast["short_offered_p95_s"] - r11["short_offered_p95_s"],
         "fast_minus_r11_offered_p99_s": fast["short_offered_p99_s"] - r11["short_offered_p99_s"],
@@ -123,6 +142,8 @@ def main() -> int:
     p.add_argument("--profile", required=True)
     p.add_argument("--seed", required=True, type=int)
     p.add_argument("--classes", required=True)
+    p.add_argument("--order", required=True)
+    p.add_argument("--order-log", required=True, type=Path)
     p.add_argument("--r11", required=True, type=Path)
     p.add_argument("--fast", required=True, type=Path)
     p.add_argument("--output", required=True, type=Path)
@@ -130,7 +151,8 @@ def main() -> int:
     try:
         result = verify(a.r11.read_text(encoding="utf-8", errors="replace"),
                         a.fast.read_text(encoding="utf-8", errors="replace"),
-                        profile=a.profile, seed=a.seed, classes=a.classes)
+                        profile=a.profile, seed=a.seed, classes=a.classes,
+                        order=a.order, order_log=a.order_log.read_text(encoding="utf-8", errors="replace"))
     except (InvalidEvidence, OSError) as exc:
         print(f"PAIR_EVIDENCE_INVALID: {exc}")
         return 1
