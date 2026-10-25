@@ -480,6 +480,101 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  windows-paired-policy-research:
+    name: Windows paired (${{ matrix.profile }}, classes=${{ matrix.class_mode }}, seed=${{ matrix.seed }})
+    # Controlled same-runner paired R11 versus fast-saturation. Previous
+    # independent-VM matrix reported policy-dependent p95 distributions but
+    # did not provide a comparable-host causal comparison. Run both policies
+    # as separate processes on ONE immutable Windows VM, same exact seed,
+    # same profile and Go test binary; reverse order by seed parity.
+    # Keep only two matched workloads per fresh VM to limit native Windows
+    # loopback ephemeral-port/TIME_WAIT contamination. No PASS waiver.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 16
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        profile: [short_heavy, balanced, long_heavy, churn]
+        class_mode: [off, 'on']
+        seed: [0, 1]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Compile immutable paired test binary and identify runner
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Exact-SHA checkout mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/runner.txt
+          "go=$(go version)" | Add-Content benchmarks/runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
+          "cpu_count=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
+          "profile=${{ matrix.profile }} seed=${{ matrix.seed }} classes=${{ matrix.class_mode }}" | Add-Content benchmarks/runner.txt
+          go test ./internal/proxy -c -o benchmarks/capacity-paired.test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Exact-SHA native Windows test build failed' }
+          netsh interface ipv4 show dynamicport tcp 2>&1 | Out-File benchmarks/ephemeral-before.txt
+      - name: Same-host paired HTTP/CONNECT p95, p99 and throughput
+        shell: pwsh
+        env:
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
+          PXGO_CAPACITY_MIXED_BENCH: '1'
+          PXGO_CAPACITY_MIX_PROFILE: ${{ matrix.profile }}
+          PXGO_CAPACITY_MIX_SEED: ${{ matrix.seed }}
+        run: |
+          $policies = @('r11', 'fast_saturation')
+          if ([int]'${{ matrix.seed }}' % 2 -eq 1) { $policies = @('fast_saturation', 'r11') }
+          foreach ($policy in $policies) {
+            $env:PXGO_RESEARCH_CAPACITY_POLICY = $policy
+            $timewaitBefore = try { @(Get-NetTCPConnection -State TimeWait -ErrorAction Stop).Count } catch { -1 }
+            "PAIR_POLICY profile=${{ matrix.profile }} class=${{ matrix.class_mode }} seed=${{ matrix.seed }} policy=$policy timewait_before=$timewaitBefore" |
+              Add-Content benchmarks/paired-order.txt
+            & .\benchmarks\capacity-paired.test.exe -test.run '^TestCapacityMixedTrafficBench$' -test.v -test.count=1 -test.timeout=95s 2>&1 |
+              Tee-Object -FilePath "benchmarks/paired-$policy.log"
+            if ($LASTEXITCODE -ne 0) { throw "Paired profile failed: $policy" }
+            $lines = @(Select-String -Path "benchmarks/paired-$policy.log" -Pattern 'MIXED_RESULT profile=')
+            if ($lines.Count -ne 1) { throw "Expected exactly ONE matching profile result for $policy, found $($lines.Count)" }
+            $result = $lines[0].Line
+            if ($result -notmatch 'short_attempted=(\d+) short_completed=\1') { throw "Short completion conservation missing: $result" }
+          }
+      - name: Diagnose native Windows TCP state after paired runs
+        if: always()
+        shell: pwsh
+        run: |
+          try {
+            $tcp = @(Get-NetTCPConnection -ErrorAction Stop)
+            $tcp | Group-Object State | Sort-Object Name |
+              ForEach-Object { "state=$($_.Name) count=$($_.Count)" } |
+              Out-File benchmarks/ephemeral-after.txt
+          } catch {
+            "TCP_STATE_UNAVAILABLE: $($_.Exception.Message)" | Out-File benchmarks/ephemeral-after.txt
+          }
+      - name: Preserve paired evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-paired-${{ matrix.profile }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/*.txt
+          retention-days: 14
+      - name: Preserve paired raw logs even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-paired-logs-${{ matrix.profile }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/*.log
+          retention-days: 14
+
   windows-isolated-process-capacity:
     name: Windows isolated proxy (${{ matrix.policy }}, classes=${{ matrix.classes }}, seed=${{ matrix.seed }})
     # Proxy-only private commit/RSS/handle/CPU. Distinct child PID, separate
