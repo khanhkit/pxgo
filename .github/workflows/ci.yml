@@ -520,10 +520,21 @@ jobs:
           "go=$(go version)" | Add-Content benchmarks/runner.txt
           "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
           "cpu_count=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
+          "python=$(python --version 2>&1)" | Add-Content benchmarks/runner.txt
           "profile=${{ matrix.profile }} seed=${{ matrix.seed }} classes=${{ matrix.class_mode }}" | Add-Content benchmarks/runner.txt
           go test ./internal/proxy -c -o benchmarks/capacity-paired.test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Exact-SHA native Windows test build failed' }
+          # Exercise the compiled binary's real Go flags before any workload.
+          & .\benchmarks\capacity-paired.test.exe '-test.list=^TestCapacityMixedTrafficBench$' > benchmarks/test-list.txt
+          if ($LASTEXITCODE -ne 0 -or -not (Select-String -Path benchmarks/test-list.txt -Pattern '^TestCapacityMixedTrafficBench$')) {
+            throw 'Native compiled Go test flag preflight failed'
+          }
           netsh interface ipv4 show dynamicport tcp 2>&1 | Out-File benchmarks/ephemeral-before.txt
+      - name: Validate paired log parser negative fixtures
+        shell: pwsh
+        run: |
+          python -m unittest discover -s scripts -p 'verify_capacity_pair_test.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Strict paired-log validator negative tests failed' }
       - name: Same-host paired HTTP/CONNECT p95, p99 and throughput
         shell: pwsh
         env:
@@ -540,14 +551,24 @@ jobs:
             $timewaitBefore = try { @(Get-NetTCPConnection -State TimeWait -ErrorAction Stop).Count } catch { -1 }
             "PAIR_POLICY profile=${{ matrix.profile }} class=${{ matrix.class_mode }} seed=${{ matrix.seed }} policy=$policy timewait_before=$timewaitBefore" |
               Add-Content benchmarks/paired-order.txt
-            & .\benchmarks\capacity-paired.test.exe -test.run '^TestCapacityMixedTrafficBench$' -test.v -test.count=1 -test.timeout=95s 2>&1 |
+            # Quoted, full Go flags are required when invoking a native .exe
+            # from PowerShell. Original unquoted `-test.run` was split into
+            # `-test`, which made all R17 Windows paired jobs fail at startup.
+            $testArgs = @('-test.run=^TestCapacityMixedTrafficBench$', '-test.v=true', '-test.count=1', '-test.timeout=95s')
+            & .\benchmarks\capacity-paired.test.exe @testArgs 2>&1 |
               Tee-Object -FilePath "benchmarks/paired-$policy.log"
             if ($LASTEXITCODE -ne 0) { throw "Paired profile failed: $policy" }
-            $lines = @(Select-String -Path "benchmarks/paired-$policy.log" -Pattern 'MIXED_RESULT profile=')
-            if ($lines.Count -ne 1) { throw "Expected exactly ONE matching profile result for $policy, found $($lines.Count)" }
-            $result = $lines[0].Line
-            if ($result -notmatch 'short_attempted=(\d+) short_completed=\1') { throw "Short completion conservation missing: $result" }
           }
+          # Parse and compare complete typed measurements, not just a PASS
+          # line or an unbound short count. The stdlib-only validator contains
+          # negative fixtures and is itself tested in a separate step.
+          python scripts/verify-capacity-pair.py `
+            --profile '${{ matrix.profile }}' --seed '${{ matrix.seed }}' `
+            --classes '${{ matrix.class_mode }}' `
+            --r11 benchmarks/paired-r11.log `
+            --fast benchmarks/paired-fast_saturation.log `
+            --output benchmarks/paired-evidence.json
+          if ($LASTEXITCODE -ne 0) { throw 'Matched workload evidence is missing, malformed or unequal' }
       - name: Diagnose native Windows TCP state after paired runs
         if: always()
         shell: pwsh
@@ -565,7 +586,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: win-paired-${{ matrix.profile }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
-          path: benchmarks/*.txt
+          path: |
+            benchmarks/*.txt
+            benchmarks/*.json
           retention-days: 14
       - name: Preserve paired raw logs even on failure
         if: always()

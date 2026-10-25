@@ -306,7 +306,7 @@ func runCapacityMixedProfile(t *testing.T, name string, tunnels, keepAlive, prom
 		debt = c.LongDebt
 		events = c.LongOverflow
 	}
-	t.Logf("MIXED_RESULT profile=%s seed=%s held_long_connect=%d held_short=%d promoted_short_to_long=%d short_attempted=%d short_completed=%d short_p50=%s short_p95=%s short_p99=%s short_offered_p95=%s short_offered_p99=%s short_rps=%.2f class_current_debt=%d class_overflow_events=%d physical_active=%d heap_shared_bytes=%d goroutines_shared=%d duration=%s", name, os.Getenv("PXGO_CAPACITY_MIX_SEED"), tunnels, keepAlive, promote, churn, len(values), p50, p95, p99, offeredP95, offeredP99, float64(churn)/elapsedShort.Seconds(), debt, events, snap, mem.Alloc, runtime.NumGoroutine(), time.Since(start))
+	t.Logf("MIXED_RESULT profile=%s seed=%s held_long_connect=%d held_short=%d promoted_short_to_long=%d short_attempted=%d short_completed=%d short_p50=%s short_p95=%s short_p99=%s short_offered_p95=%s short_offered_p99=%s short_rps=%.2f class_current_debt=%d class_overflow_events=%d physical_active=%d heap_shared_bytes=%d goroutines_shared=%d duration=%s policy=%s classes=%s", name, os.Getenv("PXGO_CAPACITY_MIX_SEED"), tunnels, keepAlive, promote, churn, len(values), p50, p95, p99, offeredP95, offeredP99, float64(churn)/elapsedShort.Seconds(), debt, events, snap, mem.Alloc, runtime.NumGoroutine(), time.Since(start), os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY"), os.Getenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES"))
 	for _, c := range held {
 		_ = c.Close()
 	}
