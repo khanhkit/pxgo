@@ -120,6 +120,46 @@ class StrictEvidenceTests(unittest.TestCase):
     def test_wrong_class_fails(self):
         with self.assertRaises(module.InvalidEvidence): self.verify(r11=log(classes="off"))
 
+    def test_unparsed_metric_garbage_rejected(self):
+        baseline = log()
+        for bad in (
+            baseline.replace("short_completed=600 ", "short_completed=600 GARBAGE ", 1),
+            baseline.replace("duration=1.5s ", "duration=1.5s WRONG ", 1),
+            baseline.replace("short_completed=600 ", "not_a_field short_completed=600 ", 1),
+            baseline.replace("short_p95=125ms ", "??short_p95=125ms ", 1),
+            baseline.replace("classes=1\n", "classes=1 unexpected=8\n", 1),
+            baseline.replace("short_p50=12ms ", "short_p50:12ms ", 1),
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(module.InvalidEvidence): self.verify(r11=bad)
+
+    def test_non_native_log_prefix_not_accepted(self):
+        original = log()
+        for malformed in (
+            original.replace("capacity_mixed_benchmark_test.go:309: MIXED_RESULT", "attacker: MIXED_RESULT", 1),
+            original.replace("capacity_mixed_benchmark_test.go:309: MIXED_RESULT", "MIXED_RESULT", 1),
+            original.replace("capacity_mixed_benchmark_test.go:309: MIXED_RESULT", "fake.go:1: MIXED_RESULT", 1),
+            original.replace("capacity_mixed_benchmark_test.go:309: MIXED_RESULT", "capacity_mixed_benchmark_test.go:??? : MIXED_RESULT", 1),
+        ):
+            with self.subTest(raw=malformed):
+                with self.assertRaises(module.InvalidEvidence): self.verify(r11=malformed)
+
+    def test_native_crlf_metric_passes(self):
+        evidence = self.verify(r11=log().replace("\n", "\r\n"),
+                               fast=log("fast_saturation").replace("\n", "\r\n"))
+        self.assertEqual(evidence["r11"]["short_completed"], 600)
+
+    def test_invalid_percentile_order_rejected(self):
+        for bad in (
+            log().replace("short_p50=12ms", "short_p50=140ms", 1),
+            log().replace("short_p99=200ms", "short_p99=100ms", 1),
+            log().replace("short_offered_p99=240ms", "short_offered_p99=100ms", 1),
+            log().replace("short_offered_p95=160ms", "short_offered_p95=100ms", 1),
+            log().replace("short_offered_p99=240ms", "short_offered_p99=150ms", 1),
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(module.InvalidEvidence): self.verify(r11=bad)
+
     def test_missing_p99_fails(self):
         with self.assertRaises(module.InvalidEvidence): self.verify(r11=log().replace("short_offered_p99=240ms ", ""))
 

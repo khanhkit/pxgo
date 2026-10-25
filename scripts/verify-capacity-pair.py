@@ -20,11 +20,26 @@ INT_KEYS = (
     "goroutines_shared",
 )
 TIME_KEYS = ("short_p50", "short_p95", "short_p99", "short_offered_p95", "short_offered_p99", "duration")
-TOKEN = re.compile(r"([a-z][a-z_0-9]*)=([^\s]+)")
-METRIC = re.compile(r"\bMIXED_RESULT\s+([^\r\n]+)")
+# The native Go t.Logf at capacity_mixed_benchmark_test.go emits exactly
+# these fields in this order. A substring token scanner can accept malformed
+# evidence by ignoring garbage, broken delimiters and appended fragments.
+# Match the COMPLETE metric row so every byte belongs to a known field.
+METRIC_FIELDS = (
+    "profile", "seed", "held_long_connect", "held_short", "promoted_short_to_long",
+    "short_attempted", "short_completed", "short_p50", "short_p95", "short_p99",
+    "short_offered_p95", "short_offered_p99", "short_rps", "class_current_debt",
+    "class_overflow_events", "physical_active", "heap_shared_bytes", "goroutines_shared",
+    "duration", "policy", "classes",
+)
+METRIC_ROW = re.compile(r"^" + " ".join(rf"{field}=(?P<{field}>\S+)" for field in METRIC_FIELDS) + r"$")
+# Consume only a native Go testing.T Logf record from this exact test file.
+# Other output can mention MIXED_RESULT, but must not impersonate evidence.
+METRIC = re.compile(
+    r"(?m)^[ \t]*capacity_mixed_benchmark_test\.go:[0-9]+:[ \t]+MIXED_RESULT[ \t]+([^\r\n]+)\r?$"
+)
 DURATION_PART = re.compile(r"(\d+(?:\.\d+)?)(ns|µs|us|ms|s|m|h)")
 # PowerShell emits exactly these five fields in this order. Requiring an
-# entire native record (not TOKEN.findall snippets) rejects unparsed text and
+# entire native record (not substring token scanning) rejects unparsed text and
 # ambiguous fields even when every expected key is also present.
 ORDER_ROW = re.compile(
     r"^PAIR_POLICY profile=(?P<profile>\S+) class=(?P<class>on|off) "
@@ -57,15 +72,10 @@ def parse_log(raw: str, *, profile: str, seed: int, classes: str, policy: str) -
     if len(rows) != 1:
         raise InvalidEvidence(f"{policy} has {len(rows)} MIXED_RESULT rows, expected exactly 1")
     row = rows[0]
-    fields = {}
-    for key, value in TOKEN.findall(row):
-        if key in fields:
-            raise InvalidEvidence(f"{policy} duplicate field {key}")
-        fields[key] = value
-    required = set(INT_KEYS) | set(TIME_KEYS) | {"profile", "seed", "policy", "classes", "short_rps"}
-    missing = sorted(required - fields.keys())
-    if missing:
-        raise InvalidEvidence(f"{policy} missing fields {missing}")
+    match = METRIC_ROW.fullmatch(row)
+    if match is None:
+        raise InvalidEvidence(f"{policy} malformed full native MIXED_RESULT row: {row!r}")
+    fields = match.groupdict()
     for key, expected in (("profile", profile), ("seed", str(seed)), ("policy", policy), ("classes", "1" if classes == "on" else "0")):
         if fields[key] != expected:
             raise InvalidEvidence(f"{policy} {key}={fields[key]!r}, expected {expected!r}")
@@ -90,6 +100,19 @@ def parse_log(raw: str, *, profile: str, seed: int, classes: str, policy: str) -
     if not math.isfinite(rps) or rps <= 0:
         raise InvalidEvidence(f"{policy} invalid RPS {rps}")
     parsed["short_rps"] = rps
+    # These sample percentiles are derived from the same set of successful
+    # HTTP exchanges. A nonsensical ranking is corrupt evidence even when
+    # every individual duration is syntactically valid.
+    if not (parsed["short_p50_s"] <= parsed["short_p95_s"] <= parsed["short_p99_s"]):
+        raise InvalidEvidence(f"{policy} short latency percentile order inconsistent")
+    if parsed["short_offered_p95_s"] > parsed["short_offered_p99_s"]:
+        raise InvalidEvidence(f"{policy} offered latency percentile order inconsistent")
+    # For each individual request, offered-time >= after-client-token service
+    # time. Hence their ordered empirical percentiles must obey this bound.
+    if parsed["short_offered_p95_s"] < parsed["short_p95_s"]:
+        raise InvalidEvidence(f"{policy} offered p95 less than measured service p95")
+    if parsed["short_offered_p99_s"] < parsed["short_p99_s"]:
+        raise InvalidEvidence(f"{policy} offered p99 less than measured service p99")
     if min(parsed["held_long_connect"], parsed["held_short"], parsed["promoted_short_to_long"], parsed["short_attempted"]) <= 0:
         raise InvalidEvidence(f"{policy} empty offered workload")
     if parsed["short_attempted"] != parsed["short_completed"]:

@@ -47,3 +47,29 @@ R20 fail-closes duplicate/missing/ambiguous native order fields, permits only >=
 ### R20 independent critic revision: full-record parsing
 
 Independent staging KitAuditor critic first returned **REVISE**: despite duplicate-key protection, `TOKEN.findall` silently ignored arbitrary non-token text embedded inside a PAIR_POLICY record. This was an additional false-PASS risk. The corrected source now **full-matches exactly the five fields emitted by the fixed PowerShell workflow**, with no extra token, garbage or ambiguous provenance. Additional negative fixtures reject inserted fragments and malformed fields; a positive CRLF fixture ensures native Windows line-endings remain supported. Re-audit this revised staging source and require exact immutable Windows CI again before accepting the validator.
+
+## R21 evidence-integrity audit and full native R20 paired replay (2026-10-26)
+
+**Authoritative benchmark source:** immutable PR #103 SHA `22d05d66d06538c1e00cd4b6d9474be6a36c7a49`, [GitHub Actions run 40220215522](https://github.com/khanhkit/pxgo/actions/runs/40220215522), **103 jobs enumerated with REST pagination, 101 success, two conditionally skipped** (native AD/SSPI and unrelated previous burst). All **32 same-host matched Windows pair jobs SUCCESS**, crossed by profile (4) × classification (2) × seed (2) × order (2); 64 policy trials.
+
+R20's full-line `PAIR_POLICY` parser and Windows CI passed, but independent local adversarial replay against R20 `scripts/verify-capacity-pair.py` proved FOUR false-PASS cases in the `MIXED_RESULT` parser: embedded arbitrary garbage, trailing garbage, non-field prefixes, and malformed field delimiters. Earlier R20 `TOKEN.findall` scanned metric tokens while skipping invalid substrings, even as R20 had already fixed the separate order-manifest parser. The R21 fix requires a **full-record, anchored 21-field native Go `capacity_mixed_benchmark_test.go:<line>: MIXED_RESULT`** match before accepting any metrics. It additionally rejects internally contradictory percentiles `p50 greater than p95`, `p95 greater than p99`, offered p95 greater than offered p99, or offered p95/p99 lower than service p95/p99. Regression fixtures cover corrupted fields, injected fragments and native CRLF. R21 changes are **benchmark validation only**, not runtime governor, quota policy, test workload or default mode.
+
+**Independent replay of R20 raw Windows log data:** Retrieved both original `MIXED_RESULT` lines from each of all **32 exact-source-successful Windows paired Actions job logs**, normalized the GitHub log timestamp prefix, and parsed all **64 native output rows** using the stricter R21 staged parser. Every record was accepted; matched profiles/classes/seeds and all four offered-load counts remained equal across the two policy runs. The full original Go test PASS and genuine observed order manifest were already release-gated by the successful R20 CI; this replay validates metric parser compatibility, and does NOT independently reconstruct `PAIR_POLICY` TIME_WAIT records from downloaded job artifacts. A reviewer must separately inspect the original artifacts to independently confirm TIME_WAIT carryover and order; do not substitute an invented manifest. Downloaded native metric excerpts, test reproduction script and sha256s were preserved in isolated host staging under `.hotfix-work-20261022/capacity-r21-evidence-20261026/`, not in a production artifact. Persisted normalized rows with exact **job ID, job URL and SHA**: [`2026-10-26-r20-native-windows-paired-replay.csv`](2026-10-26-r20-native-windows-paired-replay.csv), and [`summary.json`](2026-10-26-r20-native-windows-paired-summary.json).
+
+### 32 actual Windows pairs: fast-minus-R11 short offered-p95
+
+| Stratum | N pairs | Median delta (ms) | Pairs favor fast | Pairs favor R11 |
+|---|---:|---:|---:|---:|
+| All matched pairs | 32 | **+7.866** | 12 | 20 |
+| R11 first | 16 | **+23.631** | 3 | 13 |
+| fast first | 16 | **−4.495** | 9 | 7 |
+| classes ON | 16 | +0.361 | 8 | 8 |
+| classes OFF | 16 | +15.356 | 4 | 12 |
+| short_heavy | 8 | +3.052 | 3 | 5 |
+| balanced | 8 | +6.265 | 3 | 5 |
+| long_heavy | 8 | +14.762 | 3 | 5 |
+| churn | 8 | +15.838 | 3 | 5 |
+
+Delta=fast-saturation p95 minus R11 p95; positive favors R11. The large **change of sign conditional on policy execution order** is essential. These are descriptive paired comparisons on different GitHub-hosted Windows VMs, with at most two runs per VM and nonzero TIME_WAIT/caching carryover; they **do not prove a causal or statistically significant R11 advantage**. In particular **do not promote fast-saturation** based on homogeneous 2,560-CONNECT burst p95 or this exploratory pair study. The class budgets remain advisory, and neither Windows Job Object pressure nor protected AD/SSPI has been independently passed.
+
+**Gates:** R21 staging Python 33/33 PASS, actionlint, Go full suite/fmt/vet/lint 0 issues PASS. Independent R21 critic source audit returned PASS, with warnings to replay actual native Windows rows (completed as above) and obtain fresh exact-SHA Actions (still required after R21 commit). Keep PR #102 and PR #103 DRAFT, do not merge/release.
