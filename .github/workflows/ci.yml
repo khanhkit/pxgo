@@ -480,6 +480,39 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  capacity-order-balanced-evidence:
+    name: Capacity paired order-balance evidence audit
+    # Validate the *pinned* R20 native Windows measurement replay; R22 only
+    # computes a noncausal descriptive order-balanced analysis, never fabricates
+    # fresh native Windows measurements from a Python script.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify exact candidate SHA and adversarial data fixtures
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python3 -m unittest discover -s scripts -p 'analyze_capacity_crossover_test.py' -v
+      - name: Recompute and compare pinned R20 cross-order report
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(mktemp)"
+          trap 'rm -f "$output"' EXIT
+          python3 scripts/analyze-capacity-crossover.py \
+            --input docs/research/2026-10-26-r20-native-windows-paired-replay.csv \
+            --expected-sha 22d05d66d06538c1e00cd4b6d9474be6a36c7a49 \
+            --output "$output"
+          cmp -- "$output" docs/research/2026-10-27-r22-order-balanced-study.json
+
   windows-paired-policy-research:
     name: Windows paired (${{ matrix.profile }}, classes=${{ matrix.class_mode }}, seed=${{ matrix.seed }}, order=${{ matrix.order }})
     # Controlled same-runner paired R11 versus fast-saturation. Previous
