@@ -423,6 +423,10 @@ jobs:
             go test ./internal/proxy -run '^TestCapacityTLSHTTP2StreamingMixed$' -count=1 -v -timeout=65s 2>&1 |
               Tee-Object -FilePath benchmarks/tls-h2-streaming.log
             if ($LASTEXITCODE -ne 0) { throw 'Native TLS 1.3/HTTP2/SSE and saturated permit borrowing failed' }
+            # A silently SKIPPED test must never count as native research PASS.
+            if (-not (Select-String -Path benchmarks/tls-h2-streaming.log -Pattern 'TLS_H2_RESULT tls=tls13 alpn=h2 admission_wait_proven=true wait_delta=[1-9][0-9]*')) {
+              throw 'Missing strict TLS/H2/observed-global-wait evidence marker'
+            }
             Remove-Item Env:PXGO_CAPACITY_TLS_H2_BENCH
           }
           # Short/medium/long TCP survival (250ms..5.5s), natural releases,

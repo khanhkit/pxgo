@@ -308,9 +308,15 @@ func TestCapacityTLSHTTP2StreamingMixed(t *testing.T) {
 	if snapshot.ClassPools != nil && (snapshot.ClassPools.Long != hardCap || snapshot.ClassPools.Total != hardCap || snapshot.ClassPools.Short != 0 || snapshot.ClassPools.Provisional != 0) {
 		t.Fatalf("saturated class ledger mismatch: %+v", snapshot.ClassPools)
 	}
+	// R24 audit fix: a mere 150ms unfinished request may still be queued
+	// in the kernel backlog. Prove this exact short has reached the proxy's
+	// bounded global acquire() and registered an admission wait.
+	waitsBefore := snapshot.AdmissionWaits
 	borrow := make(chan error, 1)
+	dialed := make(chan error, 1)
 	go func() {
 		c, e := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
+		dialed <- e
 		if e == nil {
 			e = capacityMixedHTTP(c, bufio.NewReader(c), shortOrigin.URL, false)
 			_ = c.Close()
@@ -318,10 +324,36 @@ func TestCapacityTLSHTTP2StreamingMixed(t *testing.T) {
 		borrow <- e
 	}()
 	select {
+	case e := <-dialed:
+		if e != nil {
+			t.Fatalf("short TCP dial failed while global permits saturated: %v", e)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("short TCP dial did not reach a listening proxy")
+	}
+	observedWait := false
+	waitDeadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(waitDeadline) {
+		current := px.capacityDiagnosticSnapshot()
+		if current.ActiveDownstream == hardCap && current.AdmissionWaits > waitsBefore {
+			observedWait = true
+			break
+		}
+		select {
+		case e := <-borrow:
+			t.Fatalf("short finished before reaching global admission wait: %v", e)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !observedWait {
+		t.Fatal("unproven blocked short: no admission wait under 16/16 physical saturation")
+	}
+	select {
 	case e := <-borrow:
 		t.Fatalf("short request completed while all global permits held: %v", e)
 	case <-time.After(150 * time.Millisecond):
-		// Required blocked short at true physical saturation.
+		// Required blocked short already observed inside global acquire().
 	}
 	_ = held[heldEcho].Close()
 	held[heldEcho] = nil
@@ -361,7 +393,7 @@ func TestCapacityTLSHTTP2StreamingMixed(t *testing.T) {
 	for time.Now().Before(deadline) {
 		snapshot = px.capacityDiagnosticSnapshot()
 		if snapshot.ActiveDownstream == heldEcho+h2Connections && (snapshot.ClassPools == nil || (snapshot.ClassPools.Long == heldEcho+h2Connections && snapshot.ClassPools.Short == 0 && snapshot.ClassPools.Provisional == 0 && snapshot.ClassPools.Total == heldEcho+h2Connections)) {
-			t.Logf("TLS_H2_RESULT tls=tls13 alpn=h2 sse=%d h2_requests=%d short_http=%d held_connect=%d physical=%d hard=%d classes=%t", h2Connections, h2Requests, shortRequests, heldEcho, snapshot.ActiveDownstream, snapshot.EffectiveLimit, snapshot.ClassPools != nil)
+			t.Logf("TLS_H2_RESULT tls=tls13 alpn=h2 admission_wait_proven=true wait_delta=%d sse=%d h2_requests=%d short_http=%d held_connect=%d physical=%d hard=%d classes=%t", snapshot.AdmissionWaits-waitsBefore, h2Connections, h2Requests, shortRequests, heldEcho, snapshot.ActiveDownstream, snapshot.EffectiveLimit, snapshot.ClassPools != nil)
 			return
 		}
 		time.Sleep(20 * time.Millisecond)

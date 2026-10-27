@@ -1,7 +1,7 @@
-# R23: TLS 1.3, HTTP/2 multiplexing and SSE with saturated physical admission
+# R23/R24: TLS 1.3, HTTP/2 multiplexing and SSE with saturated physical admission
 
 Status: **experimental research-only; production release gates remain OPEN**.
-Parent exact PxGo PR #103 R22 SHA `9f730423f7f220367de8cc3bdc61d8671357f90a`.
+Base R22 SHA `9f730423f7f220367de8cc3bdc61d8671357f90a`; R24 incremental parent R23 candidate `fd6fb1e6074162be6f2adb4527518f2c5cc25454`.
 No production runtime, governor, classifier, default mode or auth code changes.
 
 ## Purpose and acceptance
@@ -21,6 +21,14 @@ The native `windows-latest` opt-in gate should run on seed 0, per controller pol
 - Initial real Linux test: classifier ON/OFF each PASS; after adding the saturated physical permit borrow/replenish proof: **10/10 Linux opt-in runs ON and 10/10 OFF PASS**.
 - Linux `gofmt` and `go vet ./internal/proxy` PASS; full `go test ./... -count=1` PASS; `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c ./internal/proxy` PASS.
 - Local Go `-race` unavailable because the KitMCP sandbox has `CGO_ENABLED=0` and no gcc. This is **unrun**, not PASS. Exact-SHA CI and a real Windows runner must be verified after branch update.
+
+## R24 benchmark-validity correction and new local evidence
+
+The R23 150ms blocked-short assertion did not itself establish that the short connection had reached the Go global admission gate rather than lingering in the Windows kernel TCP backlog. R24 **fixes the evidence gate**: record the initial `AdmissionWaits`, require a completed TCP dial and an observed `AdmissionWaits` increase while `ActiveDownstream==EffectiveLimit==16`, then hold the actual queued short another 150ms before freeing a long permit. Only after the short completes and the long permit is replenished may the scenario PASS. A new typed `TLS_H2_RESULT ... admission_wait_proven=true wait_delta=...` marker is emitted only on successful validation.
+
+The seed-0 Windows workflow additionally requires that strict positive `wait_delta` marker in the raw log, preventing an accidental skip from being accepted as green. No production runtime modification or Go load-generator weakening was necessary.
+
+Local R24 Linux tests **20/20 PASS** (10 class ON, 10 OFF), every observed `wait_delta=1`. Full `go test ./... -count=1`, `go vet`, `gofmt`, `golangci-lint` v2.13.2 **0 issues**, and Windows amd64 CGO-disabled test crosscompile PASS. Local `-race` cannot run without gcc/CGO; no race PASS is claimed. Native Windows evidence and independent read-only KitAuditor remain PENDING until exact-SHA validation.
 
 ## Limitations and release hold
 
