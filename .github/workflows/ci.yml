@@ -508,6 +508,44 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  windows-job-object-pressure-research:
+    name: Windows Job Object process-commit pressure (isolated child)
+    # A strict test-only OS feasibility gate on a fresh native VM. Do NOT
+    # treat success as production PxGo memory-budget calibration/recovery.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Enforce process commit limit on isolated child, deny, recover
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_CAPACITY_JOB_PRESSURE: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable R26 SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsJobObjectCommitPressure$' -count=1 -v -timeout=55s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-job-object-commit.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Job Object hard-commit pressure or recovery failed' }
+          if (-not (Select-String -Path benchmarks/windows-job-object-commit.log -Pattern 'JOB_OBJECT_RESULT enforceable=true child_pid=[1-9][0-9]* .* denied_commit_bytes=268435456 recovery_commit_bytes=4194304')) {
+            throw 'Missing real Windows hard memory enforcement and recovery evidence'
+          }
+      - name: Preserve native Job Object evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-job-object-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   capacity-order-balanced-evidence:
     name: Capacity paired order-balance evidence audit
     # Validate the *pinned* R20 native Windows measurement replay; R22 only
