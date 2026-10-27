@@ -414,6 +414,17 @@ jobs:
               Tee-Object -FilePath benchmarks/class-microbenchmark.log
             if ($LASTEXITCODE -ne 0) { throw 'Windows class microbenchmarks failed on fresh runner' }
           }
+          # R23: verify actual TLS 1.3 + ALPN h2 multiplexing, six SSE
+          # streams, shared physical 16-slot saturation and long-to-short
+          # permit reclamation on a fresh native Windows VM. Only seed 0:
+          # four policy/class cells, before the heavy socket churn below.
+          if ($env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            $env:PXGO_CAPACITY_TLS_H2_BENCH = '1'
+            go test ./internal/proxy -run '^TestCapacityTLSHTTP2StreamingMixed$' -count=1 -v -timeout=65s 2>&1 |
+              Tee-Object -FilePath benchmarks/tls-h2-streaming.log
+            if ($LASTEXITCODE -ne 0) { throw 'Native TLS 1.3/HTTP2/SSE and saturated permit borrowing failed' }
+            Remove-Item Env:PXGO_CAPACITY_TLS_H2_BENCH
+          }
           # Short/medium/long TCP survival (250ms..5.5s), natural releases,
           # short HTTP churn during every phase and no physical/class leaks.
           # Run FIRST on a fresh Windows VM to avoid contaminating results
