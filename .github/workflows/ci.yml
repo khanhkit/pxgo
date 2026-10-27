@@ -546,6 +546,7 @@ jobs:
             Tee-Object -FilePath benchmarks/windows-job-proxy-matrix.log
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows 2560 real proxy quota trial failed' }
           if (-not (Select-String -Path benchmarks/windows-job-proxy-matrix.log -Pattern 'JOB_PROXY_MATRIX_META policy=')) { throw 'Missing source trial provenance' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-matrix.log -Pattern 'JOB_PROXY_OWN_JOBINFO verified=true child_pid=[1-9][0-9]* process_commit_limit=[1-9][0-9]*')) { throw 'Child itself did not prove Job Object cap' }
           if (-not (Select-String -Path benchmarks/windows-job-proxy-matrix.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) {
             throw 'Missing genuine native quota/held-connection positive marker'
           }
@@ -623,6 +624,7 @@ jobs:
           go test ./internal/proxy -run TestCapacityWindowsJobProxy2560Pressure -count=1 -v -timeout=130s 2>&1 |
             Tee-Object -FilePath benchmarks/windows-job-proxy-2560.log
           if ($LASTEXITCODE -ne 0) { throw 'Native real PxGo quota test failed' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-2560.log -Pattern 'JOB_PROXY_OWN_JOBINFO verified=true child_pid=[1-9][0-9]* process_commit_limit=[1-9][0-9]*')) { throw 'Child itself did not prove Job Object cap' }
           if (-not (Select-String -Path benchmarks/windows-job-proxy-2560.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) {
             throw 'Native positive result missing'
           }

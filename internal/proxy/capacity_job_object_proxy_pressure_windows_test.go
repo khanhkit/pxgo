@@ -50,6 +50,22 @@ func TestCapacityWindowsJobProxyChild(t *testing.T) {
 				t.Fatal(err)
 			}
 			fmt.Printf("JOB_PROXY_SNAPSHOT %s\n", raw)
+		case "JOBINFO":
+			// Query the actual Job Object from WITHIN the child process.
+			// A nil Job handle addresses the immediately associated job;
+			// this does not claim to expose stricter ancestral nested jobs.
+			var mine windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+			var size uint32
+			err := windows.QueryInformationJobObject(0, windows.JobObjectExtendedLimitInformation,
+				uintptr(unsafe.Pointer(&mine)), uint32(unsafe.Sizeof(mine)), &size)
+			if err != nil || size != uint32(unsafe.Sizeof(mine)) ||
+				mine.BasicLimitInformation.LimitFlags&windows.JOB_OBJECT_LIMIT_PROCESS_MEMORY == 0 ||
+				mine.ProcessMemoryLimit == 0 {
+				t.Fatalf("child could not prove its own enforced process Job Object cap: err=%v size=%d flags=%x limit=%d",
+					err, size, mine.BasicLimitInformation.LimitFlags, mine.ProcessMemoryLimit)
+			}
+			fmt.Printf("JOB_PROXY_OWN_JOBINFO process_commit_limit=%d process_mem_flag=true\n",
+				mine.ProcessMemoryLimit)
 		case "PROBE":
 			// Fail closed: allocation denial only counts with a recognized
 			// Win32 commit-quota error, never arbitrary VirtualAlloc errors.
@@ -216,6 +232,16 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		t.Fatalf("Job Object hard commit readback mismatch: err=%v size=%d cap=%d flags=%x",
 			err, returned, readback.ProcessMemoryLimit, readback.BasicLimitInformation.LimitFlags)
 	}
+	// Cross-check the kernel hard cap from INSIDE the limited PxGo PID,
+	// rather than relying only on the parent Job Object handle readback.
+	if _, err := io.WriteString(stdin, "JOBINFO\n"); err != nil {
+		t.Fatal(err)
+	}
+	childLimit, err := capacityReadJobPrefix(p.output, "JOB_PROXY_OWN_JOBINFO ")
+	if err != nil || childLimit != fmt.Sprintf("process_commit_limit=%d process_mem_flag=true", hardLimit) {
+		t.Fatalf("child-observed process Job Object cap mismatches parent: marker=%q expected=%d err=%v", childLimit, hardLimit, err)
+	}
+	t.Logf("JOB_PROXY_OWN_JOBINFO verified=true child_pid=%d process_commit_limit=%d", cmd.Process.Pid, hardLimit)
 	monitor := startCapacityIsolatedSampler(cmd.Process.Pid, baseline)
 	defer monitor.stopSampling()
 
