@@ -508,6 +508,55 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  windows-job-proxy-2560-matrix:
+    name: Windows real PxGo quota (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, trial=${{ matrix.trial }})
+    # Each policy/class/trial on a fresh native Windows VM; descriptive, unpaired.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: [r11, fast_saturation]
+        class_mode: ['0', '1']
+        trial: [0, 1]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run exact-SHA native 2560-held real proxy hard-commit quota scenario
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_CAPACITY_JOB_PROXY_2560: '1'
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode }}
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+          PXGO_CAPACITY_JOB_PROXY_TRIAL: ${{ matrix.trial }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R32 immutable SHA mismatch' }
+          Write-Output ('MATRIX_META policy=' + $env:PXGO_RESEARCH_CAPACITY_POLICY + ' classes=' + $env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES + ' trial=' + $env:PXGO_CAPACITY_JOB_PROXY_TRIAL)
+          go test ./internal/proxy -run TestCapacityWindowsJobProxy2560Pressure -count=1 -v -timeout=130s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-job-proxy-matrix.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows 2560 real proxy quota trial failed' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-matrix.log -Pattern 'JOB_PROXY_MATRIX_META policy=')) { throw 'Missing source trial provenance' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-matrix.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) {
+            throw 'Missing genuine native quota/held-connection positive marker'
+          }
+      - name: Preserve per-trial Windows raw logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-real-proxy-quota-${{ matrix.policy }}-${{ matrix.class_mode }}-${{ matrix.trial }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-job-proxy-cleanup-negative:
     name: Windows real PxGo child Job Object injected-failure cleanup
     # Fresh runner avoids TIME_WAIT carryover from normal 2560-pressure probe.

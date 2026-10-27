@@ -168,6 +168,14 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 	if proxy == "" {
 		t.Fatalf("real proxy did not report listener: %s", ready)
 	}
+	trial := os.Getenv("PXGO_CAPACITY_JOB_PROXY_TRIAL")
+	if trial != "" && trial != "0" && trial != "1" {
+		t.Fatalf("invalid Job Object trial label %q", trial)
+	}
+	if trial == "" {
+		trial = "default"
+	}
+	t.Logf("JOB_PROXY_MATRIX_META policy=%s classes=%s trial=%s", os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY"), os.Getenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES"), trial)
 	baseline, err := readCapacityIsolatedResources(cmd.Process.Pid)
 	if err != nil {
 		t.Fatal(err)
@@ -275,9 +283,14 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		t.Fatal("INJECTED_FAILURE_AFTER_2560_HELD_CONNECT")
 	}
 	classes := os.Getenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES") == "1"
-	if classes && (plateau.ClassPools == nil || plateau.ClassPools.Long != capacityJobProxyHeld ||
-		plateau.ClassPools.Total != capacityJobProxyHeld) {
-		t.Fatalf("real proxy class tracking inconsistent at plateau: %+v", plateau.ClassPools)
+	if classes {
+		if plateau.ClassPools == nil || plateau.ClassPools.Long != capacityJobProxyHeld ||
+			plateau.ClassPools.Total != capacityJobProxyHeld || plateau.ClassPools.Short != 0 ||
+			plateau.ClassPools.Provisional != 0 {
+			t.Fatalf("real proxy class tracking inconsistent at plateau: %+v", plateau.ClassPools)
+		}
+	} else if plateau.ClassPools != nil {
+		t.Fatalf("classes unexpectedly enabled: %+v", plateau.ClassPools)
 	}
 	plateauResources, err := readCapacityIsolatedResources(cmd.Process.Pid)
 	if err != nil {
