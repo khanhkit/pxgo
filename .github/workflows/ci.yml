@@ -429,6 +429,19 @@ jobs:
             }
             Remove-Item Env:PXGO_CAPACITY_TLS_H2_BENCH
           }
+          # R25 WebSocket RFC6455 binary-frame classification and strict
+          # 16/16 physical saturation/short borrowing, before port churn.
+          # Exactly four native windows-latest seed0 policy/class cells.
+          if ($env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            $env:PXGO_CAPACITY_WS_BENCH = '1'
+            go test ./internal/proxy -run '^TestCapacityMixedWebSocketSaturated$' -count=1 -v -timeout=65s 2>&1 |
+              Tee-Object -FilePath benchmarks/websocket-saturated.log
+            if ($LASTEXITCODE -ne 0) { throw 'Native WebSocket frame and physical borrowing gate failed' }
+            if (-not (Select-String -Path benchmarks/websocket-saturated.log -Pattern 'WS_MIXED_RESULT websocket=8 connect=8 short_borrow=1 wait_delta=[1-9][0-9]* global_active=0')) {
+              throw 'WebSocket evidence marker absent or zero actual admission waits'
+            }
+            Remove-Item Env:PXGO_CAPACITY_WS_BENCH
+          }
           # Short/medium/long TCP survival (250ms..5.5s), natural releases,
           # short HTTP churn during every phase and no physical/class leaks.
           # Run FIRST on a fresh Windows VM to avoid contaminating results
