@@ -508,6 +508,43 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  windows-job-proxy-cleanup-negative:
+    name: Windows real PxGo child Job Object injected-failure cleanup
+    # Fresh runner avoids TIME_WAIT carryover from normal 2560-pressure probe.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Inject failure after 2560 held connections and prove child+echo teardown
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_CAPACITY_JOB_PROXY_CLEANUP_TEST: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Exact R31 SHA mismatch' }
+          go test ./internal/proxy -run TestCapacityWindowsJobProxyForcedFailureCleanup -count=1 -v -timeout=65s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-job-proxy-cleanup-negative.log
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated negative 2560 cleanup test failed' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-cleanup-negative.log -Pattern 'JOB_PROXY_CLEANUP_NEGATIVE expected_injected_failure=true clean_child_exit=true echo_joined=true')) {
+            throw 'Missing strict real PxGo 2560 negative teardown marker'
+          }
+      - name: Preserve native failed-path cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-pxgo-job-cleanup-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-job-object-proxy-2560-research:
     name: Windows real PxGo 2560 CONNECT under child commit quota
     # Experimental test-only separate child, no production memory policy.

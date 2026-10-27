@@ -140,11 +140,16 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		_ = stdin.Close()
 		if err := cmd.Wait(); err != nil {
 			t.Errorf("real PxGo child was not gracefully shut down: %v", err)
+			return
 		}
-		// KILL_ON_JOB_CLOSE: only close the Job Object AFTER normal child exit.
+		// Close the owned child-only Job Object AFTER clean child exit.
 		if job != 0 {
-			_ = windows.CloseHandle(job)
+			if err := windows.CloseHandle(job); err != nil {
+				t.Errorf("close owned Job Object: %v", err)
+				return
+			}
 		}
+		fmt.Println("JOB_PROXY_CLEANUP_PROOF held_closed=2560 echo_workers_joined=true child_exited=true")
 	}()
 	ready, err := capacityReadJobPrefix(p.output, "JOB_PROXY_READY ")
 	if err != nil {
@@ -266,6 +271,9 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		t.Fatalf("real proxy plateau physical permits=%d expected=%d err=%v",
 			plateau.ActiveDownstream, capacityJobProxyHeld, err)
 	}
+	if os.Getenv("PXGO_CAPACITY_JOB_PROXY_INJECT_FAILURE") == "post_plateau" {
+		t.Fatal("INJECTED_FAILURE_AFTER_2560_HELD_CONNECT")
+	}
 	classes := os.Getenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES") == "1"
 	if classes && (plateau.ClassPools == nil || plateau.ClassPools.Long != capacityJobProxyHeld ||
 		plateau.ClassPools.Total != capacityJobProxyHeld) {
@@ -367,4 +375,41 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		capacityJobProbeLargeCommit, capacityJobProbeSmallCommit,
 		baseline.PrivateBytes, plateauResources.PrivateBytes, peak.PrivateBytes, hardLimit, peak.Handles,
 		samples[0], samples[1], samples[2])
+}
+
+// This negative gate spawns the full 2560-held-CONNECT native test in a
+// subprocess, intentionally fails AFTER establishing the physical plateau,
+// and requires the parent to finish its real proxy + echo-worker teardown.
+// It may not pass merely because a timeout kills the nested test.
+func TestCapacityWindowsJobProxyForcedFailureCleanup(t *testing.T) {
+	if os.Getenv("PXGO_CAPACITY_JOB_PROXY_CLEANUP_TEST") != "1" {
+		t.Skip("opt-in negative real proxy child Job Object cleanup")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0],
+		"-test.run=^TestCapacityWindowsJobProxy2560Pressure$", "-test.count=1", "-test.v", "-test.timeout=35s")
+	cmd.Env = append(os.Environ(),
+		"PXGO_CAPACITY_JOB_PROXY_2560=1",
+		"PXGO_CAPACITY_JOB_PROXY_INJECT_FAILURE=post_plateau",
+		"PXGO_EXPERIMENTAL_CAPACITY_MODE=auto",
+		"PXGO_EXPERIMENTAL_CONNECTION_CLASSES=1",
+		"PXGO_RESEARCH_CAPACITY_POLICY=r11")
+	start := time.Now()
+	output, err := cmd.CombinedOutput()
+	raw := string(output)
+	if ctx.Err() != nil {
+		t.Fatalf("negative 2560-connect cleanup timed out: %v", ctx.Err())
+	}
+	if err == nil || !strings.Contains(raw, "INJECTED_FAILURE_AFTER_2560_HELD_CONNECT") {
+		t.Fatalf("negative fixture did not fail at exact 2560 plateau: err=%v log=%q", err, raw)
+	}
+	if !strings.Contains(raw, "JOB_PROXY_CLEANUP_PROOF held_closed=2560 echo_workers_joined=true child_exited=true") {
+		t.Fatalf("negative fixture failed to prove normal PxGo child and echo cleanup: %q", raw)
+	}
+	if strings.Contains(raw, "real PxGo child was not gracefully shut down") ||
+		strings.Contains(raw, "panic:") || strings.Contains(raw, "fatal error:") {
+		t.Fatalf("negative cleanup unexpectedly crashed or leaked child: %q", raw)
+	}
+	t.Logf("JOB_PROXY_CLEANUP_NEGATIVE expected_injected_failure=true clean_child_exit=true echo_joined=true elapsed=%s", time.Since(start))
 }
