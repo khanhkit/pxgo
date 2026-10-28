@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -25,10 +26,11 @@ import (
 )
 
 const (
-	capacityJobProxyHeld   = 2560
-	capacityJobProxyShort  = 600
-	capacityJobProxyBudget = uint64(384 << 20)
-	capacityJobProxyHold   = uintptr(64 << 20)
+	capacityJobProxyHeld     = 2560
+	capacityJobProxyShort    = 600
+	capacityJobProxyBudget   = uint64(384 << 20)
+	capacityJobProxyHold     = uintptr(64 << 20)
+	capacityJobProxyHeapHold = 32 << 20
 )
 
 func TestCapacityWindowsJobProxyChild(t *testing.T) {
@@ -44,6 +46,8 @@ func TestCapacityWindowsJobProxyChild(t *testing.T) {
 	fmt.Printf("JOB_PROXY_READY addr=%s pid=%d\n", px.ListenAddr(), os.Getpid())
 	in := bufio.NewScanner(os.Stdin)
 	var heldCommit uintptr
+	var heldGoHeap [][]byte
+	var heapBaseline uint64
 	defer func() {
 		if heldCommit != 0 {
 			_ = windows.VirtualFree(heldCommit, 0, windows.MEM_RELEASE)
@@ -83,6 +87,51 @@ func TestCapacityWindowsJobProxyChild(t *testing.T) {
 			}
 			fmt.Printf("JOB_PROXY_GLOBAL_SENSOR resource=windows-memory-handles available=true reported_free_slots=%d\n",
 				sample.freeSlots)
+		case "HEAP_HOLD":
+			if heldGoHeap != nil {
+				t.Fatal("Go heap ballast already held")
+			}
+			runtime.GC()
+			var before runtime.MemStats
+			runtime.ReadMemStats(&before)
+			heapBaseline = before.Alloc
+			heldGoHeap = make([][]byte, 0, 8)
+			for range 8 {
+				chunk := make([]byte, 4<<20)
+				for page := 0; page < len(chunk); page += 4096 {
+					chunk[page] = 0xA5
+				}
+				heldGoHeap = append(heldGoHeap, chunk)
+			}
+			runtime.GC()
+			var live runtime.MemStats
+			runtime.ReadMemStats(&live)
+			runtime.KeepAlive(heldGoHeap)
+			if live.Alloc < heapBaseline+uint64(28<<20) {
+				t.Fatalf("32MiB Go heap retention not proved: before=%d after=%d", heapBaseline, live.Alloc)
+			}
+			fmt.Printf("JOB_PROXY_GO_HEAP_HOLD allocated_bytes=%d alloc_before=%d alloc_after=%d\n", capacityJobProxyHeapHold, heapBaseline, live.Alloc)
+		case "HEAP_STATUS":
+			if len(heldGoHeap) != 8 {
+				t.Fatal("Go heap ballast unexpectedly missing")
+			}
+			runtime.GC()
+			var during runtime.MemStats
+			runtime.ReadMemStats(&during)
+			runtime.KeepAlive(heldGoHeap)
+			if during.Alloc < heapBaseline+uint64(28<<20) {
+				t.Fatalf("Go heap ballast not sustained: baseline=%d now=%d", heapBaseline, during.Alloc)
+			}
+			fmt.Printf("JOB_PROXY_GO_HEAP_STATUS allocated_bytes=%d alloc_current=%d\n", capacityJobProxyHeapHold, during.Alloc)
+		case "HEAP_FREE":
+			if len(heldGoHeap) != 8 {
+				t.Fatal("Go heap ballast already freed")
+			}
+			heldGoHeap = nil
+			runtime.GC()
+			var after runtime.MemStats
+			runtime.ReadMemStats(&after)
+			fmt.Printf("JOB_PROXY_GO_HEAP_FREE released_bytes=%d alloc_after_gc=%d\n", capacityJobProxyHeapHold, after.Alloc)
 		case "HOLD_COMMIT":
 			if heldCommit != 0 {
 				t.Fatal("already holding a native committed-memory ballast")
@@ -415,6 +464,42 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 				hardLimit, heldCommittedPrivate, jobEquivalentSlots, slots)
 		}
 	}
+	// Research-only Go heap ballast: intentionally distinct from the
+	// R39 native VirtualAlloc ballast; never combine both on one child.
+	holdGoHeap := os.Getenv("PXGO_CAPACITY_JOB_PROXY_GO_HEAP_HOLD") == "1"
+	var heapAllocBefore, heapAllocHeld uint64
+	var heapPrivateHeld uint64
+	if holdGoHeap {
+		if holdCommit || plateauResources.PrivateBytes+uint64(80<<20) >= hardLimit {
+			t.Fatalf("unsafe Go heap test headroom or competing native ballast: native=%t plateau=%d hard=%d",
+				holdCommit, plateauResources.PrivateBytes, hardLimit)
+		}
+		if _, err := io.WriteString(stdin, "HEAP_HOLD\n"); err != nil {
+			t.Fatal(err)
+		}
+		marker, err := capacityReadJobPrefix(p.output, "JOB_PROXY_GO_HEAP_HOLD ")
+		var allocated uint64
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, parseErr := fmt.Sscanf(marker, "allocated_bytes=%d alloc_before=%d alloc_after=%d",
+			&allocated, &heapAllocBefore, &heapAllocHeld)
+		if parseErr != nil || n != 3 ||
+			marker != fmt.Sprintf("allocated_bytes=%d alloc_before=%d alloc_after=%d", allocated, heapAllocBefore, heapAllocHeld) ||
+			allocated != uint64(capacityJobProxyHeapHold) ||
+			heapAllocHeld < heapAllocBefore+uint64(28<<20) {
+			t.Fatalf("child Go heap hold marker invalid %q parse=%v", marker, parseErr)
+		}
+		measured, err := readCapacityIsolatedResources(cmd.Process.Pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		heapPrivateHeld = measured.PrivateBytes
+		if heapPrivateHeld < plateauResources.PrivateBytes+uint64(16<<20) || heapPrivateHeld >= hardLimit {
+			t.Fatalf("Go heap private commit increase not independently observed: baseline=%d held=%d hard=%d",
+				plateauResources.PrivateBytes, heapPrivateHeld, hardLimit)
+		}
+	}
 	if _, err := io.WriteString(stdin, "PROBE\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -468,6 +553,48 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		if err := verifyCapacityHeldTunnel(c, i); err != nil {
 			t.Fatalf("held tunnel[%d] corrupted after live quota denial: %v", i, err)
 		}
+	}
+	if holdGoHeap {
+		// Assert the Go allocator retained the allocation THROUGH the
+		// full 600/600 HTTP workload, not merely between control commands.
+		if _, err := io.WriteString(stdin, "HEAP_STATUS\n"); err != nil {
+			t.Fatal(err)
+		}
+		marker, err := capacityReadJobPrefix(p.output, "JOB_PROXY_GO_HEAP_STATUS ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var allocated, allocDuring uint64
+		n, parseErr := fmt.Sscanf(marker, "allocated_bytes=%d alloc_current=%d", &allocated, &allocDuring)
+		if parseErr != nil || n != 2 ||
+			marker != fmt.Sprintf("allocated_bytes=%d alloc_current=%d", allocated, allocDuring) ||
+			allocated != uint64(capacityJobProxyHeapHold) ||
+			allocDuring < heapAllocBefore+uint64(28<<20) {
+			t.Fatalf("Go heap no longer live during real short HTTP: %q parse=%v", marker, parseErr)
+		}
+		activePrivate, err := readCapacityIsolatedResources(cmd.Process.Pid)
+		if err != nil || activePrivate.PrivateBytes < plateauResources.PrivateBytes+uint64(16<<20) ||
+			activePrivate.PrivateBytes >= hardLimit {
+			t.Fatalf("Go heap native commit during short HTTP invalid: private=%d baseline=%d hard=%d err=%v",
+				activePrivate.PrivateBytes, plateauResources.PrivateBytes, hardLimit, err)
+		}
+		if _, err := io.WriteString(stdin, "HEAP_FREE\n"); err != nil {
+			t.Fatal(err)
+		}
+		freeMarker, err := capacityReadJobPrefix(p.output, "JOB_PROXY_GO_HEAP_FREE ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var freed, allocAfterGC uint64
+		n, parseErr = fmt.Sscanf(freeMarker, "released_bytes=%d alloc_after_gc=%d", &freed, &allocAfterGC)
+		if parseErr != nil || n != 2 ||
+			freeMarker != fmt.Sprintf("released_bytes=%d alloc_after_gc=%d", freed, allocAfterGC) ||
+			freed != uint64(capacityJobProxyHeapHold) ||
+			allocAfterGC+uint64(24<<20) > allocDuring {
+			t.Fatalf("Go heap GC release not observed: %q during=%d parse=%v", freeMarker, allocDuring, parseErr)
+		}
+		t.Logf("JOB_PROXY_GO_HEAP_RESULT held_bytes=%d held_connect=2560 completed_short=600 heap_alloc_before=%d heap_alloc_after_hold=%d heap_alloc_during=%d heap_alloc_after_gc=%d process_private_held=%d hard_commit=%d released_gc=true",
+			capacityJobProxyHeapHold, heapAllocBefore, heapAllocHeld, allocDuring, allocAfterGC, heapPrivateHeld, hardLimit)
 	}
 	if holdCommit {
 		// Measure AFTER all 600 short HTTP requests with the child ballast

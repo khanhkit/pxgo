@@ -1,0 +1,18 @@
+# PxGo R42 — Real Go-managed heap retained during 2,560 CONNECT and 600 HTTP under child-only Windows Job Object
+
+Date 2026-10-28 ICT. Parent R40 exact SHA ac5c927a29e8bb31abfc62065dafac761f20b5e0, PR #102 base fb2aa923a753309dae515fc8be38112f45fbddc8, both DRAFT. Test-only Go source, dedicated native CI and research doc. No production runtime/default, pagefile, socket configuration, merge or release.
+
+## Why
+R40 native Windows exact-SHA workflow 40617068840 attempt1 PASS 126/126 jobs (124 success, 2 conditional skipped). Native job 122581941836 saw child hard process committed-memory cap 453,840,896 bytes, PrivateBytes 383,172,608, 67 equivalent 1MiB-per-slot headroom versus 4,096 free slots from original GlobalMemoryStatusEx Windows host-global AUTO sensor. This is discrepancy between estimates, NOT 67 true physically safe additional sockets.
+R39 had proven a sustained native Win32 VirtualAlloc ballast, NOT Go runtime-managed heap. R41 architecture research highlights GOMEMLIMIT is a soft Go-managed-memory limit, not a guarantee against native/Job hard process commit.
+
+## R42 falsifiable child-only Go heap probe
+With opt-in PXGO_CAPACITY_JOB_PROXY_GO_HEAP_HOLD=1, after actual real PxGo child has established 2,560 held CONNECT tunnels and parent verified own Job Object hard cap baseline+384MiB, parent requires conservative >=80MiB committed headroom. Native R39 64MiB ballast is explicitly disallowed concurrently, preventing additive uncontrolled pressure.
+Child GO_HEAP_HOLD command runs runtime.GC, measures runtime.MemStats.Alloc baseline, allocates 8×4MiB Go []byte chunks (32MiB total), touches pages and stores strongly reachable slices across later test commands, runs runtime.GC and proves Alloc increase >=28MiB. Parent samples actual child PID PrivateBytes and requires >=16MiB rise and below enforced hard committed cap.
+While 32MiB heap is still held, child rejects deliberate 256MiB native Win32 commit with recognized quota errno and accepts 4MiB recovery. It then serves 600/600 short HTTP while all 2,560 long CONNECT tunnels remain held, verifies every long payload echo and no class/physical corruption. Child HEAP_STATUS after runtime.GC requires still >=28MiB runtime Alloc increase, plus native PID PrivateBytes >=16MiB over baseline.
+Child HEAP_FREE nils retained Go references and runs runtime.GC; parent proves runtime Alloc dropped at least 24MiB. Parent deliberately does NOT demand immediate Windows PrivateBytes decommit: Go allocator may retain OS mappings after GC. Logs exact GO_HEAP_RESULT with held_bytes=33554432, held_connect=2560, completed_short=600, runtime before/during/after Alloc, native private memory and hard cap. Original positive marker 2560 CONNECT, 600 HTTP, 256MiB rejection + 4MiB success, physical_after=0 must also appear after clean drain.
+Dedicated fresh windows-latest exact-SHA workflow checks both positive markers, preserves raw artifact even on failure, rejects missing/skip/partial results. All previous CI jobs preserved.
+
+## Preflight and limits
+Local gofmt PASS, Windows amd64 CGO0 crosscompile + Windows go vet PASS in disposable exact R40 checkout, real PyYAML parsing 19 static jobs from 18 PASS, old gates retained.
+This is a BOUNDED explicit Go heap ballast, NOT organic Go allocator OOM recovery nor calibrated GOMEMLIMIT policy. Kernel nested job ancestor restrictions, WAN/soak, Linux cgroup PSI, AD/SSPI protected infrastructure, class fair admission enforcement, independent strict read-only KitAuditor are still blockers. PRs remain DRAFT and release BLOCKED.
