@@ -249,3 +249,85 @@ func TestConnectionClassRegistrationClosedAfterPhysicalAcquire(t *testing.T) {
 		t.Fatalf("physical/class permit leaked on shutdown race: %+v", got)
 	}
 }
+
+// AUTO class budgets are only telemetry. They must reflect the actual
+// physical admission window, including explicit/manual bounds, shrinking
+// hard OS envelopes and emergency pressure. They never admit extra sockets.
+func TestConnectionClassBudgetsFollowEffectiveLimit(t *testing.T) {
+	t.Setenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES", "1")
+	cfg := config.Default()
+	cfg.MaxConnections = 16
+	g := newCapacityGovernor(modeAuto, cfg)
+	if g == nil || g.classes == nil {
+		t.Fatal("AUTO classes tracker not created")
+	}
+	defer g.close()
+	defer g.classes.close()
+	assertBudget := func(wantEffective, wantShort, wantLong int) {
+		t.Helper()
+		got := g.snapshot()
+		cls := g.classes.snapshot()
+		if got.EffectiveLimit != wantEffective || cls.ShortBudget != wantShort || cls.LongBudget != wantLong || cls.ShortBudget+cls.LongBudget != wantEffective {
+			t.Fatalf("effective and advisory class budgets diverged: governor=%+v classes=%+v; expected=%d/%d/%d", got, cls, wantEffective, wantShort, wantLong)
+		}
+	}
+	assertBudget(16, 4, 12) // manual cap, not 256 initial soft target
+	g.mu.Lock()
+	g.hard = 7 // native OS or Job pressure shrinks usable physical slots
+	g.recomputeLocked()
+	g.mu.Unlock()
+	assertBudget(7, 1, 6)
+	g.mu.Lock()
+	g.hard = 256
+	g.soft = 40 // growth must still be constrained by manual 16
+	g.recomputeLocked()
+	g.mu.Unlock()
+	assertBudget(16, 4, 12)
+	g.mu.Lock()
+	g.state = capacityStatePressure
+	g.reason = capacityEmergencyFD
+	g.probeAllowed = false
+	g.recomputeLocked()
+	g.mu.Unlock()
+	assertBudget(0, 0, 0)
+	g.mu.Lock()
+	g.state = capacityStateNormal
+	g.reason = "none"
+	g.recomputeLocked()
+	g.mu.Unlock()
+	assertBudget(16, 4, 12)
+}
+
+func TestConnectionClassBudgetsDoNotEvictExistingLongOnShrink(t *testing.T) {
+	t.Setenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES", "1")
+	cfg := config.Default()
+	cfg.MaxConnections = 16
+	g := newCapacityGovernor(modeAuto, cfg)
+	defer g.close()
+	defer g.classes.close()
+	now := time.Unix(0, 0)
+	leases := make([]*connectionClassLease, 0, 16)
+	for i := 0; i < 16; i++ {
+		l := g.classes.open(now)
+		if l == nil {
+			t.Fatal("nil class lease")
+		}
+		l.classifyRequest(&http.Request{Method: http.MethodConnect, Header: make(http.Header)}, now)
+		leases = append(leases, l)
+	}
+	g.mu.Lock()
+	g.active = 16
+	g.hard = 8
+	g.recomputeLocked()
+	g.mu.Unlock()
+	cls := g.classes.snapshot()
+	if cls.Total != 16 || cls.Long != 16 || cls.LongBudget != 6 || cls.LongDebt != 10 || cls.ShortBudget != 2 {
+		t.Fatalf("shrink must never eject existing established longs; got %+v", cls)
+	}
+	for _, lease := range leases {
+		lease.finish()
+	}
+	if got := g.classes.snapshot(); got.Total != 0 || got.LongDebt != 0 {
+		t.Fatalf("leases did not drain after cap shrink: %+v", got)
+	}
+}

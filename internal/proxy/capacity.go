@@ -105,7 +105,6 @@ func newCapacityGovernor(mode capacityMode, cfg config.Config) *capacityGovernor
 	g := &capacityGovernor{changed: make(chan struct{}), mode: mode, manual: cfg.MaxConnections, soft: capacityColdStartWindow, hard: capacityColdStartWindow, state: capacityStateNormal, sensor: "cold-start", lastTransition: time.Now()}
 	if mode == modeAuto && experimentalConnectionClassesEnabled() {
 		g.classes = newConnectionClassManager()
-		g.classes.sampleBudgets(g.soft)
 	}
 	g.recomputeLocked()
 	return g
@@ -135,6 +134,12 @@ func (g *capacityGovernor) recomputeLocked() {
 	}
 	if g.effective != n {
 		g.effective = n
+		// Classes are advisory accounting only. Use the actual global
+		// physical admission limit (including a manual/OS shrink), not
+		// the stale soft target from server startup.
+		if g.classes != nil {
+			g.classes.sampleBudgets(n)
+		}
 		g.notifyLocked()
 	}
 }
