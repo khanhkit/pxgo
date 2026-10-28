@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -77,6 +78,77 @@ func TestCapacityWindowsJobProxyChild(t *testing.T) {
 			}
 			fmt.Printf("JOB_PROXY_OWN_JOBINFO process_commit_limit=%d process_mem_flag=true\n",
 				mine.ProcessMemoryLimit)
+		case "JOBWIDEINFO":
+			var mine windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+			var n uint32
+			err := windows.QueryInformationJobObject(0, windows.JobObjectExtendedLimitInformation,
+				uintptr(unsafe.Pointer(&mine)), uint32(unsafe.Sizeof(mine)), &n)
+			flags := mine.BasicLimitInformation.LimitFlags
+			if err != nil || n != uint32(unsafe.Sizeof(mine)) ||
+				flags&windows.JOB_OBJECT_LIMIT_JOB_MEMORY == 0 ||
+				flags&windows.JOB_OBJECT_LIMIT_PROCESS_MEMORY == 0 ||
+				mine.JobMemoryLimit == 0 || mine.ProcessMemoryLimit <= mine.JobMemoryLimit {
+				t.Fatalf("real PxGo child cannot see stricter job-wide cap: %v size=%d flags=%x", err, n, flags)
+			}
+			fmt.Printf("JOB_PROXY_OWN_JOBWIDE job_cap=%d process_cap=%d flags_verified=true\n",
+				mine.JobMemoryLimit, mine.ProcessMemoryLimit)
+		case "JOBWIDE_PROBE":
+			if !in.Scan() {
+				t.Fatal("missing dynamically calibrated job-wide test allocation bytes")
+			}
+			requested, err := strconv.ParseUint(strings.TrimSpace(in.Text()), 10, 64)
+			if err != nil || requested <= uint64(capacityJobProbeSmallCommit) || requested > uint64(256<<20) {
+				t.Fatalf("invalid job-wide probe bytes=%q err=%v", in.Text(), err)
+			}
+			addr, err := windows.VirtualAlloc(0, uintptr(requested),
+				windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_READWRITE)
+			if addr != 0 {
+				_ = windows.VirtualFree(addr, 0, windows.MEM_RELEASE)
+				t.Fatalf("allocation unexpectedly succeeded above stricter job-wide cap: %d", requested)
+			}
+			if err == nil || !capacityJobMemoryError(err) {
+				t.Fatalf("job-wide commit denied for unrelated reason: bytes=%d err=%v", requested, err)
+			}
+			// A small commit still succeeds inside the same living child process.
+			again, err := windows.VirtualAlloc(0, capacityJobProbeSmallCommit,
+				windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_READWRITE)
+			if err != nil || again == 0 {
+				t.Fatalf("job-wide probe recovery failed: %v", err)
+			}
+			if err := windows.VirtualFree(again, 0, windows.MEM_RELEASE); err != nil {
+				t.Fatal(err)
+			}
+			fmt.Printf("JOB_PROXY_JOBWIDE_PROBE denied_bytes=%d recovered_bytes=%d\n",
+				requested, capacityJobProbeSmallCommit)
+		case "JOBWIDE_CONTROL":
+			// Independent causal control: the same live PxGo child attempts
+			// the SAME MEM_COMMIT after the parent raises ONLY JobMemoryLimit
+			// to the unchanged process cap. Fail if any other resource denies.
+			if !in.Scan() {
+				t.Fatal("missing job-wide positive-control allocation bytes")
+			}
+			requested, err := strconv.ParseUint(strings.TrimSpace(in.Text()), 10, 64)
+			if err != nil || requested <= uint64(capacityJobProbeSmallCommit) || requested > uint64(256<<20) {
+				t.Fatalf("invalid native control bytes=%q err=%v", in.Text(), err)
+			}
+			var mine windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+			var n uint32
+			err = windows.QueryInformationJobObject(0, windows.JobObjectExtendedLimitInformation,
+				uintptr(unsafe.Pointer(&mine)), uint32(unsafe.Sizeof(mine)), &n)
+			if err != nil || n != uint32(unsafe.Sizeof(mine)) ||
+				mine.BasicLimitInformation.LimitFlags&windows.JOB_OBJECT_LIMIT_JOB_MEMORY == 0 ||
+				mine.JobMemoryLimit != mine.ProcessMemoryLimit {
+				t.Fatalf("positive-control native Job Object wasn't raised: %v job=%d process=%d", err, mine.JobMemoryLimit, mine.ProcessMemoryLimit)
+			}
+			addr, err := windows.VirtualAlloc(0, uintptr(requested),
+				windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_READWRITE)
+			if err != nil || addr == 0 {
+				t.Fatalf("same allocation denied AFTER relaxing ONLY job-wide cap: %v bytes=%d", err, requested)
+			}
+			if err := windows.VirtualFree(addr, 0, windows.MEM_RELEASE); err != nil {
+				t.Fatalf("native job-wide positive-control free failed: %v", err)
+			}
+			fmt.Printf("JOB_PROXY_JOBWIDE_CONTROL allowed_bytes=%d cap_equal=true\n", requested)
 		case "SENSOR":
 			// Existing opt-in AUTO Windows estimate uses host-wide global
 			// memory, NOT this process's stricter Job Object quota.
@@ -282,7 +354,14 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	jobWide := os.Getenv("PXGO_CAPACITY_JOB_PROXY_JOBWIDE") == "1"
 	hardLimit := baseline.PrivateBytes + capacityJobProxyBudget
+	var jobWideLimit uint64
+	if jobWide {
+		// One 64MiB gap makes job-wide memory stricter than process memory.
+		hardLimit = baseline.PrivateBytes + uint64(448<<20)
+		jobWideLimit = baseline.PrivateBytes + capacityJobProxyBudget
+	}
 	if hardLimit <= baseline.PrivateBytes {
 		t.Fatal("process limit overflow")
 	}
@@ -293,6 +372,10 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 	}
 	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{ProcessMemoryLimit: uintptr(hardLimit)}
 	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_PROCESS_MEMORY | windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if jobWide {
+		limits.JobMemoryLimit = uintptr(jobWideLimit)
+		limits.BasicLimitInformation.LimitFlags |= windows.JOB_OBJECT_LIMIT_JOB_MEMORY
+	}
 	_, err = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
 		uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits)))
 	if err != nil {
@@ -314,7 +397,9 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		uintptr(unsafe.Pointer(&readback)), uint32(unsafe.Sizeof(readback)), &returned)
 	if err != nil || returned != uint32(unsafe.Sizeof(readback)) ||
 		uint64(readback.ProcessMemoryLimit) != hardLimit ||
-		readback.BasicLimitInformation.LimitFlags&windows.JOB_OBJECT_LIMIT_PROCESS_MEMORY == 0 {
+		readback.BasicLimitInformation.LimitFlags&windows.JOB_OBJECT_LIMIT_PROCESS_MEMORY == 0 ||
+		(jobWide && (uint64(readback.JobMemoryLimit) != jobWideLimit ||
+			readback.BasicLimitInformation.LimitFlags&windows.JOB_OBJECT_LIMIT_JOB_MEMORY == 0)) {
 		t.Fatalf("Job Object hard commit readback mismatch: err=%v size=%d cap=%d flags=%x",
 			err, returned, readback.ProcessMemoryLimit, readback.BasicLimitInformation.LimitFlags)
 	}
@@ -328,6 +413,17 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		t.Fatalf("child-observed process Job Object cap mismatches parent: marker=%q expected=%d err=%v", childLimit, hardLimit, err)
 	}
 	t.Logf("JOB_PROXY_OWN_JOBINFO verified=true child_pid=%d process_commit_limit=%d", cmd.Process.Pid, hardLimit)
+	if jobWide {
+		if _, err := io.WriteString(stdin, "JOBWIDEINFO\n"); err != nil {
+			t.Fatal(err)
+		}
+		self, err := capacityReadJobPrefix(p.output, "JOB_PROXY_OWN_JOBWIDE ")
+		if err != nil || self != fmt.Sprintf("job_cap=%d process_cap=%d flags_verified=true", jobWideLimit, hardLimit) {
+			t.Fatalf("real child did not observe stricter job-wide cap: self=%q err=%v", self, err)
+		}
+		t.Logf("JOB_PROXY_OWN_JOBWIDE verified=true pid=%d job_cap=%d process_cap=%d",
+			cmd.Process.Pid, jobWideLimit, hardLimit)
+	}
 	monitor := startCapacityIsolatedSampler(cmd.Process.Pid, baseline)
 	defer monitor.stopSampling()
 
@@ -415,6 +511,61 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 			plateauResources.PrivateBytes, hardLimit)
 	}
 	monitor.setPhase(isolatedMixed)
+	var jobWideProbeBytes uint64
+	if jobWide {
+		// Calibrate while 2560 sockets are ACTUALLY held. The allocation
+		// exceeds job-wide headroom by 32MiB yet is at least 32MiB BELOW
+		// the process-only cap; therefore a denial isolates job-wide quota.
+		if plateauResources.PrivateBytes+uint64(64<<20) >= jobWideLimit {
+			t.Fatalf("insufficient 64MiB safe headroom in real child before job-wide probe: %d / %d",
+				plateauResources.PrivateBytes, jobWideLimit)
+		}
+		jobWideProbeBytes = jobWideLimit - plateauResources.PrivateBytes + uint64(32<<20)
+		if plateauResources.PrivateBytes+jobWideProbeBytes+uint64(32<<20) > hardLimit ||
+			jobWideProbeBytes > uint64(256<<20) {
+			t.Fatalf("job-wide calibrated denial not isolated from process cap: live=%d job=%d process=%d bytes=%d",
+				plateauResources.PrivateBytes, jobWideLimit, hardLimit, jobWideProbeBytes)
+		}
+		if _, err := fmt.Fprintf(stdin, "JOBWIDE_PROBE\n%d\n", jobWideProbeBytes); err != nil {
+			t.Fatal(err)
+		}
+		proof, err := capacityReadJobPrefix(p.output, "JOB_PROXY_JOBWIDE_PROBE ")
+		if err != nil || proof != fmt.Sprintf("denied_bytes=%d recovered_bytes=%d", jobWideProbeBytes, capacityJobProbeSmallCommit) {
+			t.Fatalf("real child job-wide allocation denial and recovery unproven: %q err=%v", proof, err)
+		}
+		// Causal control: change ONLY the owned child Job Object total limit
+		// to match its UNCHANGED process cap. Same child, same tunnels,
+		// same probe size must now succeed; restore strict job cap after Free.
+		limits.JobMemoryLimit = uintptr(hardLimit)
+		_, err = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+			uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits)))
+		if err != nil {
+			t.Fatalf("could not relax ONLY JobMemoryLimit for positive control: %v", err)
+		}
+		if _, err := fmt.Fprintf(stdin, "JOBWIDE_CONTROL\n%d\n", jobWideProbeBytes); err != nil {
+			t.Fatal(err)
+		}
+		allowed, err := capacityReadJobPrefix(p.output, "JOB_PROXY_JOBWIDE_CONTROL ")
+		if err != nil || allowed != fmt.Sprintf("allowed_bytes=%d cap_equal=true", jobWideProbeBytes) {
+			t.Fatalf("same native allocation did not succeed with job-wide cap relaxed: marker=%q err=%v", allowed, err)
+		}
+		limits.JobMemoryLimit = uintptr(jobWideLimit)
+		_, err = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+			uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits)))
+		if err != nil {
+			t.Fatalf("failed restoring strict child-only JobMemoryLimit: %v", err)
+		}
+		var restored windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+		var size uint32
+		err = windows.QueryInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+			uintptr(unsafe.Pointer(&restored)), uint32(unsafe.Sizeof(restored)), &size)
+		if err != nil || size != uint32(unsafe.Sizeof(restored)) ||
+			uint64(restored.JobMemoryLimit) != jobWideLimit ||
+			uint64(restored.ProcessMemoryLimit) != hardLimit ||
+			restored.BasicLimitInformation.LimitFlags&windows.JOB_OBJECT_LIMIT_JOB_MEMORY == 0 {
+			t.Fatalf("strict job-wide cap not restored: err=%v job=%d process=%d", err, restored.JobMemoryLimit, restored.ProcessMemoryLimit)
+		}
+	}
 	// The optional native ballast is a LIVE committed virtual allocation
 	// IN THE REAL PxGo CHILD while all 2560 authenticated tunnels are held.
 	// Keep the CPU/Go generator and upstream listeners outside the Job.
@@ -618,6 +769,11 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		}
 		t.Logf("JOB_PROXY_SUSTAINED_COMMIT_RESULT held_bytes=%d completed_short=%d enforced=true private_with_ballast=%d private_after_release=%d hard_commit=%d",
 			capacityJobProxyHold, capacityJobProxyShort, beforeFree.PrivateBytes, afterFree.PrivateBytes, hardLimit)
+	}
+	if jobWide {
+		t.Logf("JOB_PROXY_JOBWIDE_RESULT enforceable=true pid=%d held_connect=%d completed_short=%d job_total_limit=%d process_limit=%d job_only_denied=%d recovered_bytes=%d same_allocation_control_succeeded=true",
+			cmd.Process.Pid, capacityJobProxyHeld, capacityJobProxyShort,
+			jobWideLimit, hardLimit, jobWideProbeBytes, capacityJobProbeSmallCommit)
 	}
 	monitor.setPhase(isolatedDrain)
 	for i, c := range held {

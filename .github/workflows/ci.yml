@@ -550,6 +550,57 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  windows-real-pxgo-jobwide-2560:
+    name: Windows real PxGo 2560 CONNECT under stricter job-wide committed-memory cap
+    # Test-only: child Job Object total committed limit is stricter than its process cap.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test real PxGo under child-only job-wide commit limit and 2560 held CONNECT
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
+          PXGO_RESEARCH_CAPACITY_POLICY: r11
+          PXGO_CAPACITY_JOB_PROXY_2560: '1'
+          PXGO_CAPACITY_JOB_PROXY_JOBWIDE: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Exact R46 immutable SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsJobProxy2560Pressure$' -count=1 -v -timeout=130s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-real-pxgo-jobwide-2560.log
+          if ($LASTEXITCODE -ne 0) { throw 'R46 real PxGo job-wide native test failed' }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_OWN_JOBWIDE verified=true pid=[1-9][0-9]* job_cap=[1-9][0-9]* process_cap=[1-9][0-9]*')) {
+            throw 'Missing independent parent and live child job-wide cap readback'
+          }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_JOBWIDE_PROBE denied_bytes=[1-9][0-9]* recovered_bytes=4194304')) { throw 'Missing strict job-wide allocation denial plus recovery marker' }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_JOBWIDE_CONTROL allowed_bytes=[1-9][0-9]* cap_equal=true')) {
+            throw 'Missing SAME-allocation positive control after relaxing only job-wide cap'
+          }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_JOBWIDE_RESULT enforceable=true pid=[1-9][0-9]* held_connect=2560 completed_short=600 job_total_limit=[1-9][0-9]* process_limit=[1-9][0-9]* job_only_denied=[1-9][0-9]* recovered_bytes=4194304 same_allocation_control_succeeded=true')) {
+            throw 'Missing calibrated job-wide-only native allocation failure evidence'
+          }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) {
+            throw 'Missing complete real 2560+600 data-plane and drain gate'
+          }
+      - name: Preserve exact-SHA child-only native committed-memory log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-real-pxgo-jobwide-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-job-wide-memory-research:
     name: Windows child Job Object total memory cap versus process cap
     # JobMemoryLimit and ProcessMemoryLimit are independent constraints.
