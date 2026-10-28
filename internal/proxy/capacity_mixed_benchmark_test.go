@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -58,6 +60,38 @@ func TestCapacityMixedTrafficBench(t *testing.T) {
 		p.promote = max(8, p.promote*(80+(seed*19+5)%41)/100)
 		p.keepAlive = max(16, p.keepAlive*(80+(seed*7+23)%41)/100)
 		t.Run(p.name, func(t *testing.T) { runCapacityMixedProfile(t, p.name, p.tunnels, p.keepAlive, p.promote, p.churn) })
+	}
+}
+
+// Native syscall errno is evidence only; do not downgrade or waive an I/O failure.
+func capacityNativeSocketErrno(err error) int {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return int(errno)
+	}
+	return -1
+}
+
+func TestCapacityNativeSocketErrnoExtraction(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "nil", want: -1},
+		{name: "wrapped WSAENOBUFS", err: fmt.Errorf("wrapped dial: %w", syscall.Errno(10055)), want: 10055},
+		{name: "net.OpError WSAEADDRNOTAVAIL", err: &net.OpError{
+			Op: "dial", Net: "tcp",
+			Err: &os.SyscallError{Syscall: "bind", Err: syscall.Errno(10049)},
+		}, want: 10049},
+		{name: "plain application failure", err: errors.New("application failure"), want: -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := capacityNativeSocketErrno(tc.err); got != tc.want {
+				t.Fatalf("native errno got=%d expected=%d for error=%v", got, tc.want, tc.err)
+			}
+		})
 	}
 }
 
@@ -253,7 +287,7 @@ func runCapacityMixedProfile(t *testing.T, name string, tunnels, keepAlive, prom
 	close(latencies)
 	close(offeredLatencies)
 	for e := range problems {
-		t.Errorf("short request failed: %v", e)
+		t.Errorf("short request failed: native_errno=%d err=%v", capacityNativeSocketErrno(e), e)
 	}
 	elapsedShort := time.Since(workBegin)
 	values := make([]time.Duration, 0, churn)

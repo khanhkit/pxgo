@@ -117,7 +117,8 @@ func TestCapacityMixedCompetingAdmission(t *testing.T) {
 		}
 	}
 	if firstError != nil || len(held) != longN || shorts != shortN {
-		t.Fatalf("competing admission failed: long=%d/%d short=%d/%d first=%v", len(held), longN, shorts, shortN, firstError)
+		t.Fatalf("competing admission failed: long=%d/%d short=%d/%d native_errno=%d first=%v",
+			len(held), longN, shorts, shortN, capacityNativeSocketErrno(firstError), firstError)
 	}
 	for i, c := range held {
 		if e := verifyCapacityHeldTunnel(c, i); e != nil {
