@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/diagnostic"
 )
 
 // A real 10-minute steady-state 2560 CONNECT+short-HTTP data plane test on a
@@ -153,12 +154,38 @@ func TestCapacityNativeWindowsTenMinuteSoak(t *testing.T) {
 			}
 			totalShort++
 		}
-		s := px.capacityDiagnosticSnapshot()
-		if s.ActiveDownstream != capacitySoakLongCount || s.ClassPools == nil ||
-			s.ClassPools.Total != capacitySoakLongCount ||
-			s.ClassPools.Long != capacitySoakLongCount ||
-			s.ClassPools.Short != 0 || s.ClassPools.Provisional != 0 {
-			t.Fatalf("physical/class permit loss at cycle=%d: %+v", cycle, s)
+		// The HTTP client has completed response reading and Close(), but the
+		// server goroutine may not have released that physical permit YET.
+		// Do not mistake one transient active short for a leaked long slot:
+		// require the exact physical/class plateau to settle within 3s.
+		settleDeadline := time.Now().Add(3 * time.Second)
+		settleStart := time.Now()
+		var settled diagnostic.CapacitySnapshot
+		var highestActive int
+		for {
+			settled = px.capacityDiagnosticSnapshot()
+			if settled.ActiveDownstream > highestActive {
+				highestActive = settled.ActiveDownstream
+			}
+			if settled.ClassPools == nil || settled.ClassPools.Long != capacitySoakLongCount ||
+				settled.ActiveDownstream < capacitySoakLongCount ||
+				settled.ActiveDownstream > capacitySoakLongCount+capacitySoakShortCycle {
+				t.Fatalf("physical/class tunnel corruption at cycle=%d: %+v", cycle, settled)
+			}
+			if settled.ActiveDownstream == capacitySoakLongCount &&
+				settled.ClassPools.Total == capacitySoakLongCount &&
+				settled.ClassPools.Short == 0 && settled.ClassPools.Provisional == 0 {
+				break
+			}
+			if !time.Now().Before(settleDeadline) {
+				t.Fatalf("physical/class short permit failed to settle in 3s cycle=%d: %+v",
+					cycle, settled)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if highestActive > capacitySoakLongCount {
+			t.Logf("SOAK_SETTLE cycle=%d max_transient_active=%d settled_after=%s physical=2560",
+				cycle, highestActive, time.Since(settleStart))
 		}
 		resources, err := readCapacityIsolatedResources(os.Getpid())
 		if err != nil {
