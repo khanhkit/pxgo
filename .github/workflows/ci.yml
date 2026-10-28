@@ -508,6 +508,43 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  windows-nested-job-ancestor-commit-research:
+    name: Windows nested Job Object stricter ancestor commit limit (child-only)
+    # Research: immediate NULL-job query may hide stricter ancestor effective cap.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify child immediate-query does not hide ancestor enforcement
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_NESTED_JOB_ANCESTOR_PROBE: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R35 exact immutable SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsNestedAncestorCommitLimit$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-nested-job-ancestor-commit.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native nested job ancestor commit/recovery gate failed' }
+          if (-not (Select-String -Path benchmarks/windows-nested-job-ancestor-commit.log -Pattern 'NESTED_JOB_RESULT enforced_root_stricter=true pid=[1-9][0-9]* baseline_private=[1-9][0-9]* ancestor_limit=[1-9][0-9]* immediate_query_limit=[1-9][0-9]* denied_commit=134217728 recovered_commit=4194304')) {
+            throw 'Missing real child nested Job Object ancestor limit evidence'
+          }
+      - name: Preserve raw exact-SHA nested native job evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-nested-job-ancestor-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-mixed-socket-isolation-research:
     name: Windows isolated socket gate (${{ matrix.scenario }}, trial=${{ matrix.trial }})
     if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
