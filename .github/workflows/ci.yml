@@ -508,6 +508,43 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  windows-job-wide-memory-research:
+    name: Windows child Job Object total memory cap versus process cap
+    # JobMemoryLimit and ProcessMemoryLimit are independent constraints.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Prove process cap alone cannot reveal child job-wide committed memory limit
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_JOB_WIDE_MEMORY_PROBE: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R43 immutable SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsJobWideMemoryCap$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-job-wide-memory.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native JobMemoryLimit enforced failure / recovery test did not pass' }
+          if (-not (Select-String -Path benchmarks/windows-job-wide-memory.log -Pattern 'JOB_WIDE_RESULT enforceable=true pid=[1-9][0-9]* baseline_private=[1-9][0-9]* job_total_limit=[1-9][0-9]* process_limit=[1-9][0-9]* denied_commit=134217728 recovered_commit=4194304 after_private=[1-9][0-9]*')) {
+            throw 'Missing strict native job-wide-versus-process limit positive evidence'
+          }
+      - name: Preserve native Windows job-wide limit evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-child-jobwide-memory-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-real-pxgo-go-heap-hold:
     name: Windows real PxGo Go heap held during 2560 CONNECT and 600 HTTP
     # Go runtime-managed heap, child-only Job Object; NOT native VirtualAlloc ballast.
