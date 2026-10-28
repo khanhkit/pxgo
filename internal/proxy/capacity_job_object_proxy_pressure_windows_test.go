@@ -73,6 +73,16 @@ func TestCapacityWindowsJobProxyChild(t *testing.T) {
 			}
 			fmt.Printf("JOB_PROXY_OWN_JOBINFO process_commit_limit=%d process_mem_flag=true\n",
 				mine.ProcessMemoryLimit)
+		case "SENSOR":
+			// Existing opt-in AUTO Windows estimate uses host-wide global
+			// memory, NOT this process's stricter Job Object quota.
+			sample := readCapacitySample()
+			if !sample.available || sample.resource != capacityWindowsSensor ||
+				sample.freeSlots <= 0 {
+				t.Fatalf("cannot obtain native Windows AUTO sensor: %+v", sample)
+			}
+			fmt.Printf("JOB_PROXY_GLOBAL_SENSOR resource=windows-memory-handles available=true reported_free_slots=%d\n",
+				sample.freeSlots)
 		case "HOLD_COMMIT":
 			if heldCommit != 0 {
 				t.Fatal("already holding a native committed-memory ballast")
@@ -381,6 +391,28 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		if heldCommittedPrivate < plateauResources.PrivateBytes+uint64(48<<20) || heldCommittedPrivate >= hardLimit {
 			t.Fatalf("native child ballast did not account 48MiB minimum: plateau=%d with_ballast=%d hard=%d",
 				plateauResources.PrivateBytes, heldCommittedPrivate, hardLimit)
+		}
+		if os.Getenv("PXGO_CAPACITY_JOB_PROXY_SENSOR_GAP") == "1" {
+			// Compare the EXISTING process-handle + host-global-memory
+			// AUTO estimate to the extra slot count implied by the same
+			// experimental 1MiB-per-socket heuristic inside a tighter child
+			// Job Object. The current sensor does not read this Job cap.
+			if _, err := io.WriteString(stdin, "SENSOR\n"); err != nil {
+				t.Fatal(err)
+			}
+			global, err := capacityReadJobPrefix(p.output, "JOB_PROXY_GLOBAL_SENSOR ")
+			var slots int
+			parsed, scanErr := fmt.Sscanf(global,
+				"resource=windows-memory-handles available=true reported_free_slots=%d", &slots)
+			if err != nil || scanErr != nil || parsed != 1 || slots < 1 {
+				t.Fatalf("unverified host-global Windows sensor estimate: raw=%q err=%v parse=%v", global, err, scanErr)
+			}
+			jobEquivalentSlots := int((hardLimit - heldCommittedPrivate) / uint64(1<<20))
+			if jobEquivalentSlots >= slots || jobEquivalentSlots < 1 {
+				t.Fatalf("sensor mismatch expected on isolated 16GiB hosted Windows runner: host_slots=%d job_cap_slots=%d", slots, jobEquivalentSlots)
+			}
+			t.Logf("JOB_PROXY_SENSOR_GAP_RESULT child_job_commit_cap=%d child_private_bytes=%d job_equivalent_slots=%d global_sensor_reported_slots=%d global_exceeds_job=true",
+				hardLimit, heldCommittedPrivate, jobEquivalentSlots, slots)
 		}
 	}
 	if _, err := io.WriteString(stdin, "PROBE\n"); err != nil {
