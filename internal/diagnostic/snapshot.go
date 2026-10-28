@@ -28,15 +28,16 @@ type DNSSnapshot struct {
 }
 
 type CapacityClassSnapshot struct {
-	Provisional     int    `json:"provisional"`
-	Short           int    `json:"short"`
-	Long            int    `json:"long"`
-	ShortSoftBudget int    `json:"short_soft_budget"`
-	LongSoftBudget  int    `json:"long_soft_budget"`
-	Promoted        uint64 `json:"short_to_long_promotions"`
-	LongOverflow    uint64 `json:"long_soft_overflow_events"`
-	LongDebt        int    `json:"long_current_debt"`
-	Total           int    `json:"total_classified_and_provisional"`
+	Provisional      int    `json:"provisional"`
+	Short            int    `json:"short"`
+	Long             int    `json:"long"`
+	ShortSoftBudget  int    `json:"short_soft_budget"`
+	LongSoftBudget   int    `json:"long_soft_budget"`
+	Promoted         uint64 `json:"short_to_long_promotions"`
+	LongOverflow     uint64 `json:"long_soft_overflow_events"`
+	LongIntakeDenied uint64 `json:"long_intake_denied,omitempty"`
+	LongDebt         int    `json:"long_current_debt"`
+	Total            int    `json:"total_classified_and_provisional"`
 }
 
 type CapacitySnapshot struct {

@@ -123,6 +123,9 @@ func New(cfg config.Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if experimentalStrictLongIntakeEnabled() && (capacityMode != modeAuto || !experimentalConnectionClassesEnabled()) {
+		return nil, errors.New("strict long-intake experiment requires AUTO mode with connection classes enabled")
+	}
 	if err := validateServerBudgetsForMode(cfg, capacityMode); err != nil {
 		return nil, err
 	}
@@ -695,7 +698,15 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if s.capacity != nil && s.capacity.classes != nil {
-		connectionClassFromContext(req.Context()).classifyRequest(req, time.Now())
+		lease := connectionClassFromContext(req.Context())
+		if (s.capacity.classes.strictLongIntake && lease == nil) || !lease.classifyRequest(req, time.Now()) {
+			// No existing authenticated long session is evicted. The caller
+			// retains its one physical token until normal HTTP close.
+			rw.Header().Set("Connection", "close")
+			rw.Header().Set("Retry-After", "1")
+			http.Error(rw, "experimental long admission limit reached", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	if req.Method == http.MethodConnect {
 		s.handleConnect(rw, req)

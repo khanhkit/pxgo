@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -329,5 +330,346 @@ func TestConnectionClassBudgetsDoNotEvictExistingLongOnShrink(t *testing.T) {
 	}
 	if got := g.classes.snapshot(); got.Total != 0 || got.LongDebt != 0 {
 		t.Fatalf("leases did not drain after cap shrink: %+v", got)
+	}
+}
+
+func TestStrictLongIntakeClassGuardAndDebt(t *testing.T) {
+	m := newConnectionClassManager()
+	m.strictLongIntake = true
+	m.sampleBudgets(16) // 12 long, four available for short/provisional
+	now := time.Unix(1000, 0)
+	connect := &http.Request{Method: http.MethodConnect, Header: make(http.Header)}
+	shortReq := &http.Request{Method: http.MethodGet, Header: make(http.Header)}
+	var longs []*connectionClassLease
+	for i := 0; i < 12; i++ {
+		l := m.open(now)
+		if !l.classifyRequest(connect, now) {
+			t.Fatalf("long %d wrongly denied within budget", i)
+		}
+		longs = append(longs, l)
+	}
+	denied := m.open(now)
+	if denied.classifyRequest(connect, now) {
+		t.Fatal("13th newly authenticated CONNECT bypassed long cap")
+	}
+	if s := m.snapshot(); s.Long != 12 || s.Provisional != 1 || s.LongDenied != 1 || s.LongDebt != 0 {
+		t.Fatalf("denied long must retain provisional class until socket close: %+v", s)
+	}
+	short := m.open(now)
+	if !short.classifyRequest(shortReq, now) || m.snapshot().Short != 1 {
+		t.Fatalf("short request blocked despite reserved budget: %+v", m.snapshot())
+	}
+	longs[0].finish()
+	if !denied.classifyRequest(connect, now) {
+		t.Fatal("released long must allow one previously denied CONNECT")
+	}
+	if s := m.snapshot(); s.Long != 12 || s.Short != 1 || s.Provisional != 0 || s.LongDenied != 1 {
+		t.Fatalf("new long after release did not conserve class tokens: %+v", s)
+	}
+	// Active long never gets evicted; aged short promotes without a second
+	// global permit even if this creates long debt.
+	m.promoteAged(now.Add(31 * time.Second))
+	if s := m.snapshot(); s.Long != 13 || s.LongDebt != 1 || s.Short != 0 {
+		t.Fatalf("automatic promotion lost or overbooked class debt: %+v", s)
+	}
+	another := m.open(now)
+	if another.classifyRequest(connect, now) {
+		t.Fatal("new CONNECT accepted while promoted long debt exists")
+	}
+	another.finish()
+	denied.finish()
+	short.finish()
+	for _, l := range longs {
+		l.finish()
+	}
+	if s := m.snapshot(); s.Total != 0 || s.LongDebt != 0 || s.LongDenied != 2 {
+		t.Fatalf("class leases/debt leaked: %+v", s)
+	}
+}
+
+func TestStrictLongIntakeServerModeValidation(t *testing.T) {
+	t.Setenv("PXGO_EXPERIMENTAL_STRICT_LONG_INTAKE", "1")
+	cfg := config.Default()
+	for _, mode := range []string{"legacy", "shadow", "auto"} {
+		t.Setenv("PXGO_EXPERIMENTAL_CAPACITY_MODE", mode)
+		t.Setenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES", "0")
+		s, err := New(cfg)
+		if err == nil {
+			_ = s.Shutdown(context.Background())
+			t.Fatalf("%s silently accepted strict guard with class tracking OFF", mode)
+		}
+	}
+	t.Setenv("PXGO_EXPERIMENTAL_CAPACITY_MODE", "auto")
+	t.Setenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES", "1")
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatalf("properly opted-in strict long intake must initialize: %v", err)
+	}
+	if s.capacity == nil || s.capacity.classes == nil || !s.capacity.classes.strictLongIntake {
+		t.Fatal("strict long intake missing with all required opt-ins")
+	}
+	_ = s.Shutdown(context.Background())
+}
+
+func TestStrictLongIntakeRealCONNECTAndShortHTTP(t *testing.T) {
+	t.Setenv("PXGO_EXPERIMENTAL_CAPACITY_MODE", "auto")
+	t.Setenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES", "1")
+	t.Setenv("PXGO_EXPERIMENTAL_STRICT_LONG_INTAKE", "1")
+	cfg := config.Default()
+	cfg.MaxConnections = 16
+	cfg.ProxyReload = 0
+	cfg.Idle = 40
+	px := startTestProxy(t, cfg)
+	defer px.Shutdown(context.Background())
+	if got := px.capacity.classes.snapshot(); got.LongBudget != 12 || got.ShortBudget != 4 {
+		t.Fatalf("manual global physical cap 16 must reserve 4 short slots: %+v", got)
+	}
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			c, e := echo.Accept()
+			if e != nil {
+				return
+			}
+			go func() { defer c.Close(); _, _ = io.Copy(c, c) }()
+		}
+	}()
+	connect := func() (net.Conn, int) {
+		t.Helper()
+		c, err := net.DialTimeout("tcp", px.ListenAddr(), 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n",
+			echo.Addr().String(), echo.Addr().String()); err != nil {
+			_ = c.Close()
+			t.Fatal(err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(4 * time.Second))
+		response, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: http.MethodConnect})
+		if err != nil {
+			_ = c.Close()
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		return c, response.StatusCode
+	}
+	var held []net.Conn
+	defer func() {
+		for _, c := range held {
+			_ = c.Close()
+		}
+	}()
+	for i := 0; i < 12; i++ {
+		conn, status := connect()
+		held = append(held, conn)
+		if status != http.StatusOK {
+			t.Fatalf("long %d expected 200, got %d", i, status)
+		}
+	}
+	if got := px.capacity.classes.snapshot(); got.Long != 12 {
+		t.Fatalf("expected 12 held long leases: %+v", got)
+	}
+	rejectedConn, rejectedStatus := connect()
+	_ = rejectedConn.Close()
+	if rejectedStatus != http.StatusServiceUnavailable {
+		t.Fatalf("13th CONNECT must return 503 while long capacity filled, got %d", rejectedStatus)
+	}
+	if stats := px.capacity.snapshot().ClassPools; stats == nil || stats.LongIntakeDenied != 1 {
+		t.Fatalf("Doctor must expose one denied new long request: %+v", stats)
+	}
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "allowed-short")
+	}))
+	defer origin.Close()
+	client, err := net.DialTimeout("tcp", px.ListenAddr(), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintf(client, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", origin.URL, origin.Listener.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = client.SetReadDeadline(time.Now().Add(4 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(client), &http.Request{Method: http.MethodGet})
+	if err != nil {
+		_ = client.Close()
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	_ = client.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("short HTTP must still make progress while 12 long held: %s", resp.Status)
+	}
+	_ = held[0].Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if px.capacity.classes.snapshot().Long == 11 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := px.capacity.classes.snapshot(); got.Long != 11 {
+		t.Fatalf("long close did not reclaim one advisory class slot: %+v", got)
+	}
+	fresh, status := connect()
+	held = append(held, fresh)
+	if status != http.StatusOK {
+		t.Fatalf("released long slot must allow new CONNECT, got %d", status)
+	}
+}
+
+func TestStrictLongIntakeWebSocketSSEAndConcurrentLimit(t *testing.T) {
+	m := newConnectionClassManager()
+	m.strictLongIntake = true
+	m.sampleBudgets(8) // long cap=6
+	now := time.Unix(2000, 0)
+	connect := &http.Request{Method: http.MethodConnect, Header: make(http.Header)}
+	var longs []*connectionClassLease
+	for i := 0; i < 6; i++ {
+		l := m.open(now)
+		if !l.classifyRequest(connect, now) {
+			t.Fatalf("long lease %d unexpectedly denied", i)
+		}
+		longs = append(longs, l)
+	}
+	for _, req := range []*http.Request{
+		{Method: http.MethodGet, Header: http.Header{headerUpgrade: []string{"websocket"}}},
+		{Method: http.MethodGet, Header: http.Header{"Accept": []string{"text/event-stream"}}},
+	} {
+		l := m.open(now)
+		if l.classifyRequest(req, now) {
+			t.Fatalf("new WS/SSE long bypassed full long budget: %v", req.Header)
+		}
+		l.finish()
+	}
+	if got := m.snapshot(); got.LongDenied != 2 || got.Long != 6 {
+		t.Fatalf("WS/SSE rejection did not conserve class pool: %+v", got)
+	}
+	for _, l := range longs {
+		l.finish()
+	}
+	m = newConnectionClassManager()
+	m.strictLongIntake = true
+	m.sampleBudgets(16)
+	const attempts = 100
+	var wg sync.WaitGroup
+	var leasesMu sync.Mutex
+	var leases []*connectionClassLease
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l := m.open(now)
+			_ = l.classifyRequest(connect, now)
+			leasesMu.Lock()
+			leases = append(leases, l)
+			leasesMu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if got := m.snapshot(); got.Long != 12 || got.LongDenied != attempts-12 || got.LongDebt != 0 || got.Total != attempts {
+		t.Fatalf("concurrent strict guard not atomic: %+v", got)
+	}
+	for _, l := range leases {
+		l.finish()
+	}
+	if got := m.snapshot(); got.Total != 0 || got.Provisional != 0 {
+		t.Fatalf("concurrent lease cleanup failed: %+v", got)
+	}
+}
+
+func TestStrictLongIntakeFailsClosedWithoutOwnedClassLease(t *testing.T) {
+	t.Setenv("PXGO_EXPERIMENTAL_CAPACITY_MODE", "auto")
+	t.Setenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES", "1")
+	t.Setenv("PXGO_EXPERIMENTAL_STRICT_LONG_INTAKE", "1")
+	s, err := New(config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Shutdown(context.Background())
+	// A non-ConnContext path must never bypass a strict experimental guard.
+	// This test calls ServeHTTP directly, so no owned physical lease exists.
+	req := httptest.NewRequest(http.MethodConnect, "http://localhost:12345", nil)
+	req.RemoteAddr = "127.0.0.1:56789"
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing authenticated classification lease must fail closed in strict mode, got %d", w.Code)
+	}
+	if stats := s.capacity.snapshot().ClassPools; stats == nil || stats.Long != 0 || stats.Total != 0 {
+		t.Fatalf("rejected unowned request changed class permit state: %+v", stats)
+	}
+}
+
+// A lowered physical cap must never evict existing authenticated longs.
+// Provisional sockets that already own a physical token may still be
+// classified, but fresh explicit long upgrades must honor the new budget.
+func TestStrictLongIntakeBudgetShrinkOutstandingProvisional(t *testing.T) {
+	t.Setenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES", "1")
+	t.Setenv("PXGO_EXPERIMENTAL_STRICT_LONG_INTAKE", "1")
+	cfg := config.Default()
+	cfg.MaxConnections = 16
+	g := newCapacityGovernor(modeAuto, cfg)
+	defer g.close()
+	defer g.classes.close()
+	now := time.Unix(10000, 0)
+	longs := make([]*connectionClassLease, 12)
+	for i := range longs {
+		longs[i] = g.classes.open(now)
+		if longs[i] == nil || !longs[i].classifyRequest(&http.Request{Method: http.MethodConnect}, now) {
+			t.Fatalf("initial long[%d] should be admitted", i)
+		}
+	}
+	provisional := make([]*connectionClassLease, 4)
+	for i := range provisional {
+		provisional[i] = g.classes.open(now)
+		if provisional[i] == nil {
+			t.Fatalf("initial provisional[%d] missing", i)
+		}
+	}
+	g.mu.Lock()
+	g.active = 16 // model the 16 already-acquired physical tokens
+	g.hard = 8
+	g.recomputeLocked()
+	g.mu.Unlock()
+	s := g.classes.snapshot()
+	if s.Long != 12 || s.Provisional != 4 || s.LongBudget != 6 || s.ShortBudget != 2 || s.LongDebt != 6 {
+		t.Fatalf("shrink incorrectly evicted or misbudgeted live sockets: %+v", s)
+	}
+	if provisional[0].classifyRequest(&http.Request{Method: http.MethodConnect}, now) {
+		t.Fatal("fresh explicit long upgrade must not bypass shrunken quota")
+	}
+	provisional[0].finish() // HTTP 503 + close returns its one physical token
+	if !provisional[1].classifyRequest(&http.Request{Method: http.MethodGet}, now) {
+		t.Fatal("existing provisional socket may classify as ordinary short")
+	}
+	for i := 0; i < 8; i++ {
+		longs[i].finish()
+	}
+	s = g.classes.snapshot()
+	if s.Long != 4 || s.Short != 1 || s.Provisional != 2 || s.LongDebt != 0 || s.LongDenied != 1 {
+		t.Fatalf("drained long budget/debt mismatch: %+v", s)
+	}
+	if !provisional[2].classifyRequest(&http.Request{Method: http.MethodConnect}, now) {
+		t.Fatal("existing eligible provisional may upgrade after long debt drains")
+	}
+	s = g.classes.snapshot()
+	if s.Long != 5 || s.LongBudget != 6 || s.LongDenied != 1 {
+		t.Fatalf("long intake did not resume at effective budget: %+v", s)
+	}
+	for _, lease := range longs {
+		lease.finish()
+	}
+	for _, lease := range provisional {
+		lease.finish()
+	}
+	if s = g.classes.snapshot(); s.Total != 0 || s.Provisional != 0 || s.Short != 0 || s.Long != 0 || s.LongDebt != 0 {
+		t.Fatalf("all preexisting leases must drain: %+v", s)
 	}
 }

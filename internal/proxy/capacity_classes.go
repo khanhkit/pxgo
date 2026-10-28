@@ -34,6 +34,8 @@ type connectionClassManager struct {
 	shortBudget, longBudget  int
 	promoted                 uint64
 	longOverflow             uint64
+	longDenied               uint64 // rejected new authenticated long requests only
+	strictLongIntake         bool   // experimental, never changes physical permits
 	closed                   bool
 }
 
@@ -49,6 +51,7 @@ type connectionClassSnapshot struct {
 	Provisional, Short, Long int
 	ShortBudget, LongBudget  int
 	Promoted, LongOverflow   uint64
+	LongDenied               uint64
 	LongDebt                 int
 	Total                    int
 }
@@ -121,28 +124,36 @@ func (m *connectionClassManager) transitionLocked(l *connectionClassLease, kind 
 	l.kind = kind
 }
 
-func (l *connectionClassLease) classifyRequest(req *http.Request, now time.Time) {
+// classifyRequest returns false only for a new, explicitly long request
+// denied by the optional post-authentication long-intake guard. Existing
+// long tunnels and automatic short->long promotion are never evicted.
+func (l *connectionClassLease) classifyRequest(req *http.Request, now time.Time) bool {
 	if l == nil || req == nil {
-		return
+		return true // preserve historical behavior for internal/no-context calls
 	}
 	m := l.manager
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if l.closed {
-		return
+		return true
 	}
 	l.requests++
-	// Request-level prediction after client authorization, not based on source
-	// IP, user identity, peer secrets or a forged header alone to admit sockets.
-	long := req.Method == http.MethodConnect || strings.EqualFold(req.Header.Get(headerUpgrade), "websocket") || strings.Contains(strings.ToLower(req.Header.Get("Accept")), "text/event-stream")
-	if !long && (now.Sub(l.opened) >= classDurationThreshold || l.requests >= classRequestThreshold) {
-		long = true
-	}
-	if long {
+	// Classification happens after downstream client authorization.
+	explicitLong := req.Method == http.MethodConnect || strings.EqualFold(req.Header.Get(headerUpgrade), "websocket") || strings.Contains(strings.ToLower(req.Header.Get("Accept")), "text/event-stream")
+	agedLong := now.Sub(l.opened) >= classDurationThreshold || l.requests >= classRequestThreshold
+	if explicitLong || agedLong {
+		// Guard only NEW explicit long requests, never an already admitted
+		// connection that aged into long or a tunnel already in progress.
+		// A budget shrink may leave debt; refuse new longs until it drains.
+		if m.strictLongIntake && explicitLong && l.kind != classLong && m.long >= m.longBudget {
+			m.longDenied++
+			return false
+		}
 		m.transitionLocked(l, classLong)
 	} else {
 		m.transitionLocked(l, classShort)
 	}
+	return true
 }
 
 func (m *connectionClassManager) promoteAged(now time.Time) {
@@ -167,8 +178,9 @@ func (m *connectionClassManager) sampleBudgets(globalSoft int) {
 	if globalSoft < 0 {
 		globalSoft = 0
 	}
-	// Reservation intent: 1/4 of the global soft budget for short requests,
-	// 3/4 for long tunnels. These are SOFT accounting/debt targets. Physical
+	// Reservation intent: 1/4 of the actual effective physical admission
+	// window for short requests, 3/4 for long tunnels. These are class budgets;
+	// a separate opt-in guard may reject new authenticated long upgrades. Physical
 	// admission remains global and independent of these late predictions.
 	m.shortBudget = globalSoft / 4
 	m.longBudget = globalSoft - m.shortBudget
@@ -180,7 +192,7 @@ func (m *connectionClassManager) snapshot() connectionClassSnapshot {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return connectionClassSnapshot{Provisional: m.provisional, Short: m.short, Long: m.long, ShortBudget: m.shortBudget, LongBudget: m.longBudget, Promoted: m.promoted, LongOverflow: m.longOverflow, LongDebt: max(0, m.long-m.longBudget), Total: len(m.live)}
+	return connectionClassSnapshot{Provisional: m.provisional, Short: m.short, Long: m.long, ShortBudget: m.shortBudget, LongBudget: m.longBudget, Promoted: m.promoted, LongOverflow: m.longOverflow, LongDenied: m.longDenied, LongDebt: max(0, m.long-m.longBudget), Total: len(m.live)}
 }
 
 func (m *connectionClassManager) close() {
@@ -201,4 +213,12 @@ func connectionClassFromContext(ctx context.Context) *connectionClassLease {
 // This flag has NO meaning in legacy/shadow and does not enable AUTO itself.
 func experimentalConnectionClassesEnabled() bool {
 	return os.Getenv("PXGO_EXPERIMENTAL_CONNECTION_CLASSES") == "1"
+}
+
+// Long-intake guard is research-only. It requires AUTO and class tracking,
+// rejects only new authenticated CONNECT/WebSocket/SSE admissions when at the
+// long budget, and cannot guarantee short liveness against preauth slowloris
+// or long debt after keep-alive promotion.
+func experimentalStrictLongIntakeEnabled() bool {
+	return os.Getenv("PXGO_EXPERIMENTAL_STRICT_LONG_INTAKE") == "1"
 }
