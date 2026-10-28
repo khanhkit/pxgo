@@ -533,6 +533,10 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		if err != nil || proof != fmt.Sprintf("denied_bytes=%d recovered_bytes=%d", jobWideProbeBytes, capacityJobProbeSmallCommit) {
 			t.Fatalf("real child job-wide allocation denial and recovery unproven: %q err=%v", proof, err)
 		}
+		// Emit only AFTER validating the exact child IPC marker; the CI log
+		// cannot directly see private stdin/stdout evidence consumed by parent.
+		t.Logf("JOB_PROXY_JOBWIDE_PROBE denied_bytes=%d recovered_bytes=%d",
+			jobWideProbeBytes, capacityJobProbeSmallCommit)
 		// Causal control: change ONLY the owned child Job Object total limit
 		// to match its UNCHANGED process cap. Same child, same tunnels,
 		// same probe size must now succeed; restore strict job cap after Free.
@@ -549,6 +553,7 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		if err != nil || allowed != fmt.Sprintf("allowed_bytes=%d cap_equal=true", jobWideProbeBytes) {
 			t.Fatalf("same native allocation did not succeed with job-wide cap relaxed: marker=%q err=%v", allowed, err)
 		}
+		t.Logf("JOB_PROXY_JOBWIDE_CONTROL allowed_bytes=%d cap_equal=true", jobWideProbeBytes)
 		limits.JobMemoryLimit = uintptr(jobWideLimit)
 		_, err = windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
 			uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits)))
