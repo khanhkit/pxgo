@@ -508,6 +508,84 @@ jobs:
           path: benchmarks/
           retention-days: 14
 
+  windows-mixed-socket-isolation-research:
+    name: Windows isolated socket gate (${{ matrix.scenario }}, trial=${{ matrix.trial }})
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [r11_off_seed6_churn, fast_on_seed1_competing]
+        trial: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Exact native isolated failed-profile trial with TCP lifecycle diagnostics
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          SCENARIO: ${{ matrix.scenario }}
+          TRIAL: ${{ matrix.trial }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_CAPACITY_MIXED_BENCH: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Exact R34 SHA mismatch' }
+          @('scenario=' + $env:SCENARIO, 'trial=' + $env:TRIAL, 'exact_sha=' + $env:EXPECTED_SHA) | Set-Content benchmarks/trial-metadata.txt
+          netsh int ipv4 show dynamicport tcp 2>&1 | Out-File benchmarks/port-range-before.txt
+          (Get-NetTCPConnection -ErrorAction SilentlyContinue | Group-Object State |
+            ForEach-Object { 'state=' + $_.Name + ' count=' + $_.Count }) | Out-File benchmarks/tcp-states-before.txt
+          try {
+            if ($env:SCENARIO -eq 'r11_off_seed6_churn') {
+              $env:PXGO_CAPACITY_MIX_SEED = '6'
+              $env:PXGO_RESEARCH_CAPACITY_POLICY = 'r11'
+              $env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES = '0'
+              $env:PXGO_CAPACITY_MIX_PROFILE = 'churn'
+              go test ./internal/proxy -run '^TestCapacityMixedTrafficBench/churn$' -count=1 -v -timeout=115s 2>&1 |
+                Tee-Object -FilePath benchmarks/isolated-mixed-test.log
+              if ($LASTEXITCODE -ne 0) { throw 'R11 OFF seed6 strict isolated churn failed; no waiver' }
+              if (-not (Select-String benchmarks/isolated-mixed-test.log -Pattern 'MIXED_RESULT profile=churn seed=6 held_long_connect=449 .* short_attempted=1404 short_completed=1404')) {
+                throw 'Missing complete native seed6 churn positive data-plane result'
+              }
+            } elseif ($env:SCENARIO -eq 'fast_on_seed1_competing') {
+              $env:PXGO_CAPACITY_MIX_SEED = '1'
+              $env:PXGO_RESEARCH_CAPACITY_POLICY = 'fast_saturation'
+              $env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES = '1'
+              go test ./internal/proxy -run '^TestCapacityMixedCompetingAdmission$' -count=1 -v -timeout=115s 2>&1 |
+                Tee-Object -FilePath benchmarks/isolated-mixed-test.log
+              if ($LASTEXITCODE -ne 0) { throw 'FAST ON seed1 strict isolated competing admission failed; no waiver' }
+              if (-not (Select-String benchmarks/isolated-mixed-test.log -Pattern 'MIXED_COMPETE_RESULT seed=1 long_attempted=320 long_admitted=320 short_attempted=448 short_completed=448')) {
+                throw 'Missing complete native seed1 competing positive result'
+              }
+            } else {
+              throw 'Unsupported native socket reproduction scenario'
+            }
+          } finally {
+            (Get-NetTCPConnection -ErrorAction SilentlyContinue | Group-Object State |
+              ForEach-Object { 'state=' + $_.Name + ' count=' + $_.Count }) | Out-File benchmarks/tcp-states-after.txt
+            netsh int ipv4 show dynamicport tcp 2>&1 | Out-File benchmarks/port-range-after.txt
+            try {
+              Get-WinEvent -FilterHashtable @{LogName='System'; ID=4227,4231; StartTime=(Get-Date).AddMinutes(-15)} -MaxEvents 20 -ErrorAction Stop |
+                Format-List TimeCreated,Id,ProviderName,Message | Out-File benchmarks/tcp-recent-events.txt
+            } catch {
+              'No readable matching Event IDs in last 15 min: ' + $_.Exception.Message | Out-File benchmarks/tcp-recent-events.txt
+            }
+          }
+      - name: Preserve exact SHA Windows TCP diagnostic artifacts on success and failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-socket-isolated-${{ matrix.scenario }}-${{ matrix.trial }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-job-proxy-2560-matrix:
     name: Windows real PxGo quota (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, trial=${{ matrix.trial }})
     # Each policy/class/trial on a fresh native Windows VM; descriptive, unpaired.
