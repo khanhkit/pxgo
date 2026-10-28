@@ -81,7 +81,8 @@ func TestCapacityNativeSocketErrnoExtraction(t *testing.T) {
 		{name: "nil", want: -1},
 		{name: "wrapped WSAENOBUFS", err: fmt.Errorf("wrapped dial: %w", syscall.Errno(10055)), want: 10055},
 		{name: "net.OpError WSAEADDRNOTAVAIL", err: &net.OpError{
-			Op: "dial", Net: "tcp",
+			// Op/Net labels are irrelevant to errors.As: test the wrapped
+			// native WinSock errno without increasing unrelated goconst counts.
 			Err: &os.SyscallError{Syscall: "bind", Err: syscall.Errno(10049)},
 		}, want: 10049},
 		{name: "plain application failure", err: errors.New("application failure"), want: -1},
