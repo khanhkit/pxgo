@@ -28,6 +28,7 @@ const (
 	capacityJobProxyHeld   = 2560
 	capacityJobProxyShort  = 600
 	capacityJobProxyBudget = uint64(384 << 20)
+	capacityJobProxyHold   = uintptr(64 << 20)
 )
 
 func TestCapacityWindowsJobProxyChild(t *testing.T) {
@@ -42,6 +43,12 @@ func TestCapacityWindowsJobProxyChild(t *testing.T) {
 	px := startTestProxy(t, cfg)
 	fmt.Printf("JOB_PROXY_READY addr=%s pid=%d\n", px.ListenAddr(), os.Getpid())
 	in := bufio.NewScanner(os.Stdin)
+	var heldCommit uintptr
+	defer func() {
+		if heldCommit != 0 {
+			_ = windows.VirtualFree(heldCommit, 0, windows.MEM_RELEASE)
+		}
+	}()
 	for in.Scan() {
 		switch in.Text() {
 		case "SNAP":
@@ -66,6 +73,26 @@ func TestCapacityWindowsJobProxyChild(t *testing.T) {
 			}
 			fmt.Printf("JOB_PROXY_OWN_JOBINFO process_commit_limit=%d process_mem_flag=true\n",
 				mine.ProcessMemoryLimit)
+		case "HOLD_COMMIT":
+			if heldCommit != 0 {
+				t.Fatal("already holding a native committed-memory ballast")
+			}
+			addr, err := windows.VirtualAlloc(0, capacityJobProxyHold,
+				windows.MEM_COMMIT|windows.MEM_RESERVE, windows.PAGE_READWRITE)
+			if err != nil || addr == 0 {
+				t.Fatalf("64MiB native live-child ballast failed: %v", err)
+			}
+			heldCommit = addr
+			fmt.Printf("JOB_PROXY_HOLD committed_bytes=%d\n", capacityJobProxyHold)
+		case "FREE_COMMIT":
+			if heldCommit == 0 {
+				t.Fatal("cannot free non-existent Job Object ballast")
+			}
+			if err := windows.VirtualFree(heldCommit, 0, windows.MEM_RELEASE); err != nil {
+				t.Fatalf("release native live-child ballast failed: %v", err)
+			}
+			heldCommit = 0
+			fmt.Printf("JOB_PROXY_UNHOLD released_bytes=%d\n", capacityJobProxyHold)
 		case "PROBE":
 			// Fail closed: allocation denial only counts with a recognized
 			// Win32 commit-quota error, never arbitrary VirtualAlloc errors.
@@ -329,6 +356,33 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 			plateauResources.PrivateBytes, hardLimit)
 	}
 	monitor.setPhase(isolatedMixed)
+	// The optional native ballast is a LIVE committed virtual allocation
+	// IN THE REAL PxGo CHILD while all 2560 authenticated tunnels are held.
+	// Keep the CPU/Go generator and upstream listeners outside the Job.
+	holdCommit := os.Getenv("PXGO_CAPACITY_JOB_PROXY_HOLD_COMMIT") == "1"
+	var heldCommittedPrivate uint64
+	if holdCommit {
+		if plateauResources.PrivateBytes+uint64(capacityJobProxyHold)+uint64(64<<20) >= hardLimit {
+			t.Fatalf("unsafe child-only memory ballast headroom: plateau=%d hard=%d",
+				plateauResources.PrivateBytes, hardLimit)
+		}
+		if _, err := io.WriteString(stdin, "HOLD_COMMIT\n"); err != nil {
+			t.Fatal(err)
+		}
+		marker, err := capacityReadJobPrefix(p.output, "JOB_PROXY_HOLD ")
+		if err != nil || marker != fmt.Sprintf("committed_bytes=%d", capacityJobProxyHold) {
+			t.Fatalf("live child 64MiB commitment not proven: marker=%q err=%v", marker, err)
+		}
+		measured, err := readCapacityIsolatedResources(cmd.Process.Pid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		heldCommittedPrivate = measured.PrivateBytes
+		if heldCommittedPrivate < plateauResources.PrivateBytes+uint64(48<<20) || heldCommittedPrivate >= hardLimit {
+			t.Fatalf("native child ballast did not account 48MiB minimum: plateau=%d with_ballast=%d hard=%d",
+				plateauResources.PrivateBytes, heldCommittedPrivate, hardLimit)
+		}
+	}
 	if _, err := io.WriteString(stdin, "PROBE\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -382,6 +436,29 @@ func TestCapacityWindowsJobProxy2560Pressure(t *testing.T) {
 		if err := verifyCapacityHeldTunnel(c, i); err != nil {
 			t.Fatalf("held tunnel[%d] corrupted after live quota denial: %v", i, err)
 		}
+	}
+	if holdCommit {
+		// Measure AFTER all 600 short HTTP requests with the child ballast
+		// still allocated; free only after proving sustained live commit.
+		beforeFree, err := readCapacityIsolatedResources(cmd.Process.Pid)
+		if err != nil || beforeFree.PrivateBytes < plateauResources.PrivateBytes+uint64(48<<20) {
+			t.Fatalf("64MiB child commit not sustained under short traffic: private=%d plateau=%d err=%v",
+				beforeFree.PrivateBytes, plateauResources.PrivateBytes, err)
+		}
+		if _, err := io.WriteString(stdin, "FREE_COMMIT\n"); err != nil {
+			t.Fatal(err)
+		}
+		marker, err := capacityReadJobPrefix(p.output, "JOB_PROXY_UNHOLD ")
+		if err != nil || marker != fmt.Sprintf("released_bytes=%d", capacityJobProxyHold) {
+			t.Fatalf("child 64MiB commitment not released: marker=%q err=%v", marker, err)
+		}
+		afterFree, err := readCapacityIsolatedResources(cmd.Process.Pid)
+		if err != nil || afterFree.PrivateBytes+uint64(48<<20) > beforeFree.PrivateBytes {
+			t.Fatalf("physical Win32 commit release not measured: before=%d after=%d err=%v",
+				beforeFree.PrivateBytes, afterFree.PrivateBytes, err)
+		}
+		t.Logf("JOB_PROXY_SUSTAINED_COMMIT_RESULT held_bytes=%d completed_short=%d enforced=true private_with_ballast=%d private_after_release=%d hard_commit=%d",
+			capacityJobProxyHold, capacityJobProxyShort, beforeFree.PrivateBytes, afterFree.PrivateBytes, hardLimit)
 	}
 	monitor.setPhase(isolatedDrain)
 	for i, c := range held {
