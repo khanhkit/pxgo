@@ -115,13 +115,36 @@ func (s *Server) writeHTTPResponse(rw http.ResponseWriter, resp *http.Response) 
 	}
 	copyHeader(rw.Header(), header)
 	rw.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(rw, resp.Body)
+	// SSE is determined by the actual upstream response, not a client's
+	// Accept prediction. Flush the headers and each returned body chunk:
+	// io.Copy alone buffers short events until a later chunk or EOF.
+	destination := io.Writer(rw)
+	contentType := strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0])
+	if strings.EqualFold(contentType, "text/event-stream") {
+		if flusher, ok := rw.(http.Flusher); ok {
+			flusher.Flush()
+			destination = sseFlushingWriter{writer: rw, flusher: flusher}
+		}
+	}
+	_, _ = io.Copy(destination, resp.Body)
 	for key, values := range resp.Trailer {
 		rw.Header().Del(key)
 		for _, value := range values {
 			rw.Header().Add(key, value)
 		}
 	}
+}
+
+// sseFlushingWriter pushes each upstream SSE chunk without waiting for EOF.
+type sseFlushingWriter struct {
+	writer  io.Writer
+	flusher http.Flusher
+}
+
+func (w sseFlushingWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	w.flusher.Flush()
+	return n, err
 }
 
 func (s *Server) handleHTTPUpgrade(rw http.ResponseWriter, req *http.Request, resp *http.Response) {
