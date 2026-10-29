@@ -177,23 +177,7 @@ func runStrictSSEActualResponse(t *testing.T, heldLong int) {
 	if err != nil || string(data) != `{"ok":true}` {
 		t.Fatalf("JSON response corrupted: %q err=%v", data, err)
 	}
-	// A media-range-like substring inside a quoted parameter is NOT SSE.
-	// At 12/12 held long tunnels it must not spuriously return 503.
-	quotedReq, err := http.NewRequest(http.MethodGet, origin.URL+"/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	quotedReq.Header.Set("Accept", `application/json; note="intro, text/event-stream; q=1, outro"`)
-	quotedResp, err := client.Do(quotedReq)
-	if err != nil {
-		t.Fatal(err)
-	}
-	quotedBody, readErr := io.ReadAll(quotedResp.Body)
-	closeErr := quotedResp.Body.Close()
-	if quotedResp.StatusCode != http.StatusOK || readErr != nil || closeErr != nil || string(quotedBody) != `{"ok":true}` {
-		t.Fatalf("quoted Accept JSON erroneously classified as SSE: status=%s body=%q read=%v close=%v",
-			quotedResp.Status, quotedBody, readErr, closeErr)
-	}
+	assertQuotedAcceptJSONResponse(t, client, origin.URL)
 	denied := uint64(0)
 	if heldLong == 12 {
 		denied = 1
@@ -202,6 +186,27 @@ func runStrictSSEActualResponse(t *testing.T, heldLong int) {
 		t.Fatalf("true SSE response/quota and q=0 JSON invariants violated: %+v", got)
 	}
 	t.Logf("STRICT_SSE_RESPONSE_RESULT long_plateau=%d actual_sse_response_classified=true json_q_zero_allowed=true first_event_flushed=%t", heldLong, heldLong == 11)
+}
+
+// assertQuotedAcceptJSONResponse proves that an SSE-looking substring inside
+// a quoted Accept parameter never consumes a long class budget or returns 503.
+func assertQuotedAcceptJSONResponse(t *testing.T, client *http.Client, originURL string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, originURL+"/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", `application/json; note="intro, text/event-stream; q=1, outro"`)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || readErr != nil || closeErr != nil || string(body) != `{"ok":true}` {
+		t.Fatalf("quoted Accept JSON erroneously classified as SSE: status=%s body=%q read=%v close=%v",
+			resp.Status, body, readErr, closeErr)
+	}
 }
 
 func TestStrictLongIntakeUsesActualSSEResponseAndAcceptQuality(t *testing.T) {
