@@ -119,8 +119,7 @@ func (s *Server) writeHTTPResponse(rw http.ResponseWriter, resp *http.Response) 
 	// Accept prediction. Flush the headers and each returned body chunk:
 	// io.Copy alone buffers short events until a later chunk or EOF.
 	destination := io.Writer(rw)
-	contentType := strings.TrimSpace(strings.SplitN(resp.Header.Get("Content-Type"), ";", 2)[0])
-	if strings.EqualFold(contentType, "text/event-stream") {
+	if isSSEMediaType(resp.Header.Get("Content-Type")) {
 		if flusher, ok := rw.(http.Flusher); ok {
 			flusher.Flush()
 			destination = sseFlushingWriter{writer: rw, flusher: flusher}
@@ -145,6 +144,11 @@ func (w sseFlushingWriter) Write(p []byte) (int, error) {
 	n, err := w.writer.Write(p)
 	w.flusher.Flush()
 	return n, err
+}
+
+// isSSEMediaType matches actual response media type including parameters.
+func isSSEMediaType(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(strings.SplitN(value, ";", 2)[0]), "text/event-stream")
 }
 
 func (s *Server) handleHTTPUpgrade(rw http.ResponseWriter, req *http.Request, resp *http.Response) {

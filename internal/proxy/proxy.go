@@ -1015,6 +1015,15 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if s.capacity != nil && s.capacity.classes != nil {
+		lease := connectionClassFromContext(req.Context())
+		if (s.capacity.classes.strictLongIntake && lease == nil) || !lease.classifySSEResponse(resp) {
+			rw.Header().Set("Connection", "close")
+			rw.Header().Set("Retry-After", "1")
+			http.Error(rw, "experimental SSE long response admission limit reached", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	s.writeHTTPResponse(rw, resp)
 }
 

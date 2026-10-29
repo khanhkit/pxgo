@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"mime"
 	"net/http"
 	"os"
 	"strings"
@@ -139,7 +140,7 @@ func (l *connectionClassLease) classifyRequest(req *http.Request, now time.Time)
 	}
 	l.requests++
 	// Classification happens after downstream client authorization.
-	explicitLong := req.Method == http.MethodConnect || strings.EqualFold(req.Header.Get(headerUpgrade), "websocket") || strings.Contains(strings.ToLower(req.Header.Get("Accept")), "text/event-stream")
+	explicitLong := req.Method == http.MethodConnect || strings.EqualFold(req.Header.Get(headerUpgrade), "websocket") || acceptsEventStream(req.Header)
 	agedLong := now.Sub(l.opened) >= classDurationThreshold || l.requests >= classRequestThreshold
 	if explicitLong || agedLong {
 		// Guard only NEW explicit long requests, never an already admitted
@@ -153,6 +154,72 @@ func (l *connectionClassLease) classifyRequest(req *http.Request, now time.Time)
 	} else {
 		m.transitionLocked(l, classShort)
 	}
+	return true
+}
+
+// acceptsEventStream honors the client's HTTP Accept quality weights.
+// A literal text/event-stream;q=0 expressly rejects SSE and MUST NOT
+// create or deny a long admission. The actual upstream response may
+// still return SSE, which is classified after RoundTrip instead.
+func acceptsEventStream(header http.Header) bool {
+	for _, value := range header.Values("Accept") {
+		for _, part := range strings.Split(value, ",") {
+			mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(part))
+			if err != nil || !strings.EqualFold(mediaType, "text/event-stream") {
+				continue
+			}
+			if quality, hasQuality := params["q"]; hasQuality && !positiveHTTPQuality(quality) {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// positiveHTTPQuality accepts RFC qvalue syntax (at most three decimal
+// digits) and rejects q=0, exponent notation, hex floats and invalid >1.
+func positiveHTTPQuality(q string) bool {
+	if len(q) == 0 || len(q) > 5 || (q[0] != '0' && q[0] != '1') {
+		return false
+	}
+	if len(q) == 1 {
+		return q == "1"
+	}
+	if q[1] != '.' {
+		return false
+	}
+	positive := q[0] == '1'
+	for i := 2; i < len(q); i++ {
+		if q[i] < '0' || q[i] > '9' || (q[0] == '1' && q[i] != '0') {
+			return false
+		}
+		positive = positive || q[i] != '0'
+	}
+	return positive
+}
+
+// classifySSEResponse accounts for a genuine upstream SSE body even if the
+// client sent Accept: application/json. It cannot acquire another physical
+// permit: the same authenticated downstream lease transfers short->long.
+// Under the opt-in strict guard, refuse a new unexpected long response if
+// the long class budget is full; existing long leases are never evicted.
+func (l *connectionClassLease) classifySSEResponse(resp *http.Response) bool {
+	if l == nil || resp == nil || resp.StatusCode != http.StatusOK ||
+		!isSSEMediaType(resp.Header.Get("Content-Type")) {
+		return true
+	}
+	m := l.manager
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if l.closed {
+		return true
+	}
+	if m.strictLongIntake && l.kind != classLong && m.long >= m.longBudget {
+		m.longDenied++
+		return false
+	}
+	m.transitionLocked(l, classLong)
 	return true
 }
 
