@@ -288,6 +288,1002 @@ jobs:
               -run '^TestCapacityBurst2560$' -count=1 -v -timeout=55s
           done
 
+  windows-connection-class-research:
+    name: Windows capacity research (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, sample=${{ matrix.sample }})
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 24
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        policy: [r11, fast_saturation]
+        class_mode: [off, 'on']
+        sample: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify SHA and collect Windows runner metadata
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable HEAD mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/runner.txt
+          "go=$(go version)" | Add-Content benchmarks/runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
+          "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
+          Get-Content benchmarks/runner.txt
+      - name: Native Windows R11 versus guarded fast-ramp and two-class tracking
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_BURST_2560: '1'
+          PXGO_CAPACITY_BENCH_MODE: 'auto'
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
+        run: |
+          # Bounded SYN waves isolate 2,560 simultaneously held live tunnels
+          # from the separate known Windows SOMAXCONN 2,560-SYN burst limit.
+          $env:PXGO_CAPACITY_SYN_SPIKE = '0'
+          # Four independent samples, each on a FRESH Windows VM. Previously
+          # chaining four 2,560-tunnel soaks polluted later runs with TCP
+          # endpoint/WSAENOBUFS pressure. Do not waive any failed socket.
+          go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath "benchmarks/2560-sample-${{ matrix.sample }}.log"
+          if ($LASTEXITCODE -ne 0) { throw "2560 native Windows live-tunnel sample ${{ matrix.sample }} FAILED" }
+      - name: Preserve benchmark and failure evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-capacity-${{ matrix.policy }}-classes-${{ matrix.class_mode }}-sample-${{ matrix.sample }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-mixed-capacity-research:
+    name: Windows mixed (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, seed=${{ matrix.seed }})
+    # Each seed gets a FRESH VM. Native Windows has a finite ephemeral TCP
+    # port range and TIME_WAIT. Chaining 4 x 2560 CONNECT soak + all eight
+    # mixed seeds in one VM exhausted outgoing ephemeral ports (WSAEADDRINUSE).
+    # Do not mislabel test-runner exhaustion as controller failure, and never
+    # bypass it by forcing abortive RST closes in realistic short-conn tests.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 17
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        policy: [r11, fast_saturation]
+        class_mode: [off, 'on']
+        seed: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify immutable SHA and Windows runner profile
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable HEAD mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/runner.txt
+          "go=$(go version)" | Add-Content benchmarks/runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
+          "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
+          "seed=${{ matrix.seed }} policy=${{ matrix.policy }} classes=${{ matrix.class_mode }}" | Add-Content benchmarks/runner.txt
+          Get-Content benchmarks/runner.txt
+          # Capture ephemeral-port range before the high-socket-count test;
+          # no OS port-range mutation or insecure SO_REUSEADDR workaround.
+          netsh interface ipv4 show dynamicport tcp 2>&1 |
+            Out-File -FilePath benchmarks/windows-ephemeral-range-before.txt
+          netsh interface ipv6 show dynamicport tcp 2>&1 |
+            Add-Content benchmarks/windows-ephemeral-range-before.txt
+      - name: Concurrent short/long workload and admission competition
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_MIXED_BENCH: '1'
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_CAPACITY_MIX_SEED: ${{ matrix.seed }}
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
+        run: |
+          # On seed0, run class lifecycle BEFORE the high-socket-count load.
+          # The heavy 4x2560 test runner has no ephemeral TCP ports left by
+          # its end; putting lifecycle tests there produced WSAEADDRINUSE.
+          if ($env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            go test ./internal/proxy -run '^TestConnectionClass' -count=5 -v -timeout=60s 2>&1 |
+              Tee-Object -FilePath benchmarks/class-lifecycle.log
+            if ($LASTEXITCODE -ne 0) { throw 'Windows class lifecycle failed on fresh runner' }
+            go test ./internal/proxy -run '^$' -bench '^BenchmarkConnectionClass' -benchmem -count=3 2>&1 |
+              Tee-Object -FilePath benchmarks/class-microbenchmark.log
+            if ($LASTEXITCODE -ne 0) { throw 'Windows class microbenchmarks failed on fresh runner' }
+          }
+          # R23: verify actual TLS 1.3 + ALPN h2 multiplexing, six SSE
+          # streams, shared physical 16-slot saturation and long-to-short
+          # permit reclamation on a fresh native Windows VM. Only seed 0:
+          # four policy/class cells, before the heavy socket churn below.
+          if ($env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            $env:PXGO_CAPACITY_TLS_H2_BENCH = '1'
+            go test ./internal/proxy -run '^TestCapacityTLSHTTP2StreamingMixed$' -count=1 -v -timeout=65s 2>&1 |
+              Tee-Object -FilePath benchmarks/tls-h2-streaming.log
+            if ($LASTEXITCODE -ne 0) { throw 'Native TLS 1.3/HTTP2/SSE and saturated permit borrowing failed' }
+            # A silently SKIPPED test must never count as native research PASS.
+            if (-not (Select-String -Path benchmarks/tls-h2-streaming.log -Pattern 'TLS_H2_RESULT tls=tls13 alpn=h2 admission_wait_proven=true wait_delta=[1-9][0-9]*')) {
+              throw 'Missing strict TLS/H2/observed-global-wait evidence marker'
+            }
+            Remove-Item Env:PXGO_CAPACITY_TLS_H2_BENCH
+          }
+          # R25 WebSocket RFC6455 binary-frame classification and strict
+          # 16/16 physical saturation/short borrowing, before port churn.
+          # Exactly four native windows-latest seed0 policy/class cells.
+          if ($env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            $env:PXGO_CAPACITY_WS_BENCH = '1'
+            go test ./internal/proxy -run '^TestCapacityMixedWebSocketSaturated$' -count=1 -v -timeout=65s 2>&1 |
+              Tee-Object -FilePath benchmarks/websocket-saturated.log
+            if ($LASTEXITCODE -ne 0) { throw 'Native WebSocket frame and physical borrowing gate failed' }
+            if (-not (Select-String -Path benchmarks/websocket-saturated.log -Pattern 'WS_MIXED_RESULT websocket=8 connect=8 short_borrow=1 wait_delta=[1-9][0-9]* global_active=0')) {
+              throw 'WebSocket evidence marker absent or zero actual admission waits'
+            }
+            Remove-Item Env:PXGO_CAPACITY_WS_BENCH
+          }
+          # Short/medium/long TCP survival (250ms..5.5s), natural releases,
+          # short HTTP churn during every phase and no physical/class leaks.
+          # Run FIRST on a fresh Windows VM to avoid contaminating results
+          # with prior TIME_WAIT/ephemeral port pressure.
+          # Enforce an ACTUALLY saturated global physical limit of 64 long
+          # CONNECTs. Four real short HTTP arrivals must block until a long
+          # tunnel frees a permit, then complete and replenish the long pool.
+          go test ./internal/proxy -run '^TestCapacityShortBorrowsReleasedLongPermit$' -count=1 -v -timeout=55s 2>&1 |
+            Tee-Object -FilePath benchmarks/strict-64-permit-borrowing.log
+          if ($LASTEXITCODE -ne 0) { throw 'Hard-saturated long-to-short permit borrowing failed' }
+          go test ./internal/proxy -run '^TestCapacityMixedStaggeredLifetimes$' -count=1 -v -timeout=65s 2>&1 |
+            Tee-Object -FilePath benchmarks/staggered-lifetimes.log
+          if ($LASTEXITCODE -ne 0) { throw 'Real short/medium/long lifetime turnover failed' }
+          # Active bidirectional relays (1 KiB-256 KiB frames and one 10 MiB
+          # bulk transfer) compete with short HTTP 128 B-64 KiB responses.
+          # Long and short classes share physical FD/Job headroom. Verify
+          # p95/p99 and 100% exact payload integrity on the native Win runner.
+          go test ./internal/proxy -run '^TestCapacityMixedActivePayload$' -count=1 -v -timeout=90s 2>&1 |
+            Tee-Object -FilePath benchmarks/active-long-short-data-plane.log
+          if ($LASTEXITCODE -ne 0) { throw 'Concurrent long data-plane and short HTTP integrity/fairness gate failed' }
+          go test ./internal/proxy -run '^TestCapacityMixedTrafficBench$' -count=1 -v -timeout=125s 2>&1 |
+            Tee-Object -FilePath benchmarks/mixed-profiles.log
+          if ($LASTEXITCODE -ne 0) { throw 'Mixed profiles did not meet native Windows live-tunnel/HTTP integrity gates' }
+          go test ./internal/proxy -run '^TestCapacityMixedCompetingAdmission$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath benchmarks/mixed-competing-arrival.log
+          if ($LASTEXITCODE -ne 0) { throw 'Concurrent short+long admission gate failed' }
+          if ($env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES -eq '1' -and $env:PXGO_CAPACITY_MIX_SEED -eq '0') {
+            $env:PXGO_CAPACITY_AGING_SOAK = '1'
+            go test ./internal/proxy -run '^TestCapacityMixedRealTimeAgedShortToLong$' -count=1 -v -timeout=55s 2>&1 |
+              Tee-Object -FilePath benchmarks/real-clock-30s-promotion.log
+            if ($LASTEXITCODE -ne 0) { throw 'Live 30s idle keepalive promotion failed' }
+          }
+      - name: Capture Windows TCP state and port exhaustion diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          # Runs even if a mixed profile failed on WSAEADDRINUSE. Diagnostics
+          # are evidence only, not a PASS waiver and never change socket state.
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          $out = 'benchmarks/windows-tcp-after.txt'
+          "utc=$([DateTime]::UtcNow.ToString('o'))" | Set-Content $out
+          try {
+            '--- IPv4 dynamic ports ---' | Add-Content $out
+            netsh interface ipv4 show dynamicport tcp 2>&1 | Add-Content $out
+            '--- IPv6 dynamic ports ---' | Add-Content $out
+            netsh interface ipv6 show dynamicport tcp 2>&1 | Add-Content $out
+            '--- TCP state counts ---' | Add-Content $out
+            $connections = @(Get-NetTCPConnection -ErrorAction Stop)
+            $connections | Group-Object State | Sort-Object Name |
+              ForEach-Object { "state=$($_.Name) count=$($_.Count)" } | Add-Content $out
+            '--- TIME_WAIT loopback endpoints (sample up to 24) ---' | Add-Content $out
+            $connections | Where-Object { $_.State -eq 'TimeWait' -and $_.LocalAddress -in @('127.0.0.1','::1') } |
+              Select-Object -First 24 LocalAddress,LocalPort,RemoteAddress,RemotePort,State |
+              Format-Table -AutoSize | Out-String | Add-Content $out
+          } catch {
+            "TCP_DIAGNOSTICS_UNAVAILABLE: $($_.Exception.Message)" | Add-Content $out
+          }
+          Get-Content $out
+      - name: Preserve native Windows evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-mixed-${{ matrix.policy }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-held-2560-ten-minute-soak:
+    name: Windows 10min real 2560 held CONNECT plus 600 distributed HTTP soak
+    # Pure loopback live data-plane and OS handle/PrivateBytes telemetry, not WAN.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Hold 2560 native TCP tunnels for 30x20s cycles with 600 short HTTP and resource gates
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
+          PXGO_RESEARCH_CAPACITY_POLICY: r11
+          PXGO_CAPACITY_10MIN_SOAK: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R44 exact immutable SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityNativeWindowsTenMinuteSoak$' -count=1 -v -timeout=17m 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-2560-10min-soak.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native 10-minute held-CONNECT soak failed; do not waive' }
+          $samples = @(Select-String -Path benchmarks/windows-2560-10min-soak.log -Pattern 'SOAK_SAMPLE cycle=[0-9]+ elapsed=')
+          if ($samples.Count -ne 30) { throw ('Not 30 real heartbeat/memory samples: ' + $samples.Count) }
+          if (-not (Select-String -Path benchmarks/windows-2560-10min-soak.log -Pattern 'SOAK_RESULT held=2560 heartbeat_cycles=30 short_completed=600 elapsed=.* baseline_private=[1-9][0-9]* peak_private=[1-9][0-9]* baseline_handles=[1-9][0-9]* peak_handles=[1-9][0-9]* physical_after=0')) {
+            throw 'Missing strict real 10min held 2560/600 data path and leak/drain proof'
+          }
+      - name: Preserve exact native Windows long-soak logs on success and failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-2560-ten-minute-soak-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-real-pxgo-jobwide-2560:
+    name: Windows real PxGo 2560 CONNECT under stricter job-wide committed-memory cap
+    # Test-only: child Job Object total committed limit is stricter than its process cap.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test real PxGo under child-only job-wide commit limit and 2560 held CONNECT
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
+          PXGO_RESEARCH_CAPACITY_POLICY: r11
+          PXGO_CAPACITY_JOB_PROXY_2560: '1'
+          PXGO_CAPACITY_JOB_PROXY_JOBWIDE: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Exact R46 immutable SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsJobProxy2560Pressure$' -count=1 -v -timeout=130s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-real-pxgo-jobwide-2560.log
+          if ($LASTEXITCODE -ne 0) { throw 'R46 real PxGo job-wide native test failed' }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_OWN_JOBWIDE verified=true pid=[1-9][0-9]* job_cap=[1-9][0-9]* process_cap=[1-9][0-9]*')) {
+            throw 'Missing independent parent and live child job-wide cap readback'
+          }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_JOBWIDE_PROBE denied_bytes=[1-9][0-9]* recovered_bytes=4194304')) { throw 'Missing strict job-wide allocation denial plus recovery marker' }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_JOBWIDE_CONTROL allowed_bytes=[1-9][0-9]* cap_equal=true')) {
+            throw 'Missing SAME-allocation positive control after relaxing only job-wide cap'
+          }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_JOBWIDE_RESULT enforceable=true pid=[1-9][0-9]* held_connect=2560 completed_short=600 job_total_limit=[1-9][0-9]* process_limit=[1-9][0-9]* job_only_denied=[1-9][0-9]* recovered_bytes=4194304 same_allocation_control_succeeded=true')) {
+            throw 'Missing calibrated job-wide-only native allocation failure evidence'
+          }
+          if (-not (Select-String benchmarks/windows-real-pxgo-jobwide-2560.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) {
+            throw 'Missing complete real 2560+600 data-plane and drain gate'
+          }
+      - name: Preserve exact-SHA child-only native committed-memory log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-real-pxgo-jobwide-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-job-wide-memory-research:
+    name: Windows child Job Object total memory cap versus process cap
+    # JobMemoryLimit and ProcessMemoryLimit are independent constraints.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Prove process cap alone cannot reveal child job-wide committed memory limit
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_JOB_WIDE_MEMORY_PROBE: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R43 immutable SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsJobWideMemoryCap$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-job-wide-memory.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native JobMemoryLimit enforced failure / recovery test did not pass' }
+          if (-not (Select-String -Path benchmarks/windows-job-wide-memory.log -Pattern 'JOB_WIDE_RESULT enforceable=true pid=[1-9][0-9]* baseline_private=[1-9][0-9]* job_total_limit=[1-9][0-9]* process_limit=[1-9][0-9]* denied_commit=134217728 recovered_commit=4194304 after_private=[1-9][0-9]*')) {
+            throw 'Missing strict native job-wide-versus-process limit positive evidence'
+          }
+      - name: Preserve native Windows job-wide limit evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-child-jobwide-memory-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-real-pxgo-go-heap-hold:
+    name: Windows real PxGo Go heap held during 2560 CONNECT and 600 HTTP
+    # Go runtime-managed heap, child-only Job Object; NOT native VirtualAlloc ballast.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Retain 32MiB Go heap during 2560 held CONNECT and 600 HTTP then GC
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
+          PXGO_RESEARCH_CAPACITY_POLICY: r11
+          PXGO_CAPACITY_JOB_PROXY_2560: '1'
+          PXGO_CAPACITY_JOB_PROXY_GO_HEAP_HOLD: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R42 exact immutable SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsJobProxy2560Pressure$' -count=1 -v -timeout=130s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-real-go-heap-hold.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Go heap held pressure test failed' }
+          if (-not (Select-String -Path benchmarks/windows-real-go-heap-hold.log -Pattern 'JOB_PROXY_GO_HEAP_RESULT held_bytes=33554432 held_connect=2560 completed_short=600 heap_alloc_before=[0-9]+ heap_alloc_after_hold=[0-9]+ heap_alloc_during=[0-9]+ heap_alloc_after_gc=[0-9]+ process_private_held=[1-9][0-9]* hard_commit=[1-9][0-9]* released_gc=true')) {
+            throw 'Missing Go heap held/GC after genuine 2560+600 data path marker'
+          }
+          if (-not (Select-String -Path benchmarks/windows-real-go-heap-hold.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) {
+            throw 'Missing real PxGo 2560/600 Job Object quota + drain evidence'
+          }
+      - name: Preserve native Go heap pressure raw logs even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-pxgo-go-heap-hold-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-real-pxgo-global-memory-sensor-gap:
+    name: Windows real PxGo child Job Object versus host-global AUTO sensor
+    # Demonstrate native sensor overstatement under hard child-only Job cap.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Compare old host-global estimate with own-child Job committed budget
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
+          PXGO_RESEARCH_CAPACITY_POLICY: r11
+          PXGO_CAPACITY_JOB_PROXY_2560: '1'
+          PXGO_CAPACITY_JOB_PROXY_HOLD_COMMIT: '1'
+          PXGO_CAPACITY_JOB_PROXY_SENSOR_GAP: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R40 exact SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsJobProxy2560Pressure$' -count=1 -v -timeout=130s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-real-pxgo-sensor-gap.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows native child Job/sensor-gap test failed' }
+          if (-not (Select-String -Path benchmarks/windows-real-pxgo-sensor-gap.log -Pattern 'JOB_PROXY_SENSOR_GAP_RESULT child_job_commit_cap=[1-9][0-9]* child_private_bytes=[1-9][0-9]* job_equivalent_slots=[1-9][0-9]* global_sensor_reported_slots=[1-9][0-9]* global_exceeds_job=true')) { throw 'Host-global sensor overstatement not proved on native runner' }
+          if (-not (Select-String -Path benchmarks/windows-real-pxgo-sensor-gap.log -Pattern 'JOB_PROXY_SUSTAINED_COMMIT_RESULT held_bytes=67108864 completed_short=600 enforced=true')) { throw 'Sustained child commit data path not proved' }
+          if (-not (Select-String -Path benchmarks/windows-real-pxgo-sensor-gap.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) { throw 'Missing strict native 2560/600 physical drain' }
+      - name: Preserve native Windows sensor-gap raw logs even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-real-pxgo-sensor-gap-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-real-pxgo-sustained-commit:
+    name: Windows real PxGo 2560 CONNECT under sustained child commit ballast
+    # Native child-only +64MiB committed allocation while carrying 600 HTTP; never OS-global.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Enforce child hard cap, hold 64MiB, verify real 2560 plus 600 and release
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
+          PXGO_RESEARCH_CAPACITY_POLICY: r11
+          PXGO_CAPACITY_JOB_PROXY_2560: '1'
+          PXGO_CAPACITY_JOB_PROXY_HOLD_COMMIT: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R39 immutable SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsJobProxy2560Pressure$' -count=1 -v -timeout=130s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-real-pxgo-sustained-commit.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native held-commit resource test failed' }
+          if (-not (Select-String -Path benchmarks/windows-real-pxgo-sustained-commit.log -Pattern 'JOB_PROXY_OWN_JOBINFO verified=true child_pid=[1-9][0-9]* process_commit_limit=[1-9][0-9]*')) { throw 'Missing own job effective-cap marker' }
+          if (-not (Select-String -Path benchmarks/windows-real-pxgo-sustained-commit.log -Pattern 'JOB_PROXY_SUSTAINED_COMMIT_RESULT held_bytes=67108864 completed_short=600 enforced=true private_with_ballast=[1-9][0-9]* private_after_release=[1-9][0-9]* hard_commit=[1-9][0-9]*')) {
+            throw 'Missing sustained native child 64MiB ballast/release evidence'
+          }
+          if (-not (Select-String -Path benchmarks/windows-real-pxgo-sustained-commit.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) {
+            throw 'Missing strict 2560 real held CONNECT+600 HTTP result and final drain'
+          }
+      - name: Preserve native real PxGo committed-memory evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-real-pxgo-commit-ballast-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-nested-job-ancestor-commit-research:
+    name: Windows nested Job Object stricter ancestor commit limit (child-only)
+    # Research: immediate NULL-job query may hide stricter ancestor effective cap.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Verify child immediate-query does not hide ancestor enforcement
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_NESTED_JOB_ANCESTOR_PROBE: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R35 exact immutable SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsNestedAncestorCommitLimit$' -count=1 -v -timeout=70s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-nested-job-ancestor-commit.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native nested job ancestor commit/recovery gate failed' }
+          if (-not (Select-String -Path benchmarks/windows-nested-job-ancestor-commit.log -Pattern 'NESTED_JOB_RESULT enforced_root_stricter=true pid=[1-9][0-9]* baseline_private=[1-9][0-9]* ancestor_limit=[1-9][0-9]* immediate_query_limit=[1-9][0-9]* denied_commit=134217728 recovered_commit=4194304')) {
+            throw 'Missing real child nested Job Object ancestor limit evidence'
+          }
+      - name: Preserve raw exact-SHA nested native job evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-nested-job-ancestor-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-mixed-socket-isolation-research:
+    name: Windows isolated socket gate (${{ matrix.scenario }}, trial=${{ matrix.trial }})
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [r11_off_seed6_churn, fast_on_seed1_competing]
+        trial: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Exact native isolated failed-profile trial with TCP lifecycle diagnostics
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          SCENARIO: ${{ matrix.scenario }}
+          TRIAL: ${{ matrix.trial }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_CAPACITY_MIXED_BENCH: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Exact R34 SHA mismatch' }
+          @('scenario=' + $env:SCENARIO, 'trial=' + $env:TRIAL, 'exact_sha=' + $env:EXPECTED_SHA) | Set-Content benchmarks/trial-metadata.txt
+          netsh int ipv4 show dynamicport tcp 2>&1 | Out-File benchmarks/port-range-before.txt
+          (Get-NetTCPConnection -ErrorAction SilentlyContinue | Group-Object State |
+            ForEach-Object { 'state=' + $_.Name + ' count=' + $_.Count }) | Out-File benchmarks/tcp-states-before.txt
+          try {
+            if ($env:SCENARIO -eq 'r11_off_seed6_churn') {
+              $env:PXGO_CAPACITY_MIX_SEED = '6'
+              $env:PXGO_RESEARCH_CAPACITY_POLICY = 'r11'
+              $env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES = '0'
+              $env:PXGO_CAPACITY_MIX_PROFILE = 'churn'
+              go test ./internal/proxy -run '^TestCapacityMixedTrafficBench/churn$' -count=1 -v -timeout=115s 2>&1 |
+                Tee-Object -FilePath benchmarks/isolated-mixed-test.log
+              if ($LASTEXITCODE -ne 0) { throw 'R11 OFF seed6 strict isolated churn failed; no waiver' }
+              if (-not (Select-String benchmarks/isolated-mixed-test.log -Pattern 'MIXED_RESULT profile=churn seed=6 held_long_connect=449 .* short_attempted=1404 short_completed=1404')) {
+                throw 'Missing complete native seed6 churn positive data-plane result'
+              }
+            } elseif ($env:SCENARIO -eq 'fast_on_seed1_competing') {
+              $env:PXGO_CAPACITY_MIX_SEED = '1'
+              $env:PXGO_RESEARCH_CAPACITY_POLICY = 'fast_saturation'
+              $env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES = '1'
+              go test ./internal/proxy -run '^TestCapacityMixedCompetingAdmission$' -count=1 -v -timeout=115s 2>&1 |
+                Tee-Object -FilePath benchmarks/isolated-mixed-test.log
+              if ($LASTEXITCODE -ne 0) { throw 'FAST ON seed1 strict isolated competing admission failed; no waiver' }
+              if (-not (Select-String benchmarks/isolated-mixed-test.log -Pattern 'MIXED_COMPETE_RESULT seed=1 long_attempted=320 long_admitted=320 short_attempted=448 short_completed=448')) {
+                throw 'Missing complete native seed1 competing positive result'
+              }
+            } else {
+              throw 'Unsupported native socket reproduction scenario'
+            }
+          } finally {
+            (Get-NetTCPConnection -ErrorAction SilentlyContinue | Group-Object State |
+              ForEach-Object { 'state=' + $_.Name + ' count=' + $_.Count }) | Out-File benchmarks/tcp-states-after.txt
+            netsh int ipv4 show dynamicport tcp 2>&1 | Out-File benchmarks/port-range-after.txt
+            try {
+              Get-WinEvent -FilterHashtable @{LogName='System'; ID=4227,4231; StartTime=(Get-Date).AddMinutes(-15)} -MaxEvents 20 -ErrorAction Stop |
+                Format-List TimeCreated,Id,ProviderName,Message | Out-File benchmarks/tcp-recent-events.txt
+            } catch {
+              'No readable matching Event IDs in last 15 min: ' + $_.Exception.Message | Out-File benchmarks/tcp-recent-events.txt
+            }
+          }
+      - name: Preserve exact SHA Windows TCP diagnostic artifacts on success and failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-socket-isolated-${{ matrix.scenario }}-${{ matrix.trial }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-job-proxy-2560-matrix:
+    name: Windows real PxGo quota (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, trial=${{ matrix.trial }})
+    # Each policy/class/trial on a fresh native Windows VM; descriptive, unpaired.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: [r11, fast_saturation]
+        class_mode: ['0', '1']
+        trial: [0, 1]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run exact-SHA native 2560-held real proxy hard-commit quota scenario
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_CAPACITY_JOB_PROXY_2560: '1'
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode }}
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+          PXGO_CAPACITY_JOB_PROXY_TRIAL: ${{ matrix.trial }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'R32 immutable SHA mismatch' }
+          Write-Output ('MATRIX_META policy=' + $env:PXGO_RESEARCH_CAPACITY_POLICY + ' classes=' + $env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES + ' trial=' + $env:PXGO_CAPACITY_JOB_PROXY_TRIAL)
+          go test ./internal/proxy -run TestCapacityWindowsJobProxy2560Pressure -count=1 -v -timeout=130s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-job-proxy-matrix.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows 2560 real proxy quota trial failed' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-matrix.log -Pattern 'JOB_PROXY_MATRIX_META policy=')) { throw 'Missing source trial provenance' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-matrix.log -Pattern 'JOB_PROXY_OWN_JOBINFO verified=true child_pid=[1-9][0-9]* process_commit_limit=[1-9][0-9]*')) { throw 'Child itself did not prove Job Object cap' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-matrix.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) {
+            throw 'Missing genuine native quota/held-connection positive marker'
+          }
+      - name: Preserve per-trial Windows raw logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-real-proxy-quota-${{ matrix.policy }}-${{ matrix.class_mode }}-${{ matrix.trial }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-job-proxy-cleanup-negative:
+    name: Windows real PxGo child Job Object injected-failure cleanup
+    # Fresh runner avoids TIME_WAIT carryover from normal 2560-pressure probe.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Inject failure after 2560 held connections and prove child+echo teardown
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_CAPACITY_JOB_PROXY_CLEANUP_TEST: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Exact R31 SHA mismatch' }
+          go test ./internal/proxy -run TestCapacityWindowsJobProxyForcedFailureCleanup -count=1 -v -timeout=65s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-job-proxy-cleanup-negative.log
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated negative 2560 cleanup test failed' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-cleanup-negative.log -Pattern 'JOB_PROXY_CLEANUP_NEGATIVE expected_injected_failure=true clean_child_exit=true echo_joined=true')) {
+            throw 'Missing strict real PxGo 2560 negative teardown marker'
+          }
+      - name: Preserve native failed-path cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-pxgo-job-cleanup-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-job-object-proxy-2560-research:
+    name: Windows real PxGo 2560 CONNECT under child commit quota
+    # Experimental test-only separate child, no production memory policy.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Native child-PID quota with 2560 held CONNECT plus 600 short HTTP
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
+          PXGO_RESEARCH_CAPACITY_POLICY: r11
+          PXGO_CAPACITY_JOB_PROXY_2560: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Exact R29 SHA mismatch' }
+          go test ./internal/proxy -run TestCapacityWindowsJobProxy2560Pressure -count=1 -v -timeout=130s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-job-proxy-2560.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native real PxGo quota test failed' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-2560.log -Pattern 'JOB_PROXY_OWN_JOBINFO verified=true child_pid=[1-9][0-9]* process_commit_limit=[1-9][0-9]*')) { throw 'Child itself did not prove Job Object cap' }
+          if (-not (Select-String -Path benchmarks/windows-job-proxy-2560.log -Pattern 'JOB_PROXY_2560_RESULT enforceable=true pid=[1-9][0-9]* held=2560 completed_short=600 denied_bytes=268435456 recovered_bytes=4194304 .* physical_after=0')) {
+            throw 'Native positive result missing'
+          }
+      - name: Preserve real-PxGo quota logs on success or failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-real-pxgo-quota-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  windows-job-object-pressure-research:
+    name: Windows Job Object process-commit pressure (isolated child)
+    # A strict test-only OS feasibility gate on a fresh native VM. Do NOT
+    # treat success as production PxGo memory-budget calibration/recovery.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Enforce process commit limit on isolated child, deny, recover
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          PXGO_CAPACITY_JOB_PRESSURE: '1'
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable R26 SHA mismatch' }
+          go test ./internal/proxy -run '^TestCapacityWindowsJobObjectCommitPressure$' -count=1 -v -timeout=55s 2>&1 |
+            Tee-Object -FilePath benchmarks/windows-job-object-commit.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native Job Object hard-commit pressure or recovery failed' }
+          if (-not (Select-String -Path benchmarks/windows-job-object-commit.log -Pattern 'JOB_OBJECT_RESULT enforceable=true child_pid=[1-9][0-9]* .* denied_commit_bytes=268435456 recovery_commit_bytes=4194304')) {
+            throw 'Missing real Windows hard memory enforcement and recovery evidence'
+          }
+      - name: Preserve native Job Object evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-job-object-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
+  capacity-order-balanced-evidence:
+    name: Capacity paired order-balance evidence audit
+    # Validate the *pinned* R20 native Windows measurement replay; R22 only
+    # computes a noncausal descriptive order-balanced analysis, never fabricates
+    # fresh native Windows measurements from a Python script.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify exact candidate SHA and adversarial data fixtures
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python3 -m unittest discover -s scripts -p 'analyze_capacity_crossover_test.py' -v
+      - name: Recompute and compare pinned R20 cross-order report
+        shell: bash
+        run: |
+          set -euo pipefail
+          output="$(mktemp)"
+          trap 'rm -f "$output"' EXIT
+          python3 scripts/analyze-capacity-crossover.py \
+            --input docs/research/2026-10-26-r20-native-windows-paired-replay.csv \
+            --expected-sha 22d05d66d06538c1e00cd4b6d9474be6a36c7a49 \
+            --output "$output"
+          cmp -- "$output" docs/research/2026-10-27-r22-order-balanced-study.json
+
+  windows-paired-policy-research:
+    name: Windows paired (${{ matrix.profile }}, classes=${{ matrix.class_mode }}, seed=${{ matrix.seed }}, order=${{ matrix.order }})
+    # Controlled same-runner paired R11 versus fast-saturation. Previous
+    # independent-VM matrix reported policy-dependent p95 distributions but
+    # did not provide a comparable-host causal comparison. Run both policies
+    # as separate processes on ONE immutable Windows VM, same exact seed,
+    # same profile and Go test binary; reverse order by seed parity.
+    # Fully cross each SAME seed with BOTH orders on separate fresh VMs,
+    # rather than confounding policy order and offered-load seed parity.
+    # Keep only two matched workloads per fresh VM to limit native Windows
+    # loopback ephemeral-port/TIME_WAIT contamination. No PASS waiver.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 16
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        profile: [short_heavy, balanced, long_heavy, churn]
+        class_mode: [off, 'on']
+        seed: [0, 1]
+        order: [r11_first, fast_first]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Compile immutable paired test binary and identify runner
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Exact-SHA checkout mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/runner.txt
+          "go=$(go version)" | Add-Content benchmarks/runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/runner.txt
+          "cpu_count=$([Environment]::ProcessorCount)" | Add-Content benchmarks/runner.txt
+          "python=$(python --version 2>&1)" | Add-Content benchmarks/runner.txt
+          "profile=${{ matrix.profile }} seed=${{ matrix.seed }} classes=${{ matrix.class_mode }} order=${{ matrix.order }}" | Add-Content benchmarks/runner.txt
+          go test ./internal/proxy -c -o benchmarks/capacity-paired.test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Exact-SHA native Windows test build failed' }
+          # Exercise the compiled binary's real Go flags before any workload.
+          & .\benchmarks\capacity-paired.test.exe '-test.list=^TestCapacityMixedTrafficBench$' > benchmarks/test-list.txt
+          if ($LASTEXITCODE -ne 0 -or -not (Select-String -Path benchmarks/test-list.txt -Pattern '^TestCapacityMixedTrafficBench$')) {
+            throw 'Native compiled Go test flag preflight failed'
+          }
+          netsh interface ipv4 show dynamicport tcp 2>&1 | Out-File benchmarks/ephemeral-before.txt
+      - name: Validate paired log parser negative fixtures
+        shell: pwsh
+        run: |
+          python -m unittest discover -s scripts -p 'verify_capacity_pair_test.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Strict paired-log validator negative tests failed' }
+      - name: Same-host paired HTTP/CONNECT p95, p99 and throughput
+        shell: pwsh
+        env:
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.class_mode == 'on' && '1' || '0' }}
+          PXGO_CAPACITY_MIXED_BENCH: '1'
+          PXGO_CAPACITY_MIX_PROFILE: ${{ matrix.profile }}
+          PXGO_CAPACITY_MIX_SEED: ${{ matrix.seed }}
+        run: |
+          $policies = @('r11', 'fast_saturation')
+          if ('${{ matrix.order }}' -eq 'fast_first') { $policies = @('fast_saturation', 'r11') }
+          foreach ($policy in $policies) {
+            $env:PXGO_RESEARCH_CAPACITY_POLICY = $policy
+            $timewaitBefore = try { @(Get-NetTCPConnection -State TimeWait -ErrorAction Stop).Count } catch { -1 }
+            "PAIR_POLICY profile=${{ matrix.profile }} class=${{ matrix.class_mode }} seed=${{ matrix.seed }} policy=$policy timewait_before=$timewaitBefore" |
+              Add-Content benchmarks/paired-order.txt
+            # Quoted, full Go flags are required when invoking a native .exe
+            # from PowerShell. Original unquoted `-test.run` was split into
+            # `-test`, which made all R17 Windows paired jobs fail at startup.
+            $testArgs = @('-test.run=^TestCapacityMixedTrafficBench$', '-test.v=true', '-test.count=1', '-test.timeout=95s')
+            & .\benchmarks\capacity-paired.test.exe @testArgs 2>&1 |
+              Tee-Object -FilePath "benchmarks/paired-$policy.log"
+            if ($LASTEXITCODE -ne 0) { throw "Paired profile failed: $policy" }
+          }
+          # Parse and compare complete typed measurements, not just a PASS
+          # line or an unbound short count. The stdlib-only validator contains
+          # negative fixtures and is itself tested in a separate step.
+          python scripts/verify-capacity-pair.py `
+            --profile '${{ matrix.profile }}' --seed '${{ matrix.seed }}' `
+            --classes '${{ matrix.class_mode }}' --order '${{ matrix.order }}' `
+            --order-log benchmarks/paired-order.txt `
+            --r11 benchmarks/paired-r11.log `
+            --fast benchmarks/paired-fast_saturation.log `
+            --output benchmarks/paired-evidence.json
+          if ($LASTEXITCODE -ne 0) { throw 'Matched workload evidence is missing, malformed or unequal' }
+      - name: Diagnose native Windows TCP state after paired runs
+        if: always()
+        shell: pwsh
+        run: |
+          try {
+            $tcp = @(Get-NetTCPConnection -ErrorAction Stop)
+            $tcp | Group-Object State | Sort-Object Name |
+              ForEach-Object { "state=$($_.Name) count=$($_.Count)" } |
+              Out-File benchmarks/ephemeral-after.txt
+          } catch {
+            "TCP_STATE_UNAVAILABLE: $($_.Exception.Message)" | Out-File benchmarks/ephemeral-after.txt
+          }
+      - name: Preserve paired evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-paired-${{ matrix.profile }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ matrix.order }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            benchmarks/*.txt
+            benchmarks/*.json
+          retention-days: 14
+      - name: Preserve paired raw logs even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-paired-logs-${{ matrix.profile }}-${{ matrix.class_mode }}-seed-${{ matrix.seed }}-${{ matrix.order }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/*.log
+          retention-days: 14
+
+  windows-isolated-process-capacity:
+    name: Windows isolated proxy (${{ matrix.policy }}, classes=${{ matrix.classes }}, seed=${{ matrix.seed }})
+    # Proxy-only private commit/RSS/handle/CPU. Distinct child PID, separate
+    # client+upstream parent; never infer these values from co-located heap.
+    # Seed 3 measures 2,560 real held CONNECTs plus 600 short HTTP on a
+    # dedicated fresh Windows VM, not an extrapolation from 256–384.
+    if: github.event_name == 'pull_request' && github.head_ref == 'experiment/capacity-two-class-windows-20261023'
+    runs-on: windows-latest
+    timeout-minutes: 14
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        policy: [r11, fast_saturation]
+        classes: [off, 'on']
+        seed: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Immutable SHA and Windows identity
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_SHA) { throw 'Immutable HEAD mismatch' }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/isolated-runner.txt
+          "go=$(go version)" | Add-Content benchmarks/isolated-runner.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/isolated-runner.txt
+          "logical_cpu=$([Environment]::ProcessorCount)" | Add-Content benchmarks/isolated-runner.txt
+          Get-Content benchmarks/isolated-runner.txt
+      - name: Real mixed-load with native process-private resource accounting
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_ISOLATED_BENCH: '1'
+          PXGO_CAPACITY_ISOLATED_SEED: ${{ matrix.seed }}
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.classes == 'on' && '1' || '0' }}
+          PXGO_RESEARCH_CAPACITY_POLICY: ${{ matrix.policy }}
+        run: |
+          go test ./internal/proxy -run '^TestCapacityIsolatedProcessResourceBench$' -count=1 -v -timeout=110s 2>&1 |
+            Tee-Object -FilePath benchmarks/isolated-proxy-process.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native isolated PXGO process or resource gate failed' }
+          if (-not (Select-String -Path benchmarks/isolated-proxy-process.log -Pattern 'ISOLATED_RESULT platform=windows' -Quiet)) {
+            throw 'Required native Windows process-private metric row is absent'
+          }
+          if ($env:PXGO_EXPERIMENTAL_CONNECTION_CLASSES -eq '1' -and $env:PXGO_CAPACITY_ISOLATED_SEED -eq '0') {
+            $env:PXGO_CAPACITY_ISOLATED_CLEANUP_TEST = '1'
+            go test ./internal/proxy -run '^TestCapacityIsolatedForcedFailureCleanup$' -count=1 -v -timeout=25s 2>&1 |
+              Tee-Object -FilePath benchmarks/isolated-negative-cleanup.log
+            if ($LASTEXITCODE -ne 0) { throw 'Real early-failure socket cleanup/deadlock gate failed' }
+          }
+      - name: Capture Winsock port and socket-state diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          try { netsh int ipv4 show dynamicport tcp 2>&1 | Out-String | Set-Content benchmarks/windows-tcp-dynamic-range.txt } catch { "netsh unavailable: $_" | Set-Content benchmarks/windows-tcp-dynamic-range.txt }
+          try {
+            Get-NetTCPConnection -ErrorAction Stop |
+              Group-Object State | Sort-Object Name |
+              Select-Object Name,Count | Format-Table -AutoSize | Out-String |
+              Set-Content benchmarks/windows-tcp-state-counts.txt
+          } catch { "TCP states unavailable: $_" | Set-Content benchmarks/windows-tcp-state-counts.txt }
+      - name: Preserve SHA-qualified isolated process evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-isolated-${{ matrix.policy }}-${{ matrix.classes }}-seed-${{ matrix.seed }}-${{ github.event.pull_request.head.sha }}
+          path: benchmarks/
+          retention-days: 14
+
   windows-native-sspi:
     name: Native Windows SSPI gate
     if: github.event_name == 'workflow_dispatch' && inputs.native_sspi

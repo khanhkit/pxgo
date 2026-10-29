@@ -1,0 +1,197 @@
+{
+  "balanced_strata_favor_fast": 3,
+  "balanced_strata_favor_r11": 13,
+  "balanced_stratum_mean_ms": 15.3545,
+  "balanced_stratum_median_ms": 11.0637,
+  "fast_minus_r11_delta_positive_means": "lower HTTP offered p95 for R11",
+  "interpretation": "observational paired cross-host order balancing; NOT an identifiable causal policy effect",
+  "limitations": [
+    "Execution orders run on different GitHub-hosted Windows VMs",
+    "Same-VM first-versus-second trial inherits TIME_WAIT and port-state carryover",
+    "Only two seeds per profile and class; 16 order-balanced strata",
+    "Descriptive percentile-bootstrap sensitivity is conditional on the observed strata/resampling scheme, not a production confidence interval; it cannot remove VM, order, temporal or measurement bias",
+    "R20 raw provenance independently validated by strict R21 parser; this script validates the pinned derived CSV, not remote raw job logs"
+  ],
+  "mean_half_order_contrast_ms": 17.1513,
+  "median_half_order_contrast_ms": 12.9506,
+  "original_unadjusted_pair_median_ms": 7.866,
+  "provenance": {
+    "complete_profile_class_seed_strata": 16,
+    "csv_digest_scope": "tamper-evident local replay only; native Windows raw-log provenance independently audited at R21",
+    "pinned_r20_csv_sha256": "82b0a1c9c48a315c6ad6e0a60dfe3df15702f0737cedfec1f9f21ffc179e8386",
+    "raw_rows": 32,
+    "run_id": "40220215522",
+    "source_sha": "22d05d66d06538c1e00cd4b6d9474be6a36c7a49",
+    "unique_job_ids": 32
+  },
+  "strata": [
+    {
+      "classes": "off",
+      "fast_first_job_id": "121249964056",
+      "half_order_contrast_ms": 4.8144,
+      "offered_requests": 480,
+      "order_balanced_delta_ms": 5.2289,
+      "profile": "short_heavy",
+      "r11_first_job_id": "121249964115",
+      "seed": 0
+    },
+    {
+      "classes": "off",
+      "fast_first_job_id": "121249964425",
+      "half_order_contrast_ms": 39.8987,
+      "offered_requests": 558,
+      "order_balanced_delta_ms": 26.7432,
+      "profile": "short_heavy",
+      "r11_first_job_id": "121249964560",
+      "seed": 1
+    },
+    {
+      "classes": "on",
+      "fast_first_job_id": "121249963958",
+      "half_order_contrast_ms": 82.5984,
+      "offered_requests": 480,
+      "order_balanced_delta_ms": 88.2871,
+      "profile": "short_heavy",
+      "r11_first_job_id": "121249964220",
+      "seed": 0
+    },
+    {
+      "classes": "on",
+      "fast_first_job_id": "121249964541",
+      "half_order_contrast_ms": -0.2022,
+      "offered_requests": 558,
+      "order_balanced_delta_ms": -8.3818,
+      "profile": "short_heavy",
+      "r11_first_job_id": "121249964031",
+      "seed": 1
+    },
+    {
+      "classes": "off",
+      "fast_first_job_id": "121249964007",
+      "half_order_contrast_ms": 9.9991,
+      "offered_requests": 480,
+      "order_balanced_delta_ms": 10.4614,
+      "profile": "balanced",
+      "r11_first_job_id": "121249964095",
+      "seed": 0
+    },
+    {
+      "classes": "off",
+      "fast_first_job_id": "121249964539",
+      "half_order_contrast_ms": 24.6771,
+      "offered_requests": 558,
+      "order_balanced_delta_ms": 19.923,
+      "profile": "balanced",
+      "r11_first_job_id": "121249964198",
+      "seed": 1
+    },
+    {
+      "classes": "on",
+      "fast_first_job_id": "121249964151",
+      "half_order_contrast_ms": -2.5116,
+      "offered_requests": 480,
+      "order_balanced_delta_ms": 14.5801,
+      "profile": "balanced",
+      "r11_first_job_id": "121249964468",
+      "seed": 0
+    },
+    {
+      "classes": "on",
+      "fast_first_job_id": "121249964084",
+      "half_order_contrast_ms": 1.0553,
+      "offered_requests": 558,
+      "order_balanced_delta_ms": -16.6481,
+      "profile": "balanced",
+      "r11_first_job_id": "121249964548",
+      "seed": 1
+    },
+    {
+      "classes": "off",
+      "fast_first_job_id": "121249965551",
+      "half_order_contrast_ms": 21.537,
+      "offered_requests": 200,
+      "order_balanced_delta_ms": 0.7964,
+      "profile": "long_heavy",
+      "r11_first_job_id": "121249965498",
+      "seed": 0
+    },
+    {
+      "classes": "off",
+      "fast_first_job_id": "121249965584",
+      "half_order_contrast_ms": 7.3394,
+      "offered_requests": 232,
+      "order_balanced_delta_ms": 17.59,
+      "profile": "long_heavy",
+      "r11_first_job_id": "121249965592",
+      "seed": 1
+    },
+    {
+      "classes": "on",
+      "fast_first_job_id": "121249965704",
+      "half_order_contrast_ms": 15.9022,
+      "offered_requests": 200,
+      "order_balanced_delta_ms": 11.666,
+      "profile": "long_heavy",
+      "r11_first_job_id": "121249965878",
+      "seed": 0
+    },
+    {
+      "classes": "on",
+      "fast_first_job_id": "121249965886",
+      "half_order_contrast_ms": 21.7956,
+      "offered_requests": 232,
+      "order_balanced_delta_ms": -2.5219,
+      "profile": "long_heavy",
+      "r11_first_job_id": "121249965742",
+      "seed": 1
+    },
+    {
+      "classes": "off",
+      "fast_first_job_id": "121249966099",
+      "half_order_contrast_ms": 29.1078,
+      "offered_requests": 960,
+      "order_balanced_delta_ms": 23.2223,
+      "profile": "churn",
+      "r11_first_job_id": "121249965906",
+      "seed": 0
+    },
+    {
+      "classes": "off",
+      "fast_first_job_id": "121249967156",
+      "half_order_contrast_ms": -9.33,
+      "offered_requests": 1116,
+      "order_balanced_delta_ms": 53.2321,
+      "profile": "churn",
+      "r11_first_job_id": "121249967110",
+      "seed": 1
+    },
+    {
+      "classes": "on",
+      "fast_first_job_id": "121249967285",
+      "half_order_contrast_ms": -1.2219,
+      "offered_requests": 960,
+      "order_balanced_delta_ms": 0.3615,
+      "profile": "churn",
+      "r11_first_job_id": "121249967187",
+      "seed": 0
+    },
+    {
+      "classes": "on",
+      "fast_first_job_id": "121249967261",
+      "half_order_contrast_ms": 28.9609,
+      "offered_requests": 1116,
+      "order_balanced_delta_ms": 1.1311,
+      "profile": "churn",
+      "r11_first_job_id": "121249967306",
+      "seed": 1
+    }
+  ],
+  "uncertainty": {
+    "mean_95pct_interval_ms": [
+      4.8437,
+      26.9061
+    ],
+    "method": "conditional descriptive percentile-bootstrap sensitivity, profile-stratified; not causal",
+    "samples": 10000
+  }
+}

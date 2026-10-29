@@ -13,6 +13,7 @@ const (
 	pxgoVia          = "1.1 pxgo"
 	headerConnection = "Connection"
 	headerKeepAlive  = "Keep-Alive"
+	headerUpgrade    = "Upgrade"
 )
 
 var fixedHopByHopHeaders = []string{
@@ -21,7 +22,7 @@ var fixedHopByHopHeaders = []string{
 	"Proxy-Connection",
 	"TE",
 	"Transfer-Encoding",
-	"Upgrade",
+	headerUpgrade,
 }
 
 func stripIntermediaryHeaders(header http.Header, stripProxyAuth bool) {
@@ -114,13 +115,40 @@ func (s *Server) writeHTTPResponse(rw http.ResponseWriter, resp *http.Response) 
 	}
 	copyHeader(rw.Header(), header)
 	rw.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(rw, resp.Body)
+	// SSE is determined by the actual upstream response, not a client's
+	// Accept prediction. Flush the headers and each returned body chunk:
+	// io.Copy alone buffers short events until a later chunk or EOF.
+	destination := io.Writer(rw)
+	if isSSEMediaType(resp.Header.Get("Content-Type")) {
+		if flusher, ok := rw.(http.Flusher); ok {
+			flusher.Flush()
+			destination = sseFlushingWriter{writer: rw, flusher: flusher}
+		}
+	}
+	_, _ = io.Copy(destination, resp.Body)
 	for key, values := range resp.Trailer {
 		rw.Header().Del(key)
 		for _, value := range values {
 			rw.Header().Add(key, value)
 		}
 	}
+}
+
+// sseFlushingWriter pushes each upstream SSE chunk without waiting for EOF.
+type sseFlushingWriter struct {
+	writer  io.Writer
+	flusher http.Flusher
+}
+
+func (w sseFlushingWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	w.flusher.Flush()
+	return n, err
+}
+
+// isSSEMediaType matches actual response media type including parameters.
+func isSSEMediaType(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(strings.SplitN(value, ";", 2)[0]), "text/event-stream")
 }
 
 func (s *Server) handleHTTPUpgrade(rw http.ResponseWriter, req *http.Request, resp *http.Response) {

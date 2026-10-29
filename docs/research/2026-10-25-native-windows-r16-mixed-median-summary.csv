@@ -1,0 +1,17 @@
+profile,policy,classes,n,median_offered_p95_ms,median_short_rps
+balanced,r11,off,8,182.4,3042.4
+balanced,r11,on,8,128.2,4826.2
+balanced,fast_saturation,off,8,214.6,2404.4
+balanced,fast_saturation,on,8,207.8,2668.5
+churn,r11,off,8,501.7,2174.5
+churn,r11,on,8,337.8,3149.9
+churn,fast_saturation,off,8,520.2,2564.1
+churn,fast_saturation,on,8,521,1993.3
+long_heavy,r11,off,8,96.3,2395.1
+long_heavy,r11,on,8,74.7,3345.6
+long_heavy,fast_saturation,off,8,96.3,2221.2
+long_heavy,fast_saturation,on,8,97.2,2213.9
+short_heavy,r11,off,8,216.7,2601.7
+short_heavy,r11,on,8,151.6,3995.1
+short_heavy,fast_saturation,off,8,217.1,2568.9
+short_heavy,fast_saturation,on,8,178.6,2988.7

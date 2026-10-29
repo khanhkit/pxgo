@@ -1,0 +1,15 @@
+# PxGo R51 — Opt-in strict long-intake guard (NONDEPLOYED STAGING)
+
+As of 2026-10-28 ICT. Proposed parent PR#103 R50 exact SHA d0dcbfccdb709afb102725daff20492012daa1ca, PR#102 fb2aa923a753309dae515fc8be38112f45fbddc8. Both OPEN DRAFT, not merged; no release/default change.
+
+Source from pre-existing separate staging capacity-r49-long-intake-guard-20261028-1819, where R49 is a LOCAL stage title, not GitHub R49 native-errno work. Five files proposed: capacity_classes.go, capacity.go, proxy.go, diagnostic/snapshot.go, capacity_classes_test.go; new extra test added ONLY in this session-owned R51 staging. No direct original checkout modification.
+
+Experimental flag PXGO_EXPERIMENTAL_STRICT_LONG_INTAKE=1 is accepted only with AUTO mode and class accounting enabled; invalid combos cause server creation failure. After HTTP client authentication, a fresh explicit CONNECT/WebSocket/SSE request that would take long classes over 75% of the CURRENT R48 effective physical window receives HTTP 503, Connection: close, Retry-After:1 BEFORE outbound long tunnel admission. It uses existing single global permit, no extra admission semaphore. Existing long sessions never evicted; age/8-request short-to-long promotion may incur long debt. Diagnostic class_pools.long_intake_denied records rejected requests.
+
+New deterministic TestStrictLongIntakeBudgetShrinkOutstandingProvisional: 16 previously admitted class leases (12 long, 4 provisional), then physical cap shrinks to 8, class quota long=6, long debt=6, existing long preserved; deny new explicit long request on an existing provisional, allow HTTP short, drain 8 long and verify debt zero, then allow a different preexisting provisional to upgrade; all leases drain to zero. This is synthetic class accounting, NOT a full on-wire cap-shrink E2E test.
+
+Verified in independent disposable clone exact R50 SHA: 300 repeated targeted strict-long tests PASS; full golangci-lint run PASS, full go test ./... PASS, go vet ./... PASS, Windows amd64 CGO0 crosscompile PASS, gofmt and git diff --check PASS. Exact staging source blob SHA checks required before any GitHub CAS update. R50 exact SHA GitHub Actions run 40719237819 attempt1 COMPLETED SUCCESS; all 130 jobs paginated: 128 SUCCESS + 2 conditional SKIPPED + 0 failed/nonterminal. Its parent R49 historical source/CI FAILED Ubuntu goconst; do not erase or conflate the two attempts.
+
+CRITICAL SCOPE: Guard does not guarantee short liveness when physical H is full of long/provisional/aged short; classification occurs after TCP Accept and auth. Preauth slowloris and long debt can defeat strict short reservation. It is opt-in research only, NOT a production fair scheduler. No configured default change or merge/release. Existing Windows 2,560 all-long tests must run with flag OFF, new tests explicitly opt in.
+
+Independent strict READ-ONLY KitAuditor is NOT available: KitControl lifecycle bridge exit2 in dry-run, no actual post-R22 verdict. Protected enterprise AD/SSPI conditional skipped; natural Go heap/Job Object OOM handling, nested effective limit runtime sensor, WAN and Linux PSI missing. Release blocked; both PRs Draft.

@@ -1,0 +1,81 @@
+{
+  "all": {
+    "n": 32,
+    "median_delta_ms": 7.866,
+    "fast_better": 12,
+    "r11_better": 20,
+    "equal": 0,
+    "median_delta_rps": -149.09
+  },
+  "order": {
+    "r11_first": {
+      "n": 16,
+      "median_delta_ms": 23.631,
+      "fast_better": 3,
+      "r11_better": 13,
+      "equal": 0,
+      "median_delta_rps": -516.66
+    },
+    "fast_first": {
+      "n": 16,
+      "median_delta_ms": -4.495,
+      "fast_better": 9,
+      "r11_better": 7,
+      "equal": 0,
+      "median_delta_rps": 58.58
+    }
+  },
+  "classes": {
+    "on": {
+      "n": 16,
+      "median_delta_ms": 0.361,
+      "fast_better": 8,
+      "r11_better": 8,
+      "equal": 0,
+      "median_delta_rps": 26.2
+    },
+    "off": {
+      "n": 16,
+      "median_delta_ms": 15.356,
+      "fast_better": 4,
+      "r11_better": 12,
+      "equal": 0,
+      "median_delta_rps": -284.26
+    }
+  },
+  "profile": {
+    "short_heavy": {
+      "n": 8,
+      "median_delta_ms": 3.052,
+      "fast_better": 3,
+      "r11_better": 5,
+      "equal": 0,
+      "median_delta_rps": -90.88
+    },
+    "balanced": {
+      "n": 8,
+      "median_delta_ms": 6.265,
+      "fast_better": 3,
+      "r11_better": 5,
+      "equal": 0,
+      "median_delta_rps": -87.48
+    },
+    "long_heavy": {
+      "n": 8,
+      "median_delta_ms": 14.762,
+      "fast_better": 3,
+      "r11_better": 5,
+      "equal": 0,
+      "median_delta_rps": -401.89
+    },
+    "churn": {
+      "n": 8,
+      "median_delta_ms": 15.838,
+      "fast_better": 3,
+      "r11_better": 5,
+      "equal": 0,
+      "median_delta_rps": -72.85
+    }
+  },
+  "evidence": "Extracted 64 original MIXED_RESULT rows from all 32 completed exact R20 GitHub Windows paired job logs; all replayed through R21 strict parser in isolated staging; assumes published native job PASS and the R20 validator separately verified actual order and TIME_WAIT manifest, not replayed here."
+}

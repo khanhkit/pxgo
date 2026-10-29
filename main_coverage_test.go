@@ -479,11 +479,17 @@ func TestGuardianAutoApplyFailureRestartsHealthyWorker(t *testing.T) {
 			t.Fatal("failed apply started before first worker stopped")
 		}
 	}
-	if err := runGuardianAutoUpdateLoop(ctx, guardian.CommandSpec{}, config.Config{UpdateInterval: time.Millisecond}, pxupdate.AutoInstall, fake); err != nil {
+	// The immediate first update is provided by autoUpdateInitialDelayFunc above.
+	// A 1ms retry raced the restarted worker and could trigger a second apply,
+	// consuming the single firstStopped signal and spuriously failing the test.
+	if err := runGuardianAutoUpdateLoop(ctx, guardian.CommandSpec{}, config.Config{UpdateInterval: time.Hour}, pxupdate.AutoInstall, fake); err != nil {
 		t.Fatalf("loop error=%v", err)
 	}
-	if starts < 2 {
-		t.Fatalf("guardian starts=%d want restart after apply failure", starts)
+	if fake.checkCalls != 1 || fake.updateCalls != 1 {
+		t.Fatalf("prepare calls=%d apply calls=%d want exactly one failed attempt", fake.checkCalls, fake.updateCalls)
+	}
+	if starts != 2 {
+		t.Fatalf("guardian starts=%d want exactly two (initial and healthy restart)", starts)
 	}
 }
 

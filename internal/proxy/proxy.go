@@ -123,6 +123,9 @@ func New(cfg config.Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if experimentalStrictLongIntakeEnabled() && (capacityMode != modeAuto || !experimentalConnectionClassesEnabled()) {
+		return nil, errors.New("strict long-intake experiment requires AUTO mode with connection classes enabled")
+	}
 	if err := validateServerBudgetsForMode(cfg, capacityMode); err != nil {
 		return nil, err
 	}
@@ -518,6 +521,12 @@ func (s *Server) Start() error {
 		ReadTimeout:       sockTimeout,
 		WriteTimeout:      configuredWriteTimeout(s.cfg),
 		IdleTimeout:       time.Duration(s.cfg.Idle) * time.Second,
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			if admission, ok := conn.(*admissionConn); ok && admission.classification != nil {
+				return context.WithValue(ctx, connectionClassContextKey{}, admission.classification)
+			}
+			return ctx
+		},
 		ConnState: func(conn net.Conn, state http.ConnState) {
 			if state == http.StateClosed || state == http.StateHijacked {
 				s.clearClientState(conn.RemoteAddr().String())
@@ -555,6 +564,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	var err error
 	s.once.Do(func() {
 		if s.capacity != nil {
+			if s.capacity.classes != nil {
+				s.capacity.classes.close()
+			}
 			s.capacity.close()
 		}
 		// Fence concurrent reloads before shutdown waits on listeners/tunnels.
@@ -662,6 +674,7 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			return
 		}
 		rw.WriteHeader(http.StatusOK)
+		//nolint:gosec // Quit must shut down after the request context ends.
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -683,6 +696,17 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 		http.Error(rw, "proxy authentication required", http.StatusProxyAuthRequired)
 		return
+	}
+	if s.capacity != nil && s.capacity.classes != nil {
+		lease := connectionClassFromContext(req.Context())
+		if (s.capacity.classes.strictLongIntake && lease == nil) || !lease.classifyRequest(req, time.Now()) {
+			// No existing authenticated long session is evicted. The caller
+			// retains its one physical token until normal HTTP close.
+			rw.Header().Set("Connection", "close")
+			rw.Header().Set("Retry-After", "1")
+			http.Error(rw, "experimental long admission limit reached", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	if req.Method == http.MethodConnect {
 		s.handleConnect(rw, req)
@@ -763,6 +787,10 @@ func (s *Server) maintenanceLoop() {
 		case now := <-capacityTick:
 			s.capacity.sample(readCapacitySample(), now)
 		case now := <-t.C:
+			if s.capacity != nil && s.capacity.classes != nil {
+				s.capacity.classes.sampleBudgets(s.capacity.snapshot().SoftWindow)
+				s.capacity.classes.promoteAged(now)
+			}
 			if s.capacity != nil && s.capacity.mode != modeAuto {
 				s.capacity.sample(readCapacitySample(), now)
 			}
@@ -987,6 +1015,15 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if s.capacity != nil && s.capacity.classes != nil {
+		lease := connectionClassFromContext(req.Context())
+		if (s.capacity.classes.strictLongIntake && lease == nil) || !lease.classifySSEResponse(resp) {
+			rw.Header().Set("Connection", "close")
+			rw.Header().Set("Retry-After", "1")
+			http.Error(rw, "experimental SSE long response admission limit reached", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	s.writeHTTPResponse(rw, resp)
 }
 
