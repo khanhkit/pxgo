@@ -163,7 +163,7 @@ func (l *connectionClassLease) classifyRequest(req *http.Request, now time.Time)
 // still return SSE, which is classified after RoundTrip instead.
 func acceptsEventStream(header http.Header) bool {
 	for _, value := range header.Values("Accept") {
-		for _, part := range strings.Split(value, ",") {
+		for _, part := range splitAcceptMediaRanges(value) {
 			mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(part))
 			if err != nil || !strings.EqualFold(mediaType, "text/event-stream") {
 				continue
@@ -175,6 +175,32 @@ func acceptsEventStream(header http.Header) bool {
 		}
 	}
 	return false
+}
+
+// splitAcceptMediaRanges separates comma-delimited HTTP media ranges without
+// splitting inside quoted parameter values. A literal comma in quoted text
+// is data, not a second Accept media range. Backslash escapes within quotes
+// must also prevent the following escaped quote from ending that value.
+func splitAcceptMediaRanges(value string) []string {
+	var parts []string
+	start := 0
+	inQuote := false
+	escaped := false
+	for i := 0; i < len(value); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case inQuote && value[i] == '\\':
+			escaped = true
+		case value[i] == '"':
+			inQuote = !inQuote
+		case value[i] == ',' && !inQuote:
+			parts = append(parts, value[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, value[start:])
+	return parts
 }
 
 // positiveHTTPQuality accepts RFC qvalue syntax (at most three decimal

@@ -177,6 +177,23 @@ func runStrictSSEActualResponse(t *testing.T, heldLong int) {
 	if err != nil || string(data) != `{"ok":true}` {
 		t.Fatalf("JSON response corrupted: %q err=%v", data, err)
 	}
+	// A media-range-like substring inside a quoted parameter is NOT SSE.
+	// At 12/12 held long tunnels it must not spuriously return 503.
+	quotedReq, err := http.NewRequest(http.MethodGet, origin.URL+"/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quotedReq.Header.Set("Accept", `application/json; note="intro, text/event-stream; q=1, outro"`)
+	quotedResp, err := client.Do(quotedReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quotedBody, readErr := io.ReadAll(quotedResp.Body)
+	closeErr := quotedResp.Body.Close()
+	if quotedResp.StatusCode != http.StatusOK || readErr != nil || closeErr != nil || string(quotedBody) != `{"ok":true}` {
+		t.Fatalf("quoted Accept JSON erroneously classified as SSE: status=%s body=%q read=%v close=%v",
+			quotedResp.Status, quotedBody, readErr, closeErr)
+	}
 	denied := uint64(0)
 	if heldLong == 12 {
 		denied = 1
@@ -218,6 +235,12 @@ func TestAcceptsEventStreamQualitySemantics(t *testing.T) {
 		{"text/event-stream;q=1.001", false},
 		{"text/event-stream;q=1.000", true},
 		{"text/event-stream;q=0.001", true},
+		{"text/event-stream; note=\"left,right\"", true},
+		{"application/json; note=\"intro, text/event-stream; q=1, outro\"", false},
+		{"application/json;note=\"x,y\", text/event-stream;q=0.5", true},
+		{"application/json;note=\"x,y\", text/event-stream;q=0", false},
+		{"application/json;note=\"x, \\\" text/event-stream; q=1, still quoted\"", false},
+		{"text/event-stream;note=\"left,\\\"right\"", true},
 		{"application/json", false},
 	}
 	for _, tc := range cases {
