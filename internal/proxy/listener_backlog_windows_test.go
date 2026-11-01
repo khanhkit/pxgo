@@ -7,9 +7,9 @@ import (
 	"runtime"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
-	"unsafe"
 )
 
 func TestExperimentalWindowsBacklogListenerSmoke(t *testing.T) {
