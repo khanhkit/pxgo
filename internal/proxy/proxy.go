@@ -493,7 +493,7 @@ func (s *Server) Start() error {
 	}
 	for _, host := range s.listenHosts() {
 		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-		rawListener, err := net.Listen("tcp", addr)
+		rawListener, err := listenProxyTCP(addr)
 		if err != nil {
 			for _, opened := range listeners {
 				_ = opened.Close()
