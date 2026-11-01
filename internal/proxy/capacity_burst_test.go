@@ -257,12 +257,8 @@ func TestCapacityBurst2560(t *testing.T) {
 	if (mode == string(modeLegacy) || mode == string(modeShadow)) && peak.ActiveDownstream > 256 {
 		t.Fatalf("fixed legacy budget violated: %+v", peak)
 	}
-	if dialErrors > 0 {
-		t.Logf("FIRST_DIAL_ERROR platform=%s mode=%s count=%d native_errno=%d example=%q", runtime.GOOS, mode, dialErrors, firstDialErrno, firstDialError)
-	}
-	if handshakeErrors > 0 {
-		t.Logf("FIRST_HANDSHAKE_ERROR platform=%s mode=%s count=%d native_errno=%d example=%q", runtime.GOOS, mode, handshakeErrors, firstHandshakeErrno, firstHandshakeError)
-	}
+	logCapacityBurstTransportError(t, "DIAL", mode, dialErrors, firstDialErrno, firstDialError)
+	logCapacityBurstTransportError(t, "HANDSHAKE", mode, handshakeErrors, firstHandshakeErrno, firstHandshakeError)
 	if payloadErrors > 0 {
 		t.Errorf("held CONNECT payload integrity failed for %d tunnels: first=%q", payloadErrors, firstPayloadError)
 	}
@@ -285,4 +281,14 @@ func capacityBurstClassAccountingError(t *testing.T, px *Server, mode string, at
 		return fmt.Errorf("all %d CONNECT tunnels must be long in a single permit budget: %+v", attempts, classes)
 	}
 	return nil
+}
+
+// Centralize failure diagnostics to keep the 2560-socket test's control flow
+// focused on cleanup and unconditional result collection before assertions.
+func logCapacityBurstTransportError(t *testing.T, kind, mode string, count, nativeErrno int, example string) {
+	t.Helper()
+	if count == 0 {
+		return
+	}
+	t.Logf("FIRST_%s_ERROR platform=%s mode=%s count=%d native_errno=%d example=%q", kind, runtime.GOOS, mode, count, nativeErrno, example)
 }
