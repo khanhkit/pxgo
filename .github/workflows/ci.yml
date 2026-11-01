@@ -21,6 +21,26 @@ on:
         required: false
         type: boolean
         default: false
+      windows_listener_negative:
+        description: Research-only Windows raw socket bind-collision and cleanup checks
+        required: false
+        type: boolean
+        default: false
+      windows_preauth_queue:
+        description: Research-only demonstration of TCP backlog outside app permits
+        required: false
+        type: boolean
+        default: false
+      windows_backlog_guard:
+        description: Research-only Windows explicit non-loopback double opt-in gate
+        required: false
+        type: boolean
+        default: false
+      linux_real_cgroup:
+        description: Research-only finite Docker cgroup-v2 actual memory headroom test
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -295,7 +315,7 @@ jobs:
 
   windows-connection-class-research:
     name: Windows capacity research (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, sample=${{ matrix.sample }})
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 24
     strategy:
@@ -360,7 +380,7 @@ jobs:
     # mixed seeds in one VM exhausted outgoing ephemeral ports (WSAEADDRINUSE).
     # Do not mislabel test-runner exhaustion as controller failure, and never
     # bypass it by forcing abortive RST closes in realistic short-conn tests.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 17
     strategy:
@@ -516,7 +536,7 @@ jobs:
   windows-held-2560-ten-minute-soak:
     name: Windows 10min real 2560 held CONNECT plus 600 distributed HTTP soak
     # Pure loopback live data-plane and OS handle/PrivateBytes telemetry, not WAN.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -558,7 +578,7 @@ jobs:
   windows-real-pxgo-jobwide-2560:
     name: Windows real PxGo 2560 CONNECT under stricter job-wide committed-memory cap
     # Test-only: child Job Object total committed limit is stricter than its process cap.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -609,7 +629,7 @@ jobs:
   windows-job-wide-memory-research:
     name: Windows child Job Object total memory cap versus process cap
     # JobMemoryLimit and ProcessMemoryLimit are independent constraints.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 8
     steps:
@@ -646,7 +666,7 @@ jobs:
   windows-real-pxgo-go-heap-hold:
     name: Windows real PxGo Go heap held during 2560 CONNECT and 600 HTTP
     # Go runtime-managed heap, child-only Job Object; NOT native VirtualAlloc ballast.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -690,7 +710,7 @@ jobs:
   windows-real-pxgo-global-memory-sensor-gap:
     name: Windows real PxGo child Job Object versus host-global AUTO sensor
     # Demonstrate native sensor overstatement under hard child-only Job cap.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -732,7 +752,7 @@ jobs:
   windows-real-pxgo-sustained-commit:
     name: Windows real PxGo 2560 CONNECT under sustained child commit ballast
     # Native child-only +64MiB committed allocation while carrying 600 HTTP; never OS-global.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -777,7 +797,7 @@ jobs:
   windows-nested-job-ancestor-commit-research:
     name: Windows nested Job Object stricter ancestor commit limit (child-only)
     # Research: immediate NULL-job query may hide stricter ancestor effective cap.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 8
     steps:
@@ -813,7 +833,7 @@ jobs:
 
   windows-mixed-socket-isolation-research:
     name: Windows isolated socket gate (${{ matrix.scenario }}, trial=${{ matrix.trial }})
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 10
     strategy:
@@ -892,7 +912,7 @@ jobs:
   windows-job-proxy-2560-matrix:
     name: Windows real PxGo quota (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, trial=${{ matrix.trial }})
     # Each policy/class/trial on a fresh native Windows VM; descriptive, unpaired.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 12
     strategy:
@@ -942,7 +962,7 @@ jobs:
   windows-job-proxy-cleanup-negative:
     name: Windows real PxGo child Job Object injected-failure cleanup
     # Fresh runner avoids TIME_WAIT carryover from normal 2560-pressure probe.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -979,7 +999,7 @@ jobs:
   windows-job-object-proxy-2560-research:
     name: Windows real PxGo 2560 CONNECT under child commit quota
     # Experimental test-only separate child, no production memory policy.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -1021,7 +1041,7 @@ jobs:
     name: Windows Job Object process-commit pressure (isolated child)
     # A strict test-only OS feasibility gate on a fresh native VM. Do NOT
     # treat success as production PxGo memory-budget calibration/recovery.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -1060,7 +1080,7 @@ jobs:
     # Validate the *pinned* R20 native Windows measurement replay; R22 only
     # computes a noncausal descriptive order-balanced analysis, never fabricates
     # fresh native Windows measurements from a Python script.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1099,7 +1119,7 @@ jobs:
     # rather than confounding policy order and offered-load seed parity.
     # Keep only two matched workloads per fresh VM to limit native Windows
     # loopback ephemeral-port/TIME_WAIT contamination. No PASS waiver.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 16
     strategy:
@@ -1216,7 +1236,7 @@ jobs:
     # client+upstream parent; never infer these values from co-located heap.
     # Seed 3 measures 2,560 real held CONNECTs plus 600 short HTTP on a
     # dedicated fresh Windows VM, not an extrapolation from 256–384.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
     runs-on: windows-latest
     timeout-minutes: 14
     strategy:
@@ -1372,4 +1392,184 @@ jobs:
         with:
           name: win-true-syn-2560-${{ inputs.verification_ref }}
           path: benchmarks/
+          retention-days: 14
+
+  linux-real-cgroup-pressure:
+    name: Linux real finite cgroup-v2 pressure (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.linux_real_cgroup
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build test binary and verify exact immutable source SHA
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p benchmarks
+          CGO_ENABLED=0 go test -c -o benchmarks/r128-cgroup.test ./internal/proxy
+      - name: Finite real kernel cgroup v2 under disposable bounded Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HOST_CGROUP_V2=$(stat -fc %T /sys/fs/cgroup)" | tee benchmarks/r128-host.log
+          test "$(stat -fc %T /sys/fs/cgroup)" = 'cgroup2fs'
+          image='alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6'
+          docker pull "$image"
+          docker run --rm --network none --memory 384m --memory-swap 384m --pids-limit 128 --cpus 2 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 \
+            -e PXGO_R128_REAL_CGROUP=1 -e GOGC=30 -e GOMEMLIMIT=280MiB \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR128NativeFiniteCgroupPressurePreservesOldTCP$' \
+            -test.count=1 -test.timeout=65s -test.v | tee benchmarks/r128-real-cgroup.log
+          grep -F 'R128_REAL_CGROUP_RESULT' benchmarks/r128-real-cgroup.log
+          grep -F 'new_tcp_denied=true' benchmarks/r128-real-cgroup.log
+          grep -F 'oom_kill_delta=0' benchmarks/r128-real-cgroup.log
+      - name: Verify genuine visible cgroup ancestors through host cgroup namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6'
+          docker run --rm --network none --cgroupns=host --memory 384m --memory-swap 384m --pids-limit 128 --cpus 2 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 -e PXGO_R129_HOST_CGROUP=1 \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR129NativeVisibleCgroupAncestors$' \
+            -test.count=1 -test.timeout=45s -test.v | tee benchmarks/r129-host-ancestors.log
+          grep -F 'R129_HOST_ANCESTOR_RESULT' benchmarks/r129-host-ancestors.log
+      - name: Preserve exact-sha kernel-pressure evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-real-cgroup-${{ inputs.verification_ref }}
+          path: |
+            benchmarks/*.log
+          retention-days: 14
+
+  windows-listener-security-negative:
+    name: Windows listener negative WinSock lifecycle (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_listener_negative
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run native Windows failed-bind and invalid-config cases
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -ne $env:SOURCE_SHA) {
+            throw 'immutable exact verification_ref required'
+          }
+          $log = & go test ./internal/proxy -run '^TestR130WindowsBacklog(PortCollisionAndHandleCleanup|InvalidConfigurationRejectsBeforeBind)$' -count=1 -v -timeout=45s 2>&1
+          $exit = $LASTEXITCODE
+          $log | Tee-Object -FilePath benchmarks/r130-windows-listener-negative.log
+          if ($exit -ne 0) { throw "native listener security negative tests failed exit=$exit" }
+          $joined = Get-Content -Raw benchmarks/r130-windows-listener-negative.log
+          if (-not $joined.Contains('R130_WINDOWS_BIND_RESULT attempted=256 rejected=256')) { throw 'missing strict bind conflict marker' }
+          if (-not $joined.Contains('R130_WINDOWS_INVALID_RESULT rejected_malformed=true')) { throw 'missing malformed fail-closed marker' }
+      - name: Preserve negative-path evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-listener-negative-${{ inputs.verification_ref }}
+          path: benchmarks/*.log
+          retention-days: 14
+
+  windows-preauth-queue-risk:
+    name: Windows kernel pre-auth TCP queue exposure (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_preauth_queue
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Prove unauthenticated kernel TCP queue outside app physical permits
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -ne $env:SOURCE_SHA) {
+            throw 'immutable exact verification SHA required'
+          }
+          $lines = & go test ./internal/proxy -run '^TestR131WindowsKernelPreauthQueueExceedsGovernor$' -count=1 -v -timeout=35s 2>&1
+          $code = $LASTEXITCODE
+          $lines | Tee-Object -FilePath benchmarks/r131-windows-preauth-risk.log
+          if ($code -ne 0) { throw "R131 Windows preauth research failed exit=$code" }
+          $log = Get-Content -Raw benchmarks/r131-windows-preauth-risk.log
+          if (-not $log.Contains('R131_WINDOWS_PREAUTH_QUEUE_RESULT tcp_connected=144 active_governor=16 excess_pre_auth_tcp=128')) {
+            throw 'missing strict evidence: kernel queue outside physical permits'
+          }
+      - name: Preserve risk evidence, even if test fails
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-preauth-risk-${{ inputs.verification_ref }}
+          path: benchmarks/*.log
+          retention-days: 14
+
+  windows-backlog-trusted-bind-guard:
+    name: Windows backlog fail-closed non-loopback guard (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_backlog_guard
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Native WinSock bind protection, approval, and default-compatibility tests
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -ne $env:SOURCE_SHA) {
+            throw 'immutable exact verification SHA is required'
+          }
+          $lines = & go test ./internal/proxy -run '^TestR133WindowsBacklog(RequiresSeparateNonLoopbackOptIn|ExplicitNonLoopbackOptIn)$' -count=1 -v -timeout=50s 2>&1
+          $code = $LASTEXITCODE
+          $lines | Tee-Object -FilePath benchmarks/r133-win-nonloopback-optin.log
+          if ($code -ne 0) { throw "R133 native WinSock security gate failed exit=$code" }
+          $log = Get-Content -Raw benchmarks/r133-win-nonloopback-optin.log
+          if (-not $log.Contains('R133_WINDOWS_GUARD_NEGATIVE denied_nonloopback_without_second_optin=true')) { throw 'missing fail-closed proof' }
+          if (-not $log.Contains('R133_WINDOWS_GUARD_EXPLICIT_ALLOW approved_nonloopback=true')) { throw 'missing deliberate explicit allow proof' }
+      - name: Preserve opt-in security evidence on all outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-backlog-trusted-bind-${{ inputs.verification_ref }}
+          path: benchmarks/*.log
           retention-days: 14

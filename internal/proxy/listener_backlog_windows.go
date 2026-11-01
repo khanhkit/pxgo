@@ -31,6 +31,16 @@ func listenProxyTCP(addr string) (net.Listener, error) {
 	if ip == nil {
 		return nil, fmt.Errorf("experimental Windows TCP backlog supports only explicit IPv4 addresses")
 	}
+	// A larger pre-accept WinSock queue is outside AUTO's physical permits.
+	// Fail closed on externally reachable listeners without a separate,
+	// explicit acknowledgment of that unauthenticated TCP exposure.
+	approval := os.Getenv("PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG_ALLOW_NON_LOOPBACK")
+	if approval != "" && approval != "1" {
+		return nil, fmt.Errorf("Windows backlog non-loopback opt-in must be 1 when set")
+	}
+	if !ip.IsLoopback() && approval != "1" {
+		return nil, fmt.Errorf("experimental Windows TCP backlog on non-loopback IPv4 requires PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG_ALLOW_NON_LOOPBACK=1")
+	}
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 0 || port > 65535 {
 		return nil, fmt.Errorf("invalid Windows TCP listen port %q", portText)
