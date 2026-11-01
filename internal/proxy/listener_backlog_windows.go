@@ -46,7 +46,14 @@ func listenProxyTCP(addr string) (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Windows backlog socket: %w", err)
 	}
-	defer windows.Closesocket(socket)
+	// The raw Winsock handle is owned here only until os.NewFile adopts it.
+	// Closing the raw socket after file.Close would double-close a reused handle.
+	rawOwned := true
+	defer func() {
+		if rawOwned {
+			_ = windows.Closesocket(socket)
+		}
+	}()
 	if err := windows.Bind(socket, &windows.SockaddrInet4{Port: port, Addr: ip4}); err != nil {
 		return nil, fmt.Errorf("Windows backlog bind: %w", err)
 	}
@@ -59,10 +66,15 @@ func listenProxyTCP(addr string) (net.Listener, error) {
 	if file == nil {
 		return nil, fmt.Errorf("cannot wrap Windows backlog listener handle")
 	}
+	rawOwned = false // os.File now owns the original Winsock socket.
 	listener, convertErr := net.FileListener(file)
-	_ = file.Close()
+	closeErr := file.Close()
 	if convertErr != nil {
 		return nil, fmt.Errorf("Windows backlog FileListener: %w", convertErr)
+	}
+	if closeErr != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("Windows backlog original socket close: %w", closeErr)
 	}
 	return listener, nil
 }

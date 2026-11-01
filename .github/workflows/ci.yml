@@ -1359,7 +1359,7 @@ jobs:
           PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
           PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG: '4096'
         run: |
-          $lines = & go test ./internal/proxy -run '^Test(ExperimentalWindowsBacklogListenerSmoke|CapacityBurst2560)$' -count=1 -v -timeout=75s 2>&1
+          $lines = & go test ./internal/proxy -run '^Test(ExperimentalWindowsBacklogListenerSmoke|ExperimentalWindowsBacklogRepeatedHandleOwnership|CapacityBurst2560)$' -count=1 -v -timeout=75s 2>&1
           $code = $LASTEXITCODE
           $lines | Tee-Object -FilePath benchmarks/windows-true-syn-2560.log
           if ($code -ne 0) { throw "native Windows simultaneous SYN test failed with exit $code" }
