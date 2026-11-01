@@ -140,7 +140,9 @@ func (l *connectionClassLease) classifyRequest(req *http.Request, now time.Time)
 	}
 	l.requests++
 	// Classification happens after downstream client authorization.
-	explicitLong := req.Method == http.MethodConnect || strings.EqualFold(req.Header.Get(headerUpgrade), "websocket") || acceptsEventStream(req.Header)
+	// Client Accept is only a hint: origin may return JSON even when SSE is acceptable.
+	// Enforce SSE long intake on the actual authenticated upstream 200 response.
+	explicitLong := req.Method == http.MethodConnect
 	agedLong := now.Sub(l.opened) >= classDurationThreshold || l.requests >= classRequestThreshold
 	if explicitLong || agedLong {
 		// Guard only NEW explicit long requests, never an already admitted
@@ -231,8 +233,24 @@ func positiveHTTPQuality(q string) bool {
 // Under the opt-in strict guard, refuse a new unexpected long response if
 // the long class budget is full; existing long leases are never evicted.
 func (l *connectionClassLease) classifySSEResponse(resp *http.Response) bool {
-	if l == nil || resp == nil || resp.StatusCode != http.StatusOK ||
+	if resp == nil || resp.StatusCode != http.StatusOK ||
 		!isSSEMediaType(resp.Header.Get("Content-Type")) {
+		return true
+	}
+	return l.classifyActualLongResponse()
+}
+
+// A WebSocket/HTTP Upgrade request is only a hint: an origin can respond
+// with ordinary JSON. Charge the long class only after a real upstream 101.
+func (l *connectionClassLease) classifyUpgradeResponse(resp *http.Response) bool {
+	if resp == nil || resp.StatusCode != http.StatusSwitchingProtocols {
+		return true
+	}
+	return l.classifyActualLongResponse()
+}
+
+func (l *connectionClassLease) classifyActualLongResponse() bool {
+	if l == nil {
 		return true
 	}
 	m := l.manager

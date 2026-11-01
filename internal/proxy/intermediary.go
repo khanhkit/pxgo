@@ -3,10 +3,12 @@ package proxy
 import (
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptrace"
 	"net/textproto"
 	"strings"
+	"time"
 )
 
 const (
@@ -113,17 +115,40 @@ func (s *Server) writeHTTPResponse(rw http.ResponseWriter, resp *http.Response) 
 			header.Add("Trailer", key)
 		}
 	}
+	// A 200 SSE response has already passed post-authentication strict
+	// long admission. The HTTP server's absolute WriteTimeout would otherwise
+	// terminate a healthy long stream after a fixed duration. For genuinely
+	// long SSE only, replace that deadline with a bounded deadline for EACH
+	// actual downstream write/flush; leave it cleared between event frames.
+	// Non-200 SSE-looking responses and non-flushing writers retain the
+	// server's existing finite deadline and never get an exemption.
+	sse := isSSEMediaType(resp.Header.Get("Content-Type"))
+	flusher, canFlush := rw.(http.Flusher)
+	window := configuredWriteTimeout(s.cfg)
+	var control *http.ResponseController
+	if sse && resp.StatusCode == http.StatusOK && canFlush && window > 0 {
+		candidate := http.NewResponseController(rw)
+		if err := candidate.SetWriteDeadline(time.Now().Add(window)); err == nil {
+			control = candidate
+		}
+	}
 	copyHeader(rw.Header(), header)
 	rw.WriteHeader(resp.StatusCode)
 	// SSE is determined by the actual upstream response, not a client's
-	// Accept prediction. Flush the headers and each returned body chunk:
-	// io.Copy alone buffers short events until a later chunk or EOF.
+	// Accept prediction. Flush headers and each returned body chunk.
 	destination := io.Writer(rw)
-	if isSSEMediaType(resp.Header.Get("Content-Type")) {
-		if flusher, ok := rw.(http.Flusher); ok {
+	if sse && canFlush {
+		if control != nil {
+			if err := control.Flush(); err != nil {
+				return
+			}
+			if err := control.SetWriteDeadline(time.Time{}); err != nil {
+				return
+			}
+		} else {
 			flusher.Flush()
-			destination = sseFlushingWriter{writer: rw, flusher: flusher}
 		}
+		destination = sseFlushingWriter{writer: rw, flusher: flusher, control: control, window: window}
 	}
 	_, _ = io.Copy(destination, resp.Body)
 	for key, values := range resp.Trailer {
@@ -138,17 +163,44 @@ func (s *Server) writeHTTPResponse(rw http.ResponseWriter, resp *http.Response) 
 type sseFlushingWriter struct {
 	writer  io.Writer
 	flusher http.Flusher
+	control *http.ResponseController
+	window  time.Duration
 }
 
 func (w sseFlushingWriter) Write(p []byte) (int, error) {
+	if w.control != nil {
+		if err := w.control.SetWriteDeadline(time.Now().Add(w.window)); err != nil {
+			return 0, err
+		}
+	}
 	n, err := w.writer.Write(p)
+	if w.control != nil {
+		if flushErr := w.control.Flush(); err == nil {
+			err = flushErr
+		}
+		if err != nil {
+			return n, err
+		}
+		return n, w.control.SetWriteDeadline(time.Time{})
+	}
 	w.flusher.Flush()
 	return n, err
 }
 
 // isSSEMediaType matches actual response media type including parameters.
 func isSSEMediaType(value string) bool {
-	return strings.EqualFold(strings.TrimSpace(strings.SplitN(value, ";", 2)[0]), "text/event-stream")
+	value = strings.TrimSpace(value)
+	media, _, hasParams := strings.Cut(value, ";")
+	if !strings.EqualFold(strings.TrimSpace(media), "text/event-stream") {
+		// A cheap no-allocation fast path for ordinary JSON/HTML responses:
+		// only actual SSE headers need strict MIME parameter validation.
+		return false
+	}
+	if !hasParams {
+		return true
+	}
+	parsed, _, err := mime.ParseMediaType(value)
+	return err == nil && strings.EqualFold(parsed, "text/event-stream")
 }
 
 func (s *Server) handleHTTPUpgrade(rw http.ResponseWriter, req *http.Request, resp *http.Response) {
