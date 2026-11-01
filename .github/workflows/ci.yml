@@ -16,6 +16,11 @@ on:
         required: false
         type: boolean
         default: false
+      windows_true_syn_burst:
+        description: Research opt-in 2560 immediate SYNs on exact immutable SHA, not held plateau
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1311,3 +1316,59 @@ jobs:
             throw 'required native SSPI fixture tests are missing from verification_ref'
           }
           go test ./internal/proxy -run 'TCSSPIWIN(INT008|SOAK009)' -count=1 -v
+
+  windows-true-syn-burst-2560:
+    # Manually gated research, separate from ordinary PR CI and releases.
+    # This probes Windows' instantaneous Winsock backlog without rewriting
+    # resource-controller behavior or pretending a held plateau is a SYN burst.
+    name: Windows true 2560 SYN burst (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_true_syn_burst
+    runs-on: windows-latest
+    timeout-minutes: 16
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Source identity and read-only Windows baseline
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ inputs.verification_ref }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ($env:EXPECTED_SHA -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -ne $env:EXPECTED_SHA) {
+            throw 'exact immutable verification SHA required for Windows SYN research'
+          }
+          "sha=$env:EXPECTED_SHA" | Set-Content benchmarks/windows-true-syn-meta.log
+          "go=$(go version)" | Add-Content benchmarks/windows-true-syn-meta.log
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/windows-true-syn-meta.log
+          netsh int ipv4 show dynamicport tcp | Out-File -Append benchmarks/windows-true-syn-meta.log
+          Get-NetTCPConnection -State TimeWait -ErrorAction SilentlyContinue |
+            Measure-Object | ForEach-Object { "pre_time_wait=$($_.Count)" } |
+            Add-Content benchmarks/windows-true-syn-meta.log
+      - name: Run real 2560-SYN simultaneous AUTO CONNECT experiment
+        shell: pwsh
+        env:
+          PXGO_CAPACITY_BURST_2560: '1'
+          PXGO_CAPACITY_SYN_SPIKE: '1'
+          PXGO_CAPACITY_BENCH_MODE: auto
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
+        run: |
+          $lines = & go test ./internal/proxy -run '^TestCapacityBurst2560$' -count=1 -v -timeout=75s 2>&1
+          $code = $LASTEXITCODE
+          $lines | Tee-Object -FilePath benchmarks/windows-true-syn-2560.log
+          if ($code -ne 0) { throw "native Windows simultaneous SYN test failed with exit $code" }
+          $log = Get-Content -Raw benchmarks/windows-true-syn-2560.log
+          $must = 'RESULT platform=windows mode=auto attempted=2560 accepted_before_release=2560 successful_total=2560 dial_errors=0 handshake_errors=0 payload_errors=0 tunnels_at_peak=2560'
+          if (-not $log.Contains($must)) { throw 'missing strict 2560 real CONNECT positive marker' }
+      - name: Preserve diagnostic evidence including failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-true-syn-2560-${{ inputs.verification_ref }}
+          path: benchmarks/
+          retention-days: 14
