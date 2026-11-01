@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      linux_real_cgroup:
+        description: Research-only finite Docker cgroup-v2 actual memory headroom test
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1372,4 +1377,56 @@ jobs:
         with:
           name: win-true-syn-2560-${{ inputs.verification_ref }}
           path: benchmarks/
+          retention-days: 14
+
+  linux-real-cgroup-pressure:
+    name: Linux real finite cgroup-v2 pressure (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.linux_real_cgroup
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build test binary and verify exact immutable source SHA
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -p benchmarks
+          CGO_ENABLED=0 go test -c -o benchmarks/r128-cgroup.test ./internal/proxy
+      - name: Finite real kernel cgroup v2 under disposable bounded Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HOST_CGROUP_V2=$(stat -fc %T /sys/fs/cgroup)" | tee benchmarks/r128-host.log
+          test "$(stat -fc %T /sys/fs/cgroup)" = 'cgroup2fs'
+          image='alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6'
+          docker pull "$image"
+          docker run --rm --network none --memory 384m --memory-swap 384m --pids-limit 128 --cpus 2 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 \
+            -e PXGO_R128_REAL_CGROUP=1 -e GOGC=30 -e GOMEMLIMIT=280MiB \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR128NativeFiniteCgroupPressurePreservesOldTCP$' \
+            -test.count=1 -test.timeout=65s -test.v | tee benchmarks/r128-real-cgroup.log
+          grep -F 'R128_REAL_CGROUP_RESULT' benchmarks/r128-real-cgroup.log
+          grep -F 'new_tcp_denied=true' benchmarks/r128-real-cgroup.log
+          grep -F 'oom_kill_delta=0' benchmarks/r128-real-cgroup.log
+      - name: Preserve exact-sha kernel-pressure evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-real-cgroup-${{ inputs.verification_ref }}
+          path: |
+            benchmarks/*.log
           retention-days: 14
