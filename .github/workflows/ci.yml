@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      windows_preauth_queue:
+        description: Research-only demonstration of TCP backlog outside app permits
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1372,4 +1377,43 @@ jobs:
         with:
           name: win-true-syn-2560-${{ inputs.verification_ref }}
           path: benchmarks/
+          retention-days: 14
+
+  windows-preauth-queue-risk:
+    name: Windows kernel pre-auth TCP queue exposure (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_preauth_queue
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Prove unauthenticated kernel TCP queue outside app physical permits
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -ne $env:SOURCE_SHA) {
+            throw 'immutable exact verification SHA required'
+          }
+          $lines = & go test ./internal/proxy -run '^TestR131WindowsKernelPreauthQueueExceedsGovernor$' -count=1 -v -timeout=35s 2>&1
+          $code = $LASTEXITCODE
+          $lines | Tee-Object -FilePath benchmarks/r131-windows-preauth-risk.log
+          if ($code -ne 0) { throw "R131 Windows preauth research failed exit=$code" }
+          $log = Get-Content -Raw benchmarks/r131-windows-preauth-risk.log
+          if (-not $log.Contains('R131_WINDOWS_PREAUTH_QUEUE_RESULT tcp_connected=144 active_governor=16 excess_pre_auth_tcp=128')) {
+            throw 'missing strict evidence: kernel queue outside physical permits'
+          }
+      - name: Preserve risk evidence, even if test fails
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-preauth-risk-${{ inputs.verification_ref }}
+          path: benchmarks/*.log
           retention-days: 14
