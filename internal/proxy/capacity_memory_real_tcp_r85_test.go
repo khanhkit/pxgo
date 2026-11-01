@@ -4,11 +4,12 @@ package proxy
 
 import (
 	"errors"
-	"github.com/khanhkit/pxgo/internal/config"
 	"io"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestR85RealTCPPartialMemoryBudgetNeverReusesStaleHeadroom(t *testing.T) {
@@ -34,8 +35,10 @@ func TestR85RealTCPPartialMemoryBudgetNeverReusesStaleHeadroom(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	measured := capacitySample{available: true, freeFD: 9000, totalFD: 10000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 1}
+	measured := capacitySample{
+		available: true, freeFD: 9000, totalFD: 10000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 1,
+	}
 	now := time.Unix(222000, 0)
 	g.sample(measured, now)
 	_ = oldConn.Close() // existed BEFORE the cgroup measurement

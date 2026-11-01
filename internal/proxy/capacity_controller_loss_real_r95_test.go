@@ -29,8 +29,10 @@ func TestR95RealTCPFiniteControllerLossAndReappearance(t *testing.T) {
 		}
 		return c
 	}
-	finite := capacitySample{available: true, freeFD: 10000, totalFD: 11000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 3}
+	finite := capacitySample{
+		available: true, freeFD: 10000, totalFD: 11000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 3,
+	}
 	now := time.Unix(522000, 0)
 	g.sample(finite, now)
 	originalClient := dial()

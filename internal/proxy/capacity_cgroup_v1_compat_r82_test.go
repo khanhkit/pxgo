@@ -19,7 +19,7 @@ func TestR82NoUnifiedControllerFallsBackToFDOnly(t *testing.T) {
 	}
 	// Contradictory case: a memory.max exists but no matching mount. This must
 	// never silently downgrade to a false "unlimited" memory sensor.
-	if err = os.WriteFile(filepath.Join(root, "memory.max"), []byte("1073741824"), 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(root, "memory.max"), []byte("1073741824"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = readCapacityCgroupMembershipFrom(root, legacyMembership, strings.NewReader(v1mounts)); err == nil {
@@ -34,7 +34,7 @@ func TestR82MalformedV2MembershipRemainsFailClosed(t *testing.T) {
 		{"memory.current", "268435456"},
 		{"memory.high", "max"},
 	} {
-		if err := os.WriteFile(filepath.Join(root, kv[0]), []byte(kv[1]), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, kv[0]), []byte(kv[1]), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

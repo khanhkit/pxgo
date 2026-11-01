@@ -1,10 +1,11 @@
 package proxy
 
 import (
-	"github.com/khanhkit/pxgo/internal/config"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 type r67AcceptResult struct {

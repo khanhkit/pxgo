@@ -37,8 +37,10 @@ func TestR90RealTCPStaleSensorFencesOnlyNewSockets(t *testing.T) {
 	}
 	defer existingServer.Close()
 	now := time.Unix(303000, 0)
-	finite := capacitySample{available: true, totalFD: 21000, freeFD: 20000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 5}
+	finite := capacitySample{
+		available: true, totalFD: 21000, freeFD: 20000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 5,
+	}
 	g.sample(finite, now)
 	g.sample(capacitySample{reason: "fd count inaccessible"}, now.Add(time.Second))
 	if snap := g.snapshot(); snap.ActiveDownstream != 1 || snap.EffectiveLimit != 0 {

@@ -17,8 +17,10 @@ import (
 func TestR95PreviouslyFiniteCgroupDisappearsFailClosed(t *testing.T) {
 	g := newCapacityGovernor(modeAuto, config.Default())
 	defer g.close()
-	finite := capacitySample{available: true, freeFD: 9000, totalFD: 10000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 3}
+	finite := capacitySample{
+		available: true, freeFD: 9000, totalFD: 10000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 3,
+	}
 	now := time.Unix(510000, 0)
 	g.sample(finite, now)
 	done := make(chan struct{})
@@ -59,11 +61,15 @@ func TestR95UnknownTelemetryResourceAfterFiniteCgroupMustFailClosed(t *testing.T
 	g := newCapacityGovernor(modeAuto, config.Default())
 	defer g.close()
 	now := time.Unix(514000, 0)
-	finite := capacitySample{available: true, freeFD: 9000, totalFD: 10000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 3}
+	finite := capacitySample{
+		available: true, freeFD: 9000, totalFD: 10000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 3,
+	}
 	g.sample(finite, now)
-	g.sample(capacitySample{available: true, resource: "future-resource-driver",
-		freeFD: 9000, totalFD: 10000}, now.Add(time.Second))
+	g.sample(capacitySample{
+		available: true, resource: "future-resource-driver",
+		freeFD: 9000, totalFD: 10000,
+	}, now.Add(time.Second))
 	if s := g.snapshot(); s.EffectiveLimit != 0 || s.SensorAvailability != capacityInvalidSensor {
 		t.Fatalf("R95_UNKNOWN_TELEMETRY_DRIVER_REUSED_MEMORY_ENVELOPE: %+v", s)
 	}

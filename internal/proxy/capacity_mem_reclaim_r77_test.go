@@ -3,9 +3,10 @@
 package proxy
 
 import (
-	"github.com/khanhkit/pxgo/internal/config"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestR77ZeroMemoryHeadroomCannotBeReusedAfterRelease(t *testing.T) {

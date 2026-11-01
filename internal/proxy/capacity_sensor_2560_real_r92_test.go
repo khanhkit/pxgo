@@ -18,8 +18,10 @@ import (
 func TestR92Native2560HeldUnderSensorOutageAndRecovery(t *testing.T) {
 	g := newCapacityGovernor(modeAuto, config.Default())
 	defer g.close()
-	sample := capacitySample{available: true, totalFD: 50000, freeFD: 45000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 8000}
+	sample := capacitySample{
+		available: true, totalFD: 50000, freeFD: 45000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 8000,
+	}
 	now := time.Unix(470000, 0)
 	g.sample(sample, now)
 	g.mu.Lock()

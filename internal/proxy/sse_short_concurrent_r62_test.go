@@ -2,12 +2,13 @@ package proxy
 
 import (
 	"bufio"
-	"github.com/khanhkit/pxgo/internal/config"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestR62SSERemainsLiveWhileShortHTTPProceedsPastWriteTimeout(t *testing.T) {

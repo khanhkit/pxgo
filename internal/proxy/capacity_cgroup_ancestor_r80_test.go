@@ -13,10 +13,10 @@ func TestR80CgroupAncestorBudgetMustClipLeaf(t *testing.T) {
 	write := func(rel, name, body string) {
 		t.Helper()
 		path := filepath.Join(root, rel)
-		if err := os.MkdirAll(path, 0700); err != nil {
+		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(path, name), []byte(body), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(path, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -55,10 +55,10 @@ func TestR80CgroupAncestorPSIPropagatesPressure(t *testing.T) {
 	add := func(rel, name, value string) {
 		t.Helper()
 		dir := filepath.Join(root, rel)
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -84,10 +84,10 @@ func TestR80CgroupHierarchyRejectsTraversalAndUnreadableFiniteAncestor(t *testin
 		}
 	}
 	leaf := filepath.Join(root, "child")
-	if err := os.MkdirAll(leaf, 0700); err != nil {
+	if err := os.MkdirAll(leaf, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("1073741824"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "memory.max"), []byte("1073741824"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := readCapacityCgroupHierarchy(root, "child"); err == nil {

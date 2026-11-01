@@ -18,8 +18,10 @@ func TestR91QueuedFIFOIsPausedBySensorOutageAndResumesOnFreshMemory(t *testing.T
 	defer g.close()
 	now := time.Unix(450000, 0)
 	measurement := func(slots int) capacitySample {
-		return capacitySample{available: true, freeFD: 9000, totalFD: 10000,
-			linuxMemoryConstrained: true, linuxMemoryFreeSlots: slots}
+		return capacitySample{
+			available: true, freeFD: 9000, totalFD: 10000,
+			linuxMemoryConstrained: true, linuxMemoryFreeSlots: slots,
+		}
 	}
 	g.sample(measurement(1), now)
 	done := make(chan struct{})

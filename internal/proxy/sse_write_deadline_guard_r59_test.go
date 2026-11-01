@@ -2,12 +2,13 @@ package proxy
 
 import (
 	"bytes"
-	"github.com/khanhkit/pxgo/internal/config"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 type r59GuardRW struct {
@@ -32,11 +33,13 @@ func (w *r59GuardRW) Write(p []byte) (int, error) {
 	}
 	return w.b.Write(p)
 }
+
 func (w *r59GuardRW) Flush() {
 	if w.deadline.IsZero() {
 		w.badFlushes++
 	}
 }
+
 func (w *r59GuardRW) SetWriteDeadline(d time.Time) error {
 	w.deadline = d
 	w.deadlines = append(w.deadlines, d)

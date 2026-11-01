@@ -26,8 +26,10 @@ func TestR91SensorOutageAdmissionLedgerModel(t *testing.T) {
 			tick := now.Add(time.Duration(step) * time.Second)
 			switch r.Intn(7) {
 			case 0, 1, 2:
-				s := capacitySample{available: true, totalFD: 21000, freeFD: 20000,
-					linuxMemoryConstrained: true, linuxMemoryFreeSlots: r.Intn(11)}
+				s := capacitySample{
+					available: true, totalFD: 21000, freeFD: 20000,
+					linuxMemoryConstrained: true, linuxMemoryFreeSlots: r.Intn(11),
+				}
 				before := g.snapshot().ActiveDownstream
 				g.sample(s, tick)
 				observedFinite = true

@@ -16,7 +16,7 @@ func TestR86MissingMemoryMaxMustNotIgnorePartialFiniteTelemetry(t *testing.T) {
 	}
 	put := func(name, contents string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

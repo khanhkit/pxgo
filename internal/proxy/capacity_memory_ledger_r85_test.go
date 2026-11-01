@@ -18,8 +18,10 @@ func TestR85SmallFreshMemoryBudgetIsConsumedNotReused(t *testing.T) {
 	g.mu.Lock()
 	g.active = 40 // already-held useful long connections
 	g.mu.Unlock()
-	measured := capacitySample{available: true, freeFD: 9000, totalFD: 10000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 1}
+	measured := capacitySample{
+		available: true, freeFD: 9000, totalFD: 10000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 1,
+	}
 	now := time.Unix(200000, 0)
 	g.sample(measured, now)
 	for i := 0; i < 40; i++ {
@@ -53,8 +55,10 @@ func TestR85SmallFreshMemoryBudgetIsConsumedNotReused(t *testing.T) {
 func TestR85MemoryBudgetNeverDoubleCountsOnCloseAndReopen(t *testing.T) {
 	g := newCapacityGovernor(modeAuto, config.Default())
 	defer g.close()
-	s := capacitySample{available: true, freeFD: 9000, totalFD: 10000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 2}
+	s := capacitySample{
+		available: true, freeFD: 9000, totalFD: 10000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 2,
+	}
 	g.sample(s, time.Unix(210000, 0))
 	done := make(chan struct{})
 	for i := 0; i < 2; i++ {

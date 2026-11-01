@@ -1,9 +1,10 @@
 package proxy
 
 import (
-	"github.com/khanhkit/pxgo/internal/config"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func waitForR67Waiters(t *testing.T, g *capacityGovernor, want int) {

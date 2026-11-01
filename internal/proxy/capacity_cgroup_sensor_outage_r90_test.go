@@ -17,8 +17,10 @@ func TestR90CgroupFiniteSensorOutageDeniesNewButKeepsExisting(t *testing.T) {
 	g := newCapacityGovernor(modeAuto, config.Default())
 	defer g.close()
 	now := time.Unix(300000, 0)
-	ok := capacitySample{available: true, freeFD: 20000, totalFD: 21000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 100}
+	ok := capacitySample{
+		available: true, freeFD: 20000, totalFD: 21000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 100,
+	}
 	g.sample(ok, now)
 	done := make(chan struct{})
 	if err := g.acquire(done, 50*time.Millisecond); err != nil {
@@ -57,8 +59,10 @@ func TestR90CgroupFiniteContradictoryFDMeasureRevokesNewAdmissions(t *testing.T)
 	g := newCapacityGovernor(modeAuto, config.Default())
 	defer g.close()
 	now := time.Unix(302000, 0)
-	g.sample(capacitySample{available: true, freeFD: 20000, totalFD: 21000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 100}, now)
+	g.sample(capacitySample{
+		available: true, freeFD: 20000, totalFD: 21000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 100,
+	}, now)
 	g.sample(capacitySample{available: true, freeFD: 101, totalFD: 100}, now.Add(time.Second))
 	if s := g.snapshot(); s.EffectiveLimit != 0 || s.ActiveDownstream != 0 {
 		t.Fatalf("R90_CONTRADICTORY_FD_SAMPLE_REUSED_OLD_MEMORY_BUDGET: %+v", s)

@@ -21,8 +21,10 @@ func TestR91Real64HeldTunnelsSurviveSensorBlackout(t *testing.T) {
 	}
 	listener := newDynamicAdmissionListener(raw, g, 35*time.Millisecond)
 	defer listener.Close()
-	sample := capacitySample{available: true, totalFD: 10000, freeFD: 9000,
-		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 128}
+	sample := capacitySample{
+		available: true, totalFD: 10000, freeFD: 9000,
+		linuxMemoryConstrained: true, linuxMemoryFreeSlots: 128,
+	}
 	tick := time.Unix(460000, 0)
 	g.sample(sample, tick)
 	const held = 64

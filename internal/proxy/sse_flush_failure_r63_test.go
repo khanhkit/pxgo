@@ -3,11 +3,12 @@ package proxy
 import (
 	"bytes"
 	"errors"
-	"github.com/khanhkit/pxgo/internal/config"
 	"io"
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 var errR63FailedFlush = errors.New("injected SSE downstream flush failure")
@@ -34,6 +35,7 @@ func (w *r63FlushFailureWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
 func (w *r63FlushFailureWriter) SetWriteDeadline(t time.Time) error {
 	w.deadline = t
 	return nil

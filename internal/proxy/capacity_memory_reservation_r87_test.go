@@ -4,9 +4,10 @@ package proxy
 
 import (
 	"errors"
-	"github.com/khanhkit/pxgo/internal/config"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 // Positive cgroup headroom that has NOT changed after a new admission is

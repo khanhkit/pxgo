@@ -13,10 +13,10 @@ func TestR80ParentHighLimitAndPressureOverrideHealthyLeaf(t *testing.T) {
 	put := func(rel, name, value string) {
 		t.Helper()
 		dir := filepath.Join(root, rel)
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -43,10 +43,10 @@ func TestR80FailClosedOnCorruptVisibleAncestor(t *testing.T) {
 	put := func(rel, name, value string) {
 		t.Helper()
 		dir := filepath.Join(root, rel)
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -2,10 +2,11 @@ package proxy
 
 import (
 	"errors"
-	"github.com/khanhkit/pxgo/internal/config"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func r67OneOccupiedGovernor() *capacityGovernor {

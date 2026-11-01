@@ -4,9 +4,10 @@ package proxy
 
 import (
 	"errors"
-	"github.com/khanhkit/pxgo/internal/config"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 // A trustworthy FD-only sample may be safe at first startup on a host without

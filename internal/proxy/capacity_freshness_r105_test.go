@@ -2,9 +2,10 @@ package proxy
 
 import (
 	"errors"
-	"github.com/khanhkit/pxgo/internal/config"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 // Negative-before-positive real monotonic-clock experiment. Unlike tests

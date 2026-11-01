@@ -1,9 +1,10 @@
 package proxy
 
 import (
-	"github.com/khanhkit/pxgo/internal/config"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 func TestR106ExpiredSourceReportsStaleNotFreshDiagnostic(t *testing.T) {
