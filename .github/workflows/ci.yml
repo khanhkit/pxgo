@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      windows_listener_negative:
+        description: Research-only Windows raw socket bind-collision and cleanup checks
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1372,4 +1377,42 @@ jobs:
         with:
           name: win-true-syn-2560-${{ inputs.verification_ref }}
           path: benchmarks/
+          retention-days: 14
+
+  windows-listener-security-negative:
+    name: Windows listener negative WinSock lifecycle (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_listener_negative
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run native Windows failed-bind and invalid-config cases
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -ne $env:SOURCE_SHA) {
+            throw 'immutable exact verification_ref required'
+          }
+          $log = & go test ./internal/proxy -run '^TestR130WindowsBacklog(PortCollisionAndHandleCleanup|InvalidConfigurationRejectsBeforeBind)$' -count=1 -v -timeout=45s 2>&1
+          $exit = $LASTEXITCODE
+          $log | Tee-Object -FilePath benchmarks/r130-windows-listener-negative.log
+          if ($exit -ne 0) { throw "native listener security negative tests failed exit=$exit" }
+          $joined = Get-Content -Raw benchmarks/r130-windows-listener-negative.log
+          if (-not $joined.Contains('R130_WINDOWS_BIND_RESULT attempted=256 rejected=256')) { throw 'missing strict bind conflict marker' }
+          if (-not $joined.Contains('R130_WINDOWS_INVALID_RESULT rejected_malformed=true')) { throw 'missing malformed fail-closed marker' }
+      - name: Preserve negative-path evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-listener-negative-${{ inputs.verification_ref }}
+          path: benchmarks/*.log
           retention-days: 14
