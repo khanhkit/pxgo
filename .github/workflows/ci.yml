@@ -21,6 +21,21 @@ on:
         required: false
         type: boolean
         default: false
+      windows_listener_negative:
+        description: Research-only Windows raw socket bind-collision and cleanup checks
+        required: false
+        type: boolean
+        default: false
+      windows_preauth_queue:
+        description: Research-only demonstration of TCP backlog outside app permits
+        required: false
+        type: boolean
+        default: false
+      windows_backlog_guard:
+        description: Research-only Windows explicit non-loopback double opt-in gate
+        required: false
+        type: boolean
+        default: false
       linux_real_cgroup:
         description: Research-only finite Docker cgroup-v2 actual memory headroom test
         required: false
@@ -1442,4 +1457,119 @@ jobs:
           name: linux-real-cgroup-${{ inputs.verification_ref }}
           path: |
             benchmarks/*.log
+          retention-days: 14
+
+  windows-listener-security-negative:
+    name: Windows listener negative WinSock lifecycle (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_listener_negative
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run native Windows failed-bind and invalid-config cases
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -ne $env:SOURCE_SHA) {
+            throw 'immutable exact verification_ref required'
+          }
+          $log = & go test ./internal/proxy -run '^TestR130WindowsBacklog(PortCollisionAndHandleCleanup|InvalidConfigurationRejectsBeforeBind)$' -count=1 -v -timeout=45s 2>&1
+          $exit = $LASTEXITCODE
+          $log | Tee-Object -FilePath benchmarks/r130-windows-listener-negative.log
+          if ($exit -ne 0) { throw "native listener security negative tests failed exit=$exit" }
+          $joined = Get-Content -Raw benchmarks/r130-windows-listener-negative.log
+          if (-not $joined.Contains('R130_WINDOWS_BIND_RESULT attempted=256 rejected=256')) { throw 'missing strict bind conflict marker' }
+          if (-not $joined.Contains('R130_WINDOWS_INVALID_RESULT rejected_malformed=true')) { throw 'missing malformed fail-closed marker' }
+      - name: Preserve negative-path evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-listener-negative-${{ inputs.verification_ref }}
+          path: benchmarks/*.log
+          retention-days: 14
+
+  windows-preauth-queue-risk:
+    name: Windows kernel pre-auth TCP queue exposure (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_preauth_queue
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Prove unauthenticated kernel TCP queue outside app physical permits
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -ne $env:SOURCE_SHA) {
+            throw 'immutable exact verification SHA required'
+          }
+          $lines = & go test ./internal/proxy -run '^TestR131WindowsKernelPreauthQueueExceedsGovernor$' -count=1 -v -timeout=35s 2>&1
+          $code = $LASTEXITCODE
+          $lines | Tee-Object -FilePath benchmarks/r131-windows-preauth-risk.log
+          if ($code -ne 0) { throw "R131 Windows preauth research failed exit=$code" }
+          $log = Get-Content -Raw benchmarks/r131-windows-preauth-risk.log
+          if (-not $log.Contains('R131_WINDOWS_PREAUTH_QUEUE_RESULT tcp_connected=144 active_governor=16 excess_pre_auth_tcp=128')) {
+            throw 'missing strict evidence: kernel queue outside physical permits'
+          }
+      - name: Preserve risk evidence, even if test fails
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-preauth-risk-${{ inputs.verification_ref }}
+          path: benchmarks/*.log
+          retention-days: 14
+
+  windows-backlog-trusted-bind-guard:
+    name: Windows backlog fail-closed non-loopback guard (research-only)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_backlog_guard
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Native WinSock bind protection, approval, and default-compatibility tests
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.verification_ref }}
+        run: |
+          New-Item -ItemType Directory -Force -Path benchmarks | Out-Null
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$' -or (git rev-parse HEAD) -ne $env:SOURCE_SHA) {
+            throw 'immutable exact verification SHA is required'
+          }
+          $lines = & go test ./internal/proxy -run '^TestR133WindowsBacklog(RequiresSeparateNonLoopbackOptIn|ExplicitNonLoopbackOptIn)$' -count=1 -v -timeout=50s 2>&1
+          $code = $LASTEXITCODE
+          $lines | Tee-Object -FilePath benchmarks/r133-win-nonloopback-optin.log
+          if ($code -ne 0) { throw "R133 native WinSock security gate failed exit=$code" }
+          $log = Get-Content -Raw benchmarks/r133-win-nonloopback-optin.log
+          if (-not $log.Contains('R133_WINDOWS_GUARD_NEGATIVE denied_nonloopback_without_second_optin=true')) { throw 'missing fail-closed proof' }
+          if (-not $log.Contains('R133_WINDOWS_GUARD_EXPLICIT_ALLOW approved_nonloopback=true')) { throw 'missing deliberate explicit allow proof' }
+      - name: Preserve opt-in security evidence on all outcomes
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-backlog-trusted-bind-${{ inputs.verification_ref }}
+          path: benchmarks/*.log
           retention-days: 14

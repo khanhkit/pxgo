@@ -89,3 +89,11 @@ These tests strengthen **preview safety evidence** only. Native Windows Job Obje
 ### R11 verify liveness both before and after the 2,560-tunnel plateau
 
 R9 checked an echo at CONNECT establishment. R11 additionally sends a **distinct, per-tunnel payload after the shared plateau release barrier** and verifies that exact echo before closing each connection. A tunnel can be counted as established but lose its data plane during the 18-second plateau; this second challenge detects that failure. The overload harness counts legacy/shadow expected queued handshake timeouts separately from data-plane corruption, and *every established tunnel* must pass both payload checks. AUTO requires all 2,560 tunnel handshakes and the second payload challenge. Windows backlog burst behavior and `pxgo-ad` AD release gates remain separate.
+
+## R133: Windows opt-in backlog exposes pre-auth kernel queue (research finding)
+
+The experimental `PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG=4096` requests a larger WinSock pending TCP queue. **It is OFF by default** and independent of `AUTO` physical admission. R131 native Windows demonstrated 144 completed TCP handshakes with `ActiveDownstream=16` and 128 additional connections outside application permits, all before HTTP authentication; do not treat kernel backlog capacity as a security rate limit.
+
+R133 candidate restricts this experimental mode to explicit IPv4 loopback by default. For non-loopback listeners (including `0.0.0.0`), it returns an error unless the operator sets BOTH `PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG=4096` and `PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG_ALLOW_NON_LOOPBACK=1`. The second value must be exactly `1`; malformed values are rejected. The ordinary Windows Go listener when the backlog variable is unset is unaffected. This is a deliberate explicit acknowledgment, **not an automatic firewall, DoS protection, or public exposure recommendation**. Operators must still restrict untrusted source addresses upstream and monitor kernel TCP queue/host resources. Both variables remain experimental.
+
+R133 is research staging until source-exact native Windows CI and independent review. The original PR105 stays Draft; do not imply the experimental guard is deployed or merged.
