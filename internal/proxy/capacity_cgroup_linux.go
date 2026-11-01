@@ -26,11 +26,12 @@ const (
 	capacityCgroupBytesPerSocket = uint64(1 << 20) // research 1MiB/socket
 	capacityCgroupMinReserve     = uint64(64 << 20)
 	capacityCgroupMaxReserve     = uint64(512 << 20)
+	capacityCgroupUnlimited      = "max"
 )
 
 func parseCapacityCgroupUint(raw []byte) (uint64, bool, error) {
 	val := strings.TrimSpace(string(raw))
-	if val == "max" {
+	if val == capacityCgroupUnlimited {
 		return 0, true, nil
 	}
 	if val == "" {
@@ -186,7 +187,7 @@ func readCapacityCgroupMemoryNode(root string) (capacityCgroupMemory, error) {
 	}
 	high, err := os.ReadFile(filepath.Join(root, "memory.high"))
 	if errors.Is(err, os.ErrNotExist) {
-		high = []byte("max")
+		high = []byte(capacityCgroupUnlimited)
 	} else if err != nil {
 		return capacityCgroupMemory{}, err
 	}

@@ -20,15 +20,18 @@ import (
 type capacityMode string
 
 const (
-	modeLegacy              capacityMode = "legacy"
-	modeShadow              capacityMode = "shadow"
-	modeAuto                capacityMode = "auto"
-	capacityStateNormal                  = "normal"
-	capacityStatePressure                = "pressure"
-	capacityStateRecovering              = "recovering"
-	capacityEmergencyFD                  = "emergency-fd"
-	capacityInvalidSensor                = "invalid"
-	capacityWindowsSensor                = "windows-memory-handles"
+	modeLegacy                   capacityMode = "legacy"
+	modeShadow                   capacityMode = "shadow"
+	modeAuto                     capacityMode = "auto"
+	capacityStateNormal                       = "normal"
+	capacityStatePressure                     = "pressure"
+	capacityStateRecovering                   = "recovering"
+	capacityEmergencyFD                       = "emergency-fd"
+	capacityInvalidSensor                     = "invalid"
+	capacitySensorColdStart                   = "cold-start"
+	capacitySensorFresh                       = "fresh"
+	capacityPressureCgroupMemory              = "cgroup-memory"
+	capacityWindowsSensor                     = "windows-memory-handles"
 )
 
 func experimentalCapacityMode() (capacityMode, error) {
@@ -116,7 +119,7 @@ func newCapacityGovernor(mode capacityMode, cfg config.Config) *capacityGovernor
 	if mode == modeLegacy {
 		return nil
 	}
-	g := &capacityGovernor{changed: make(chan struct{}), mode: mode, manual: cfg.MaxConnections, soft: capacityColdStartWindow, hard: capacityColdStartWindow, state: capacityStateNormal, sensor: "cold-start", lastTransition: time.Now()}
+	g := &capacityGovernor{changed: make(chan struct{}), mode: mode, manual: cfg.MaxConnections, soft: capacityColdStartWindow, hard: capacityColdStartWindow, state: capacityStateNormal, sensor: capacitySensorColdStart, lastTransition: time.Now()}
 	if mode == modeAuto && experimentalConnectionClassesEnabled() {
 		g.classes = newConnectionClassManager()
 		g.classes.strictLongIntake = experimentalStrictLongIntakeEnabled()
@@ -222,7 +225,7 @@ func (g *capacityGovernor) expireSensorFreshnessLocked() {
 		g.sensorFreshnessBlocked = true
 		// Keep diagnostics truthful: expired telemetry is not still fresh.
 		// Preserve stronger explicit invalid/unavailable error classifications.
-		if g.sensor == "fresh" || g.sensor == capacityWindowsSensor {
+		if g.sensor == capacitySensorFresh || g.sensor == capacityWindowsSensor {
 			g.sensor = "stale"
 		}
 		g.recomputeLocked()
@@ -341,9 +344,9 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		return
 	}
 	g.lastSample = now
-	wasColdStart := g.sensor == "cold-start"
+	wasColdStart := g.sensor == capacitySensorColdStart
 	if !s.available {
-		if g.sensor == "cold-start" {
+		if g.sensor == capacitySensorColdStart {
 			g.startupSensorUntrusted = true
 		}
 		// A previously observed finite cgroup quota cannot be trusted after
@@ -363,7 +366,7 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		g.recomputeLocked()
 		return
 	}
-	g.sensor = "fresh"
+	g.sensor = capacitySensorFresh
 	g.probeAllowed = false // fresh instrumentation supersedes an unverified probe
 	var hard int
 	var pressured bool
@@ -440,7 +443,7 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		g.memorySampleConstrained = s.linuxMemoryConstrained
 		g.memoryAdmissionBlocked = s.linuxMemoryConstrained && g.memorySampleRemaining == 0
 		if s.linuxMemoryPressure {
-			pressureReason = "cgroup-memory"
+			pressureReason = capacityPressureCgroupMemory
 			pressured = true
 		}
 	case capacityWindowsSensor:
@@ -527,63 +530,67 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		if hard > g.hard {
 			g.hard = hard
 		}
-		if g.healthy >= 3 && !now.Before(g.cooldown) {
-			if g.state == capacityStateNormal && (g.active >= g.effective || g.waiting > 0) && g.soft < g.hard {
-				// Fast additive/multiplicative increase under verified FD headroom.
-				// No goroutine scheduler or per-route limits: the server-scoped
-				// downstream gate remains the single authority.
-				step := max(32, min(g.soft/2, 512))
-				// RESEARCH MODE ONLY: leave R11 unchanged without an explicit
-				// local experiment env. Run an identical real 2,560-CONNECT test
-				// against PI/PID/HPA policies in this isolated lab checkout.
-				switch os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY") {
-				case "fast_saturation":
-					// Lab-only faster multiplicative ramp, still clipped by true
-					// resource hard ceiling and all original overload safety gates.
-					step = max(64, min(g.soft, 1024))
-				case "pi", researchPolicyPID, researchPolicyProportional:
-					backlog := float64(g.waiting)
-					if backlog <= 0 {
-						backlog = float64(max(0, g.active-g.effective+1))
-					}
-					// Integral is conditional: while saturating, freeze it;
-					// derivative is on measured active sockets to avoid setpoint kick.
-					dMeasured := (float64(g.active) - g.researchPrevMeasured) / .5
-					g.researchDeriv = .75*g.researchDeriv + .25*dMeasured
-					g.researchPrevMeasured = float64(g.active)
-					kp, ki, kd := .55, .02, 0.
-					policy := os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY")
-					if policy == researchPolicyPID {
-						kp = .55
-						ki = .02
-						kd = .12
-					}
-					if policy == researchPolicyProportional {
-						kp = .55
-						ki = 0
-						kd = 0
-					}
-					unclipped := kp*backlog + ki*g.researchIntegral - kd*g.researchDeriv
-					if policy == researchPolicyPID && unclipped < 0 {
-						unclipped = 0
-					}
-					step = max(32, min(512, int(math.Round(unclipped))))
-					if step < 512 && g.soft+step < g.hard {
-						g.researchIntegral = math.Min(3000, g.researchIntegral+backlog*.5)
-					}
-				case "hpa":
-					// Demand-ratio controller with work-conserving, bounded slew.
-					step = max(32, min(512, g.active+g.waiting-g.soft))
-				}
-				g.soft += min(step, g.hard-g.soft)
-				g.cooldown = now.Add(capacityGrowthCooldown)
-			}
-		}
+		g.growWindowIfReadyLocked(now)
 		if g.state == capacityStateNormal {
 			g.reason = "none"
 		}
 	}
 	g.recomputeLocked()
+}
+
+func (g *capacityGovernor) growWindowIfReadyLocked(now time.Time) {
+	if g.healthy >= 3 && !now.Before(g.cooldown) {
+		if g.state == capacityStateNormal && (g.active >= g.effective || g.waiting > 0) && g.soft < g.hard {
+			// Fast additive/multiplicative increase under verified FD headroom.
+			// No goroutine scheduler or per-route limits: the server-scoped
+			// downstream gate remains the single authority.
+			step := max(32, min(g.soft/2, 512))
+			// RESEARCH MODE ONLY: leave R11 unchanged without an explicit
+			// local experiment env. Run an identical real 2,560-CONNECT test
+			// against PI/PID/HPA policies in this isolated lab checkout.
+			switch os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY") {
+			case "fast_saturation":
+				// Lab-only faster multiplicative ramp, still clipped by true
+				// resource hard ceiling and all original overload safety gates.
+				step = max(64, min(g.soft, 1024))
+			case "pi", researchPolicyPID, researchPolicyProportional:
+				backlog := float64(g.waiting)
+				if backlog <= 0 {
+					backlog = float64(max(0, g.active-g.effective+1))
+				}
+				// Integral is conditional: while saturating, freeze it;
+				// derivative is on measured active sockets to avoid setpoint kick.
+				dMeasured := (float64(g.active) - g.researchPrevMeasured) / .5
+				g.researchDeriv = .75*g.researchDeriv + .25*dMeasured
+				g.researchPrevMeasured = float64(g.active)
+				kp, ki, kd := .55, .02, 0.
+				policy := os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY")
+				if policy == researchPolicyPID {
+					kp = .55
+					ki = .02
+					kd = .12
+				}
+				if policy == researchPolicyProportional {
+					kp = .55
+					ki = 0
+					kd = 0
+				}
+				unclipped := kp*backlog + ki*g.researchIntegral - kd*g.researchDeriv
+				if policy == researchPolicyPID && unclipped < 0 {
+					unclipped = 0
+				}
+				step = max(32, min(512, int(math.Round(unclipped))))
+				if step < 512 && g.soft+step < g.hard {
+					g.researchIntegral = math.Min(3000, g.researchIntegral+backlog*.5)
+				}
+			case "hpa":
+				// Demand-ratio controller with work-conserving, bounded slew.
+				step = max(32, min(512, g.active+g.waiting-g.soft))
+			}
+			g.soft += min(step, g.hard-g.soft)
+			g.cooldown = now.Add(capacityGrowthCooldown)
+		}
+	}
 }
 
 func (g *capacityGovernor) recordAcceptError(err error) {
