@@ -13,7 +13,7 @@ func TestR133WindowsBacklogRequiresSeparateNonLoopbackOptIn(t *testing.T) {
 	t.Setenv("PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG", "4096")
 	t.Setenv("PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG_ALLOW_NON_LOOPBACK", "")
 	// This is an ephemeral raw socket, no accept loop or remote serving.
-	for _, address := range []string{"0.0.0.0:0", "192.0.2.1:0", "255.255.255.255:0"} {
+	for _, address := range []string{"0.0.0.0:0", "192.0.2.1:0", "255.255.255.255:0", "[::ffff:0.0.0.0]:0", "[::ffff:192.0.2.1]:0"} {
 		ln, err := listenProxyTCP(address)
 		if err == nil {
 			_ = ln.Close()
@@ -34,7 +34,14 @@ func TestR133WindowsBacklogRequiresSeparateNonLoopbackOptIn(t *testing.T) {
 		_ = ln.Close()
 		t.Fatal("ambiguous non-loopback approval accepted despite malformed env")
 	}
-	t.Log("R133_WINDOWS_GUARD_NEGATIVE denied_nonloopback_without_second_optin=true loopback_allowed=true invalid_approval_rejected=true")
+	// The second flag alone must never activate experimental backlog.
+	t.Setenv("PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG", "")
+	ln, err = listenProxyTCP("localhost:0")
+	if err != nil {
+		t.Fatalf("regular net.Listen unexpectedly changed by standalone override: %v", err)
+	}
+	_ = ln.Close()
+	t.Log("R133_WINDOWS_GUARD_NEGATIVE denied_nonloopback_without_second_optin=true loopback_allowed=true invalid_approval_rejected=true standalone_approval_does_not_activate=true")
 }
 
 func TestR133WindowsBacklogExplicitNonLoopbackOptIn(t *testing.T) {
