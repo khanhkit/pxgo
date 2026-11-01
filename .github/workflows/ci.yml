@@ -1422,6 +1422,19 @@ jobs:
           grep -F 'R128_REAL_CGROUP_RESULT' benchmarks/r128-real-cgroup.log
           grep -F 'new_tcp_denied=true' benchmarks/r128-real-cgroup.log
           grep -F 'oom_kill_delta=0' benchmarks/r128-real-cgroup.log
+      - name: Verify genuine visible cgroup ancestors through host cgroup namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6'
+          docker run --rm --network none --cgroupns=host --memory 384m --memory-swap 384m --pids-limit 128 --cpus 2 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 -e PXGO_R129_HOST_CGROUP=1 \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR129NativeVisibleCgroupAncestors$' \
+            -test.count=1 -test.timeout=45s -test.v | tee benchmarks/r129-host-ancestors.log
+          grep -F 'R129_HOST_ANCESTOR_RESULT' benchmarks/r129-host-ancestors.log
       - name: Preserve exact-sha kernel-pressure evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
