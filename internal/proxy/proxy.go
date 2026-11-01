@@ -788,7 +788,6 @@ func (s *Server) maintenanceLoop() {
 			s.capacity.sample(readCapacitySample(), now)
 		case now := <-t.C:
 			if s.capacity != nil && s.capacity.classes != nil {
-				s.capacity.classes.sampleBudgets(s.capacity.snapshot().SoftWindow)
 				s.capacity.classes.promoteAged(now)
 			}
 			if s.capacity != nil && s.capacity.mode != modeAuto {
