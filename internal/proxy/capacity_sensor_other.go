@@ -1,4 +1,4 @@
-//go:build !linux && !windows && !windows
+//go:build !linux && !windows && !darwin
 
 package proxy
 
