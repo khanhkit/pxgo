@@ -493,7 +493,7 @@ func (s *Server) Start() error {
 	}
 	for _, host := range s.listenHosts() {
 		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-		rawListener, err := net.Listen("tcp", addr)
+		rawListener, err := listenProxyTCP(addr)
 		if err != nil {
 			for _, opened := range listeners {
 				_ = opened.Close()
@@ -788,7 +788,6 @@ func (s *Server) maintenanceLoop() {
 			s.capacity.sample(readCapacitySample(), now)
 		case now := <-t.C:
 			if s.capacity != nil && s.capacity.classes != nil {
-				s.capacity.classes.sampleBudgets(s.capacity.snapshot().SoftWindow)
 				s.capacity.classes.promoteAged(now)
 			}
 			if s.capacity != nil && s.capacity.mode != modeAuto {
@@ -1011,6 +1010,18 @@ func (s *Server) handleHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	debug.Dprintf("HTTP response: %d %s", resp.StatusCode, targetURL)
 	if resp.StatusCode == http.StatusSwitchingProtocols {
+		// Upstream accepted the protocol switch after client authorization.
+		// Treat a genuine 101 as a new long request, not a client header hint.
+		if s.capacity != nil && s.capacity.classes != nil && requestedUpgrade(req) != "" {
+			lease := connectionClassFromContext(req.Context())
+			if (s.capacity.classes.strictLongIntake && lease == nil) || !lease.classifyUpgradeResponse(resp) {
+				_ = resp.Body.Close()
+				rw.Header().Set("Connection", "close")
+				rw.Header().Set("Retry-After", "1")
+				http.Error(rw, "experimental upgrade long response admission limit reached", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		s.handleHTTPUpgrade(rw, req, resp)
 		return
 	}

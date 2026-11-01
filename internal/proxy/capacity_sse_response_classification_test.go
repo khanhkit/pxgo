@@ -177,7 +177,8 @@ func runStrictSSEActualResponse(t *testing.T, heldLong int) {
 	if err != nil || string(data) != `{"ok":true}` {
 		t.Fatalf("JSON response corrupted: %q err=%v", data, err)
 	}
-	assertQuotedAcceptJSONResponse(t, client, origin.URL)
+	assertAcceptJSONResponse(t, client, origin.URL, `application/json; note="intro, text/event-stream; q=1, outro"`)
+	assertAcceptJSONResponse(t, client, origin.URL, "application/json, text/event-stream;q=0.1")
 	denied := uint64(0)
 	if heldLong == 12 {
 		denied = 1
@@ -190,13 +191,13 @@ func runStrictSSEActualResponse(t *testing.T, heldLong int) {
 
 // assertQuotedAcceptJSONResponse proves that an SSE-looking substring inside
 // a quoted Accept parameter never consumes a long class budget or returns 503.
-func assertQuotedAcceptJSONResponse(t *testing.T, client *http.Client, originURL string) {
+func assertAcceptJSONResponse(t *testing.T, client *http.Client, originURL, acceptValue string) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, originURL+"/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Accept", `application/json; note="intro, text/event-stream; q=1, outro"`)
+	req.Header.Set("Accept", acceptValue)
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)

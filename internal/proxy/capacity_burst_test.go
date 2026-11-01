@@ -106,13 +106,16 @@ func TestCapacityBurst2560(t *testing.T) {
 		starts[i] = make(chan struct{})
 	}
 	type outcome struct {
-		success        bool
-		latency        time.Duration
-		dialError      bool
-		dialMessage    string
-		handshakeError bool
-		dataError      string
-		beforeRelease  bool
+		success          bool
+		latency          time.Duration
+		dialError        bool
+		dialMessage      string
+		dialErrno        int
+		handshakeError   bool
+		handshakeMessage string
+		handshakeErrno   int
+		dataError        string
+		beforeRelease    bool
 	}
 	results := make(chan outcome, attempts)
 	var admitted atomic.Int64
@@ -126,7 +129,7 @@ func TestCapacityBurst2560(t *testing.T) {
 			begun := time.Now()
 			conn, e := net.DialTimeout("tcp", px.ListenAddr(), 3*time.Second)
 			if e != nil {
-				results <- outcome{dialError: true, dialMessage: e.Error()}
+				results <- outcome{dialError: true, dialMessage: e.Error(), dialErrno: capacityNativeSocketErrno(e)}
 				return
 			}
 			defer conn.Close()
@@ -143,7 +146,7 @@ func TestCapacityBurst2560(t *testing.T) {
 				}
 			}
 			if e != nil {
-				results <- outcome{handshakeError: true}
+				results <- outcome{handshakeError: true, handshakeMessage: e.Error(), handshakeErrno: capacityNativeSocketErrno(e)}
 				return
 			}
 			latency := time.Since(begun)
@@ -196,7 +199,9 @@ func TestCapacityBurst2560(t *testing.T) {
 	peak := px.capacityDiagnosticSnapshot()
 	successBeforeRelease := admitted.Load()
 	tunnelsBeforeRelease := px.ActiveTunnels()
-	assertCapacityBurstClassAccounting(t, px, mode, attempts)
+	// Capture any premature class-budget failure, but never abort before
+	// the dial/handshake outcomes and cleanup have been recorded.
+	classError := capacityBurstClassAccountingError(t, px, mode, attempts)
 	goroutinesBeforeRelease := runtime.NumGoroutine()
 	fdAt := readCapacitySample()
 	released.Store(true)
@@ -212,6 +217,8 @@ func TestCapacityBurst2560(t *testing.T) {
 	var successes, dialErrors, handshakeErrors, payloadErrors int
 	var firstPayloadError string
 	var firstDialError string
+	var firstHandshakeError string
+	firstDialErrno, firstHandshakeErrno := -1, -1
 	latencies := make([]time.Duration, 0, attempts)
 	preReleaseLatencies := make([]time.Duration, 0, attempts)
 	for result := range results {
@@ -226,9 +233,14 @@ func TestCapacityBurst2560(t *testing.T) {
 			dialErrors++
 			if firstDialError == "" {
 				firstDialError = result.dialMessage
+				firstDialErrno = result.dialErrno
 			}
 		case result.handshakeError:
 			handshakeErrors++
+			if firstHandshakeError == "" {
+				firstHandshakeError = result.handshakeMessage
+				firstHandshakeErrno = result.handshakeErrno
+			}
 		default:
 			payloadErrors++
 			if firstPayloadError == "" {
@@ -245,25 +257,38 @@ func TestCapacityBurst2560(t *testing.T) {
 	if (mode == string(modeLegacy) || mode == string(modeShadow)) && peak.ActiveDownstream > 256 {
 		t.Fatalf("fixed legacy budget violated: %+v", peak)
 	}
+	logCapacityBurstTransportError(t, "DIAL", mode, dialErrors, firstDialErrno, firstDialError)
+	logCapacityBurstTransportError(t, "HANDSHAKE", mode, handshakeErrors, firstHandshakeErrno, firstHandshakeError)
 	if payloadErrors > 0 {
-		t.Fatalf("held CONNECT payload integrity failed for %d tunnels: first=%q", payloadErrors, firstPayloadError)
+		t.Errorf("held CONNECT payload integrity failed for %d tunnels: first=%q", payloadErrors, firstPayloadError)
 	}
-	if dialErrors > 0 {
-		t.Logf("FIRST_DIAL_ERROR platform=%s mode=%s count=%d example=%q", runtime.GOOS, mode, dialErrors, firstDialError)
+	if classError != nil {
+		t.Error(classError)
 	}
 	if mode == "auto" && (successBeforeRelease != attempts || tunnelsBeforeRelease != attempts || successes != attempts) {
 		t.Fatalf("AUTO 2560 simultaneous CONNECT admission NOT VERIFIED (attempted=%d admitted_before_release=%d live_tunnels_at_release=%d dial_errors=%d first_error=%q sensor=%s); leave release gate BLOCKED", attempts, successBeforeRelease, tunnelsBeforeRelease, dialErrors, firstDialError, peak.SensorAvailability)
 	}
 }
 
-func assertCapacityBurstClassAccounting(t *testing.T, px *Server, mode string, attempts int) {
+func capacityBurstClassAccountingError(t *testing.T, px *Server, mode string, attempts int) error {
 	t.Helper()
 	if mode != "auto" || px.capacity == nil || px.capacity.classes == nil {
-		return
+		return nil
 	}
 	classes := px.capacity.classes.snapshot()
 	t.Logf("CLASS_POOLS total=%d provisional=%d short=%d long=%d short_soft=%d long_soft=%d promoted=%d long_overflow_events=%d long_current_debt=%d", classes.Total, classes.Provisional, classes.Short, classes.Long, classes.ShortBudget, classes.LongBudget, classes.Promoted, classes.LongOverflow, classes.LongDebt)
 	if classes.Total != attempts || classes.Long != attempts || classes.Provisional != 0 {
-		t.Fatalf("all %d CONNECT tunnels must be long in a single permit budget: %+v", attempts, classes)
+		return fmt.Errorf("all %d CONNECT tunnels must be long in a single permit budget: %+v", attempts, classes)
 	}
+	return nil
+}
+
+// Centralize failure diagnostics to keep the 2560-socket test's control flow
+// focused on cleanup and unconditional result collection before assertions.
+func logCapacityBurstTransportError(t *testing.T, kind, mode string, count, nativeErrno int, example string) {
+	t.Helper()
+	if count == 0 {
+		return
+	}
+	t.Logf("FIRST_%s_ERROR platform=%s mode=%s count=%d native_errno=%d example=%q", kind, runtime.GOOS, mode, count, nativeErrno, example)
 }

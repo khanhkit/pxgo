@@ -22,5 +22,20 @@ func readCapacitySample() capacitySample {
 	if used > limit {
 		return capacitySample{reason: "fd-count-contradictory"}
 	}
-	return capacitySample{available: true, freeFD: limit - used, totalFD: limit}
+	cgroup, cgerr := readCapacityCgroupMemory("/sys/fs/cgroup")
+	if cgerr != nil {
+		// A readable FD budget alone is insufficient when cgroup memory
+		// telemetry cannot be trusted. Fail closed for *new* sockets only.
+		return capacitySample{
+			available: true, freeFD: limit - used, totalFD: limit,
+			linuxMemoryConstrained: true, linuxMemoryFreeSlots: 0,
+			linuxMemoryPressure: true, reason: "cgroup-memory-unavailable",
+		}
+	}
+	return capacitySample{
+		available: true, freeFD: limit - used, totalFD: limit,
+		linuxMemoryConstrained: cgroup.constrained,
+		linuxMemoryFreeSlots:   cgroup.freeSlots,
+		linuxMemoryPressure:    cgroup.pressured,
+	}
 }

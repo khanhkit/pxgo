@@ -29,13 +29,13 @@ func TestConnectionClassPredictionAndAtomicPromotion(t *testing.T) {
 	a.classifyRequest(&http.Request{Method: http.MethodGet, Header: make(http.Header)}, now)
 	b.classifyRequest(&http.Request{Method: http.MethodConnect, Header: make(http.Header)}, now)
 	c.classifyRequest(&http.Request{Method: http.MethodGet, Header: http.Header{"Accept": []string{"text/event-stream"}}}, now)
-	if got := m.snapshot(); got.Total != 3 || got.Provisional != 0 || got.Short != 1 || got.Long != 2 {
+	if got := m.snapshot(); got.Total != 3 || got.Provisional != 0 || got.Short != 2 || got.Long != 1 {
 		t.Fatalf("classification incorrect: %+v", got)
 	}
 	// A connection initially classified as short migrates one accounting token
 	// without asking the global governor for another permit or changing total.
 	m.promoteAged(now.Add(31 * time.Second))
-	if got := m.snapshot(); got.Total != 3 || got.Short != 0 || got.Long != 3 || got.Promoted != 1 {
+	if got := m.snapshot(); got.Total != 3 || got.Short != 0 || got.Long != 3 || got.Promoted != 2 {
 		t.Fatalf("short->long migration lost a permit: %+v", got)
 	}
 	a.classifyRequest(&http.Request{Method: http.MethodGet}, now.Add(35*time.Second))
@@ -83,9 +83,12 @@ func TestConnectionClassRepeatRequestsAndUpgrade(t *testing.T) {
 		t.Fatalf("repeat traffic not reclassified: %+v", m.snapshot())
 	}
 	b := m.open(now)
-	b.classifyRequest(&http.Request{Method: http.MethodGet, Header: http.Header{headerUpgrade: []string{"websocket"}}}, now)
-	if b.kind != classLong {
-		t.Fatal("websocket predictor failed")
+	b.classifyRequest(&http.Request{Method: http.MethodGet, Header: http.Header{headerConnection: []string{"Upgrade"}, headerUpgrade: []string{"websocket"}}}, now)
+	if b.kind != classShort {
+		t.Fatal("upgrade request hint must remain short until actual 101")
+	}
+	if !b.classifyUpgradeResponse(&http.Response{StatusCode: http.StatusSwitchingProtocols}) || b.kind != classLong {
+		t.Fatal("real upstream websocket 101 must promote the long lease")
 	}
 	a.finish()
 	b.finish()
@@ -539,12 +542,27 @@ func TestStrictLongIntakeWebSocketSSEAndConcurrentLimit(t *testing.T) {
 		longs = append(longs, l)
 	}
 	for _, req := range []*http.Request{
-		{Method: http.MethodGet, Header: http.Header{headerUpgrade: []string{"websocket"}}},
+		{Method: http.MethodGet, Header: http.Header{headerConnection: []string{"Upgrade"}, headerUpgrade: []string{"websocket"}}},
 		{Method: http.MethodGet, Header: http.Header{"Accept": []string{"text/event-stream"}}},
 	} {
 		l := m.open(now)
-		if l.classifyRequest(req, now) {
-			t.Fatalf("new WS/SSE long bypassed full long budget: %v", req.Header)
+		if req.Header.Get("Accept") != "" {
+			// An Accept hint is not an authoritative long request: upstream
+			// may return ordinary JSON. Only a genuine SSE response is denied.
+			if !l.classifyRequest(req, now) {
+				t.Fatal("client Accept hint incorrectly denied early")
+			}
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}}
+			if l.classifySSEResponse(resp) {
+				t.Fatal("actual SSE response bypassed full long budget")
+			}
+		} else {
+			if !l.classifyRequest(req, now) {
+				t.Fatal("WebSocket request hint must not be denied before origin response")
+			}
+			if l.classifyUpgradeResponse(&http.Response{StatusCode: http.StatusSwitchingProtocols}) {
+				t.Fatal("real upstream WebSocket 101 bypassed full budget")
+			}
 		}
 		l.finish()
 	}

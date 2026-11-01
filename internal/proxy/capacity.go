@@ -20,15 +20,18 @@ import (
 type capacityMode string
 
 const (
-	modeLegacy              capacityMode = "legacy"
-	modeShadow              capacityMode = "shadow"
-	modeAuto                capacityMode = "auto"
-	capacityStateNormal                  = "normal"
-	capacityStatePressure                = "pressure"
-	capacityStateRecovering              = "recovering"
-	capacityEmergencyFD                  = "emergency-fd"
-	capacityInvalidSensor                = "invalid"
-	capacityWindowsSensor                = "windows-memory-handles"
+	modeLegacy                   capacityMode = "legacy"
+	modeShadow                   capacityMode = "shadow"
+	modeAuto                     capacityMode = "auto"
+	capacityStateNormal                       = "normal"
+	capacityStatePressure                     = "pressure"
+	capacityStateRecovering                   = "recovering"
+	capacityEmergencyFD                       = "emergency-fd"
+	capacityInvalidSensor                     = "invalid"
+	capacitySensorColdStart                   = "cold-start"
+	capacitySensorFresh                       = "fresh"
+	capacityPressureCgroupMemory              = "cgroup-memory"
+	capacityWindowsSensor                     = "windows-memory-handles"
 )
 
 func experimentalCapacityMode() (capacityMode, error) {
@@ -47,6 +50,7 @@ func experimentalCapacityMode() (capacityMode, error) {
 const (
 	capacityControlInterval = 250 * time.Millisecond
 	capacityGrowthCooldown  = 500 * time.Millisecond
+	capacitySensorMaxAge    = 5 * time.Second // 20x the ordinary 250ms observation cadence
 )
 
 // Owner-requested provisional startup target for opt-in AUTO. The Linux
@@ -59,37 +63,50 @@ const (
 )
 
 type capacitySample struct {
-	available        bool
-	freeFD           int
-	totalFD          int
-	resource         string // empty on Linux; windows-memory-handles for experimental native envelope
-	freeSlots        int
-	resourcePressure bool
-	reason           string
+	available              bool
+	freeFD                 int
+	totalFD                int
+	resource               string // empty on Linux; windows-memory-handles for experimental native envelope
+	freeSlots              int
+	resourcePressure       bool
+	linuxMemoryConstrained bool // optional cgroup2 ceiling; never a second physical permit
+	linuxMemoryFreeSlots   int
+	linuxMemoryPressure    bool
+	reason                 string
 }
 
 type capacityGovernor struct {
-	mu             sync.Mutex
-	changed        chan struct{}
-	mode           capacityMode
-	manual         int
-	active         int
-	soft           int
-	hard           int
-	effective      int
-	waits          uint64
-	waiting        int
-	timeouts       uint64
-	state          string
-	reason         string
-	sensor         string
-	lastTransition time.Time
-	healthy        int
-	pressured      int
-	cooldown       time.Time
-	lastSample     time.Time
-	probeAllowed   bool                    // at most one post-cooldown new socket when sensors are unavailable
-	classes        *connectionClassManager // opt-in accounting ONLY, same physical permit
+	mu                      sync.Mutex
+	changed                 chan struct{}
+	mode                    capacityMode
+	manual                  int
+	active                  int
+	soft                    int
+	hard                    int
+	effective               int
+	waits                   uint64
+	waiting                 int
+	nextWaitTicket          uint64
+	waitQueue               []uint64 // FIFO only for accepted sockets awaiting one physical permit
+	timeouts                uint64
+	state                   string
+	reason                  string
+	sensor                  string
+	lastTransition          time.Time
+	healthy                 int
+	pressured               int
+	cooldown                time.Time
+	lastSample              time.Time
+	lastVerifiedReceipt     time.Time               // monotonic receipt, never synthetic sample/event timestamps
+	sensorFreshnessBlocked  bool                    // if samples stop arriving, revoke NEW intake only
+	probeAllowed            bool                    // at most one post-cooldown new socket when sensors are unavailable
+	startupSensorUntrusted  bool                    // failed first runtime preflight cannot authorize AUTO 256 cold-start slots
+	memoryAdmissionBlocked  bool                    // cgroup has no verified NEW physical memory headroom
+	memorySampleConstrained bool                    // most recent valid Linux cgroup observation is finite
+	memorySampleRemaining   int                     // fresh-new-socket permits; never replenished by old socket close
+	memoryPendingSlots      int                     // reservations not yet reflected by memory.current
+	memoryLastObservedSlots int                     // previous measured free slots for reservation debt reconciliation
+	classes                 *connectionClassManager // opt-in accounting ONLY, same physical permit
 	// Research-only: synthetic PI/PID alternatives; NOT shipped or proposed
 	// for release, isolated experiment policy gated by PXGO_RESEARCH_CAPACITY_POLICY.
 	researchIntegral     float64
@@ -102,7 +119,7 @@ func newCapacityGovernor(mode capacityMode, cfg config.Config) *capacityGovernor
 	if mode == modeLegacy {
 		return nil
 	}
-	g := &capacityGovernor{changed: make(chan struct{}), mode: mode, manual: cfg.MaxConnections, soft: capacityColdStartWindow, hard: capacityColdStartWindow, state: capacityStateNormal, sensor: "cold-start", lastTransition: time.Now()}
+	g := &capacityGovernor{changed: make(chan struct{}), mode: mode, manual: cfg.MaxConnections, soft: capacityColdStartWindow, hard: capacityColdStartWindow, state: capacityStateNormal, sensor: capacitySensorColdStart, lastTransition: time.Now()}
 	if mode == modeAuto && experimentalConnectionClassesEnabled() {
 		g.classes = newConnectionClassManager()
 		g.classes.strictLongIntake = experimentalStrictLongIntakeEnabled()
@@ -129,6 +146,29 @@ func (g *capacityGovernor) recomputeLocked() {
 				n = g.manual
 			}
 		}
+	}
+	// A known-good FD-only budget must not authorize more TCP sockets after
+	// its sensor disappears or reports contradictory values. Preserve the
+	// existing single EMFILE/ENFILE recovery probe, but never an ordinary
+	// admission from a stale hard envelope.
+	emergencyProbe := g.state == capacityStatePressure && g.reason == capacityEmergencyFD && g.probeAllowed
+	if g.sensor == capacityInvalidSensor || (g.sensor == "unsupported" && !emergencyProbe) {
+		n = 0
+	}
+	if g.sensorFreshnessBlocked && (g.state != capacityStatePressure || g.reason != capacityEmergencyFD || !g.probeAllowed) {
+		// A stalled sampler must not reuse the last valid OS headroom.
+		// Keep the pre-existing single bounded EMFILE/ENFILE recovery probe.
+		n = 0
+	}
+	if g.startupSensorUntrusted {
+		// Server.Start() has attempted a preflight, but no valid sensor has
+		// verified the provisional AUTO cold-start allowance yet.
+		n = 0
+	}
+	if g.memoryAdmissionBlocked {
+		// A released socket does not manufacture cgroup memory headroom.
+		// Only the next valid positive memory measurement can reopen intake.
+		n = 0
 	}
 	if n < 0 {
 		n = 0
@@ -177,20 +217,43 @@ func (capacityWaitTimeout) Temporary() bool { return true }
 
 var _ net.Error = capacityWaitTimeout{}
 
+// Called only with g.mu held. No additional goroutine, timer or scheduler.
+// A new connection (or diagnostic observer) detects a stalled OS sampler.
+func (g *capacityGovernor) expireSensorFreshnessLocked() {
+	if g.mode == modeAuto && !g.lastVerifiedReceipt.IsZero() &&
+		time.Since(g.lastVerifiedReceipt) > capacitySensorMaxAge && !g.sensorFreshnessBlocked {
+		g.sensorFreshnessBlocked = true
+		// Keep diagnostics truthful: expired telemetry is not still fresh.
+		// Preserve stronger explicit invalid/unavailable error classifications.
+		if g.sensor == capacitySensorFresh || g.sensor == capacityWindowsSensor {
+			g.sensor = "stale"
+		}
+		g.recomputeLocked()
+	}
+}
+
 func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) error {
 	if wait <= 0 {
 		return capacityWaitTimeout{}
 	}
 	var timer *time.Timer
+	registered := false
+	var ticket uint64
 	defer func() {
 		if timer != nil {
 			timer.Stop()
 		}
-	}()
-	registered := false
-	defer func() {
 		if registered {
 			g.mu.Lock()
+			for i, waitingTicket := range g.waitQueue {
+				if waitingTicket == ticket {
+					g.waitQueue = append(g.waitQueue[:i], g.waitQueue[i+1:]...)
+					if i == 0 {
+						g.notifyLocked() // allow the next waiter to take a freed slot
+					}
+					break
+				}
+			}
 			g.waiting--
 			g.mu.Unlock()
 		}
@@ -201,12 +264,41 @@ func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) err
 			g.mu.Unlock()
 			return net.ErrClosed
 		}
+		// Listener shutdown must win over available capacity, including
+		// when a canceled waiter wakes at the same time as a release.
+		select {
+		case <-done:
+			g.mu.Unlock()
+			return net.ErrClosed
+		default:
+		}
+		g.expireSensorFreshnessLocked()
 		limit := g.effective
 		if g.mode == modeShadow {
 			limit = 0
 		} // shadow never acquires; legacy channel remains authoritative
-		if g.active < limit {
+		// New arrivals must not steal a permit from an already waiting
+		// listener. Only the head of the FIFO may proceed while queued.
+		first := len(g.waitQueue) == 0 || (registered && g.waitQueue[0] == ticket)
+		if g.active < limit && first {
 			g.active++
+			if g.memorySampleConstrained {
+				g.memoryPendingSlots++ // track estimated reserved bytes across later unchanged samples
+				// An observed free cgroup slot authorizes AT MOST one new
+				// admission until another fresh sample. Closing an older
+				// connection cannot regenerate this unmeasured allowance.
+				g.memorySampleRemaining--
+				if g.memorySampleRemaining <= 0 {
+					g.memoryAdmissionBlocked = true
+					g.recomputeLocked()
+				}
+			}
+			if registered {
+				g.waitQueue = g.waitQueue[1:]
+				g.waiting--
+				registered = false
+				g.notifyLocked() // spare slots can immediately serve the next FIFO waiter
+			}
 			if g.probeAllowed {
 				g.probeAllowed = false
 				g.cooldown = g.lastSample.Add(3 * time.Second)
@@ -218,6 +310,9 @@ func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) err
 		if !registered {
 			g.waits++
 			g.waiting++
+			g.nextWaitTicket++
+			ticket = g.nextWaitTicket
+			g.waitQueue = append(g.waitQueue, ticket)
 			registered = true
 			// No timer allocation on the successful uncontended hot path.
 			timer = time.NewTimer(wait)
@@ -249,7 +344,17 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		return
 	}
 	g.lastSample = now
+	wasColdStart := g.sensor == capacitySensorColdStart
 	if !s.available {
+		if g.sensor == capacitySensorColdStart {
+			g.startupSensorUntrusted = true
+		}
+		// A previously observed finite cgroup quota cannot be trusted after
+		// telemetry failure. Keep existing leases; deny NEW physical sockets
+		// until another valid measurement establishes memory headroom.
+		if g.memorySampleConstrained {
+			g.memoryAdmissionBlocked = true
+		}
 		g.sensor = "unsupported"
 		g.healthy = 0
 		g.pressured = 0
@@ -261,10 +366,11 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		g.recomputeLocked()
 		return
 	}
-	g.sensor = "fresh"
+	g.sensor = capacitySensorFresh
 	g.probeAllowed = false // fresh instrumentation supersedes an unverified probe
 	var hard int
 	var pressured bool
+	pressureReason := "fd-headroom"
 	switch s.resource {
 	case "": // Real Linux RLIMIT_NOFILE /proc/self/fd sensor
 		// Reserve at most 256 FDs, scaling the margin down for low nofile.
@@ -272,6 +378,12 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		const fdPerConnection = 4
 		available := s.totalFD - s.freeFD
 		if s.freeFD < 0 || s.totalFD <= 0 || available < 0 || available > s.totalFD {
+			if wasColdStart {
+				g.startupSensorUntrusted = true
+			}
+			if g.memorySampleConstrained {
+				g.memoryAdmissionBlocked = true
+			}
 			g.sensor = capacityInvalidSensor
 			g.healthy = 0
 			g.pressured = 0
@@ -280,10 +392,67 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		}
 		hard = g.active + max(0, (s.freeFD-reserveFD)/fdPerConnection)
 		pressured = s.freeFD <= reserveFD
+		if s.linuxMemoryConstrained {
+			// Memory and FD are independent constraints on ONE global physical
+			// permit. Never add the budgets or reduce active held connections.
+			if s.linuxMemoryFreeSlots < 0 {
+				if wasColdStart {
+					g.startupSensorUntrusted = true
+				}
+				if g.memorySampleConstrained {
+					g.memoryAdmissionBlocked = true
+				}
+				g.sensor = capacityInvalidSensor
+				g.healthy = 0
+				g.pressured = 0
+				g.recomputeLocked()
+				return
+			}
+			// Account for new sockets whose provisional 1MiB reservation is
+			// not yet reflected in a changed kernel memory.current reading.
+			// Unchanged positive telemetry is NOT a fresh allocation of
+			// another full batch of virtual memory permits.
+			if g.memorySampleConstrained {
+				observedReduction := g.memoryLastObservedSlots - s.linuxMemoryFreeSlots
+				if observedReduction > 0 {
+					g.memoryPendingSlots = max(0, g.memoryPendingSlots-observedReduction)
+				}
+			} else {
+				g.memoryPendingSlots = 0
+			}
+			g.memoryLastObservedSlots = s.linuxMemoryFreeSlots
+			g.memorySampleRemaining = max(0, s.linuxMemoryFreeSlots-g.memoryPendingSlots)
+			hard = min(hard, g.active+g.memorySampleRemaining)
+		} else {
+			if g.memorySampleConstrained {
+				// A previously verified finite cgroup controller cannot vanish
+				// and silently downgrade AUTO to FD-only admission mid-run.
+				// Without trusted provenance for the hierarchy transition,
+				// keep existing connections and await another finite sample.
+				g.memoryAdmissionBlocked = true
+				g.sensor = capacityInvalidSensor
+				g.healthy = 0
+				g.pressured = 0
+				g.recomputeLocked()
+				return
+			}
+			g.memoryPendingSlots = 0
+			g.memoryLastObservedSlots = 0
+			g.memorySampleRemaining = 0
+		}
+		g.memorySampleConstrained = s.linuxMemoryConstrained
+		g.memoryAdmissionBlocked = s.linuxMemoryConstrained && g.memorySampleRemaining == 0
+		if s.linuxMemoryPressure {
+			pressureReason = capacityPressureCgroupMemory
+			pressured = true
+		}
 	case capacityWindowsSensor:
 		// Windows handle counts have no portable RLIMIT analogue. Use only
 		// the separately bounded native memory+handle headroom estimate.
 		if s.freeSlots < 0 || s.freeSlots > 4096 {
+			if wasColdStart {
+				g.startupSensorUntrusted = true
+			}
 			g.sensor = capacityInvalidSensor
 			g.healthy = 0
 			g.pressured = 0
@@ -301,14 +470,31 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 			hard = g.active + min(s.freeSlots, windowsPreviewMaxActive-g.active)
 		}
 		pressured = s.resourcePressure
+		if pressured {
+			pressureReason = capacityWindowsSensor
+		}
 		g.sensor = capacityWindowsSensor
 	default:
+		if wasColdStart {
+			g.startupSensorUntrusted = true
+		}
+		if g.memorySampleConstrained {
+			// Unknown drivers cannot inherit a previously finite cgroup
+			// allowance without presenting validated resource telemetry.
+			g.memoryAdmissionBlocked = true
+		}
 		g.sensor = capacityInvalidSensor
 		g.healthy = 0
 		g.pressured = 0
 		g.recomputeLocked()
 		return
 	}
+	// Timestamp a trusted *receipt*, not the (possibly synthetic) event
+	// timestamp. The monotonic component detects a stalled sampling loop.
+	g.lastVerifiedReceipt = time.Now()
+	g.sensorFreshnessBlocked = false
+	// Only a validated OS measurement can authorize AUTO cold-start intake.
+	g.startupSensorUntrusted = false
 	if hard < g.hard {
 		g.hard = hard
 	}
@@ -320,7 +506,7 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 				g.state = capacityStatePressure
 				g.lastTransition = now
 			}
-			g.reason = "fd-headroom"
+			g.reason = pressureReason
 			g.soft = max(1, g.soft/2)
 			g.researchIntegral = 0
 			g.researchDeriv = 0
@@ -344,63 +530,67 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 		if hard > g.hard {
 			g.hard = hard
 		}
-		if g.healthy >= 3 && !now.Before(g.cooldown) {
-			if g.state == capacityStateNormal && (g.active >= g.effective || g.waiting > 0) && g.soft < g.hard {
-				// Fast additive/multiplicative increase under verified FD headroom.
-				// No goroutine scheduler or per-route limits: the server-scoped
-				// downstream gate remains the single authority.
-				step := max(32, min(g.soft/2, 512))
-				// RESEARCH MODE ONLY: leave R11 unchanged without an explicit
-				// local experiment env. Run an identical real 2,560-CONNECT test
-				// against PI/PID/HPA policies in this isolated lab checkout.
-				switch os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY") {
-				case "fast_saturation":
-					// Lab-only faster multiplicative ramp, still clipped by true
-					// resource hard ceiling and all original overload safety gates.
-					step = max(64, min(g.soft, 1024))
-				case "pi", researchPolicyPID, researchPolicyProportional:
-					backlog := float64(g.waiting)
-					if backlog <= 0 {
-						backlog = float64(max(0, g.active-g.effective+1))
-					}
-					// Integral is conditional: while saturating, freeze it;
-					// derivative is on measured active sockets to avoid setpoint kick.
-					dMeasured := (float64(g.active) - g.researchPrevMeasured) / .5
-					g.researchDeriv = .75*g.researchDeriv + .25*dMeasured
-					g.researchPrevMeasured = float64(g.active)
-					kp, ki, kd := .55, .02, 0.
-					policy := os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY")
-					if policy == researchPolicyPID {
-						kp = .55
-						ki = .02
-						kd = .12
-					}
-					if policy == researchPolicyProportional {
-						kp = .55
-						ki = 0
-						kd = 0
-					}
-					unclipped := kp*backlog + ki*g.researchIntegral - kd*g.researchDeriv
-					if policy == researchPolicyPID && unclipped < 0 {
-						unclipped = 0
-					}
-					step = max(32, min(512, int(math.Round(unclipped))))
-					if step < 512 && g.soft+step < g.hard {
-						g.researchIntegral = math.Min(3000, g.researchIntegral+backlog*.5)
-					}
-				case "hpa":
-					// Demand-ratio controller with work-conserving, bounded slew.
-					step = max(32, min(512, g.active+g.waiting-g.soft))
-				}
-				g.soft += min(step, g.hard-g.soft)
-				g.cooldown = now.Add(capacityGrowthCooldown)
-			}
-		}
+		g.growWindowIfReadyLocked(now)
 		if g.state == capacityStateNormal {
 			g.reason = "none"
 		}
 	}
 	g.recomputeLocked()
+}
+
+func (g *capacityGovernor) growWindowIfReadyLocked(now time.Time) {
+	if g.healthy >= 3 && !now.Before(g.cooldown) {
+		if g.state == capacityStateNormal && (g.active >= g.effective || g.waiting > 0) && g.soft < g.hard {
+			// Fast additive/multiplicative increase under verified FD headroom.
+			// No goroutine scheduler or per-route limits: the server-scoped
+			// downstream gate remains the single authority.
+			step := max(32, min(g.soft/2, 512))
+			// RESEARCH MODE ONLY: leave R11 unchanged without an explicit
+			// local experiment env. Run an identical real 2,560-CONNECT test
+			// against PI/PID/HPA policies in this isolated lab checkout.
+			switch os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY") {
+			case "fast_saturation":
+				// Lab-only faster multiplicative ramp, still clipped by true
+				// resource hard ceiling and all original overload safety gates.
+				step = max(64, min(g.soft, 1024))
+			case "pi", researchPolicyPID, researchPolicyProportional:
+				backlog := float64(g.waiting)
+				if backlog <= 0 {
+					backlog = float64(max(0, g.active-g.effective+1))
+				}
+				// Integral is conditional: while saturating, freeze it;
+				// derivative is on measured active sockets to avoid setpoint kick.
+				dMeasured := (float64(g.active) - g.researchPrevMeasured) / .5
+				g.researchDeriv = .75*g.researchDeriv + .25*dMeasured
+				g.researchPrevMeasured = float64(g.active)
+				kp, ki, kd := .55, .02, 0.
+				policy := os.Getenv("PXGO_RESEARCH_CAPACITY_POLICY")
+				if policy == researchPolicyPID {
+					kp = .55
+					ki = .02
+					kd = .12
+				}
+				if policy == researchPolicyProportional {
+					kp = .55
+					ki = 0
+					kd = 0
+				}
+				unclipped := kp*backlog + ki*g.researchIntegral - kd*g.researchDeriv
+				if policy == researchPolicyPID && unclipped < 0 {
+					unclipped = 0
+				}
+				step = max(32, min(512, int(math.Round(unclipped))))
+				if step < 512 && g.soft+step < g.hard {
+					g.researchIntegral = math.Min(3000, g.researchIntegral+backlog*.5)
+				}
+			case "hpa":
+				// Demand-ratio controller with work-conserving, bounded slew.
+				step = max(32, min(512, g.active+g.waiting-g.soft))
+			}
+			g.soft += min(step, g.hard-g.soft)
+			g.cooldown = now.Add(capacityGrowthCooldown)
+		}
+	}
 }
 
 func (g *capacityGovernor) recordAcceptError(err error) {
@@ -428,6 +618,7 @@ func (g *capacityGovernor) snapshot() diagnostic.CapacitySnapshot {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.expireSensorFreshnessLocked()
 	snapshot := diagnostic.CapacitySnapshot{Mode: string(g.mode), State: g.state, ActiveDownstream: g.active, SoftWindow: g.soft, HardEnvelope: g.hard, EffectiveLimit: g.effective, ManualCeiling: g.manual, ManualCeilingEnabled: g.manual > 0, PressureReason: g.reason, AdmissionWaits: g.waits, AdmissionTimeouts: g.timeouts, SensorAvailability: g.sensor, LastTransition: g.lastTransition}
 	if g.classes != nil {
 		c := g.classes.snapshot()
