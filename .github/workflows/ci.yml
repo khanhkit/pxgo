@@ -1442,6 +1442,18 @@ jobs:
           grep -F 'R128_REAL_CGROUP_RESULT' benchmarks/r128-real-cgroup.log
           grep -F 'new_tcp_denied=true' benchmarks/r128-real-cgroup.log
           grep -F 'oom_kill_delta=0' benchmarks/r128-real-cgroup.log
+          # R146 temporary research branch ONLY. Same bounded 384MiB cgroup
+          # but actual admissionListener + real unrelated 24MiB OS process.
+          docker run --rm --network none --memory 384m --memory-swap 384m --pids-limit 128 --cpus 2 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 -e PXGO_R146_REAL_CGROUP=1 \
+            -e GOGC=30 -e GOMEMLIMIT=280MiB \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR146NativeFiniteCgroupExternalAllocatorPreservesSixTrackedTCP$' \
+            -test.count=1 -test.timeout=45s -test.v | tee benchmarks/r146-external-real-cgroup.log
+          grep -F 'R146_REAL_EXTERNAL_CGROUP_RESULT' benchmarks/r146-external-real-cgroup.log
+          grep -F 'six_real_tcp_alive=true active_debt_preserved=true oom_kill_delta=0' benchmarks/r146-external-real-cgroup.log
       - name: Verify genuine visible cgroup ancestors through host cgroup namespace
         shell: bash
         run: |

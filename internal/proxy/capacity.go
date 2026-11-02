@@ -104,7 +104,11 @@ type capacityGovernor struct {
 	memoryAdmissionBlocked  bool                    // cgroup has no verified NEW physical memory headroom
 	memorySampleConstrained bool                    // most recent valid Linux cgroup observation is finite
 	memorySampleRemaining   int                     // fresh-new-socket permits; never replenished by old socket close
-	memoryPendingSlots      int                     // reservations not yet reflected by memory.current
+	memoryPendingSlots      int                     // all unverified reservations, active and closed
+	memoryActiveDebt        int                     // unverified reservation for live accepted socket leases
+	memoryClosedDebt        int                     // closed leases awaiting a real positive memory recovery
+	nextLeaseID             uint64                  // exact physical permit identity, distinct from FIFO wait ticket
+	leaseReservations       map[uint64]bool         // whether this exact active lease has a memory reservation
 	memoryLastObservedSlots int                     // previous measured free slots for reservation debt reconciliation
 	classes                 *connectionClassManager // opt-in accounting ONLY, same physical permit
 	// Research-only: synthetic PI/PID alternatives; NOT shipped or proposed
@@ -119,7 +123,7 @@ func newCapacityGovernor(mode capacityMode, cfg config.Config) *capacityGovernor
 	if mode == modeLegacy {
 		return nil
 	}
-	g := &capacityGovernor{changed: make(chan struct{}), mode: mode, manual: cfg.MaxConnections, soft: capacityColdStartWindow, hard: capacityColdStartWindow, state: capacityStateNormal, sensor: capacitySensorColdStart, lastTransition: time.Now()}
+	g := &capacityGovernor{changed: make(chan struct{}), mode: mode, manual: cfg.MaxConnections, soft: capacityColdStartWindow, hard: capacityColdStartWindow, state: capacityStateNormal, sensor: capacitySensorColdStart, lastTransition: time.Now(), leaseReservations: make(map[uint64]bool)}
 	if mode == modeAuto && experimentalConnectionClassesEnabled() {
 		g.classes = newConnectionClassManager()
 		g.classes.strictLongIntake = experimentalStrictLongIntakeEnabled()
@@ -185,10 +189,36 @@ func (g *capacityGovernor) recomputeLocked() {
 	}
 }
 
-func (g *capacityGovernor) release() {
+// release() remains for test/legacy admission callers. Production AUTO
+// callers use releaseLease(id) so a different socket cannot settle the
+// reservation of a still-active lease. Tests without ids release oldest.
+func (g *capacityGovernor) release() { g.releaseLease(0) }
+
+func (g *capacityGovernor) releaseLease(id uint64) {
 	g.mu.Lock()
+	if id == 0 {
+		// Compatibility with test-only acquire/release call sites. Production
+		// AUTO always supplies its exact physical permit id.
+		for candidate := range g.leaseReservations {
+			if id == 0 || candidate < id {
+				id = candidate
+			}
+		}
+	}
+	reserved, known := g.leaseReservations[id]
+	if id != 0 && !known {
+		g.mu.Unlock() // stale/double release cannot free another lease
+		return
+	}
+	if known {
+		delete(g.leaseReservations, id)
+	}
 	if g.active > 0 {
 		g.active--
+		if reserved && g.memorySampleConstrained {
+			g.memoryActiveDebt--
+			g.memoryClosedDebt++
+		}
 		if g.probeAllowed {
 			g.recomputeLocked()
 		}
@@ -233,6 +263,17 @@ func (g *capacityGovernor) expireSensorFreshnessLocked() {
 }
 
 func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) error {
+	return g.acquireInternal(done, wait, nil)
+}
+
+// acquireLease lets an admitted net.Conn own the exact permit it will release.
+func (g *capacityGovernor) acquireLease(done <-chan struct{}, wait time.Duration) (uint64, error) {
+	var id uint64
+	err := g.acquireInternal(done, wait, &id)
+	return id, err
+}
+
+func (g *capacityGovernor) acquireInternal(done <-chan struct{}, wait time.Duration, leaseID *uint64) error {
 	if wait <= 0 {
 		return capacityWaitTimeout{}
 	}
@@ -294,8 +335,15 @@ func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) err
 		first := len(g.waitQueue) == 0 || (registered && g.waitQueue[0] == ticket)
 		if g.active < limit && first {
 			g.active++
+			g.nextLeaseID++
+			id := g.nextLeaseID
+			g.leaseReservations[id] = g.memorySampleConstrained
+			if leaseID != nil {
+				*leaseID = id
+			}
 			if g.memorySampleConstrained {
-				g.memoryPendingSlots++ // track estimated reserved bytes across later unchanged samples
+				g.memoryPendingSlots++ // all unverified, including closed leases
+				g.memoryActiveDebt++
 				// An observed free cgroup slot authorizes AT MOST one new
 				// admission until another fresh sample. Closing an older
 				// connection cannot regenerate this unmeasured allowance.
@@ -427,15 +475,28 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 			// Unchanged positive telemetry is NOT a fresh allocation of
 			// another full batch of virtual memory permits.
 			if g.memorySampleConstrained {
-				observedReduction := g.memoryLastObservedSlots - s.linuxMemoryFreeSlots
-				if observedReduction > 0 {
-					g.memoryPendingSlots = max(0, g.memoryPendingSlots-observedReduction)
+				// An increase can grant at most the NEWLY observed headroom,
+				// never replay the whole unchanged positive sample. It may
+				// settle debt from CLOSED leases only, not active leases.
+				recovered := max(0, s.linuxMemoryFreeSlots-g.memoryLastObservedSlots)
+				repaid := min(recovered, g.memoryClosedDebt)
+				g.memoryClosedDebt -= repaid
+				g.memoryPendingSlots -= repaid
+				// Saturating add: a malicious/large sensor sample must not
+				// overflow the counter and mint a new physical capacity.
+				if recovered > math.MaxInt-g.memorySampleRemaining {
+					g.memorySampleRemaining = math.MaxInt
+				} else {
+					g.memorySampleRemaining += recovered
 				}
 			} else {
 				g.memoryPendingSlots = 0
+				g.memoryActiveDebt = 0
+				g.memoryClosedDebt = 0
+				g.memorySampleRemaining = s.linuxMemoryFreeSlots
 			}
 			g.memoryLastObservedSlots = s.linuxMemoryFreeSlots
-			g.memorySampleRemaining = max(0, s.linuxMemoryFreeSlots-g.memoryPendingSlots)
+			g.memorySampleRemaining = min(g.memorySampleRemaining, max(0, s.linuxMemoryFreeSlots-g.memoryPendingSlots))
 			hard = min(hard, g.active+g.memorySampleRemaining)
 		} else {
 			if g.memorySampleConstrained {
@@ -451,6 +512,8 @@ func (g *capacityGovernor) sample(s capacitySample, now time.Time) {
 				return
 			}
 			g.memoryPendingSlots = 0
+			g.memoryActiveDebt = 0
+			g.memoryClosedDebt = 0
 			g.memoryLastObservedSlots = 0
 			g.memorySampleRemaining = 0
 		}

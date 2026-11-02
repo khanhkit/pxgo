@@ -28,7 +28,8 @@ func (l *admissionListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 	if l.governor != nil && l.governor.mode == modeAuto {
-		if err := l.governor.acquire(l.done, l.wait); err != nil {
+		permitID, err := l.governor.acquireLease(l.done, l.wait)
+		if err != nil {
 			_ = conn.Close()
 			return nil, err
 		}
@@ -37,13 +38,13 @@ func (l *admissionListener) Accept() (net.Conn, error) {
 			if lease == nil {
 				// Shutdown won the race after the physical admission permit
 				// was acquired. Fail closed, return that EXACT permit once.
-				l.governor.release()
+				l.governor.releaseLease(permitID)
 				_ = conn.Close()
 				return nil, net.ErrClosed
 			}
-			return &admissionConn{Conn: conn, classification: lease, release: func() { lease.finish(); l.governor.release() }}, nil
+			return &admissionConn{Conn: conn, classification: lease, release: func() { lease.finish(); l.governor.releaseLease(permitID) }}, nil
 		}
-		return &admissionConn{Conn: conn, release: l.governor.release}, nil
+		return &admissionConn{Conn: conn, release: func() { l.governor.releaseLease(permitID) }}, nil
 	}
 	select {
 	case l.slots <- struct{}{}:
