@@ -67,6 +67,10 @@ jobs:
         with:
           version: v2.12.2
 
+      - name: Verify OpenCodeReview workflow contracts
+        if: runner.os == 'Linux'
+        run: node --test tests/unit/build/ocr-review-workflow-contract.test.mjs
+
       - name: Verify release contracts
         if: runner.os == 'Linux'
         run: |
