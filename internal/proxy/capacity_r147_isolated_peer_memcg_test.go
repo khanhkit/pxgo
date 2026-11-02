@@ -98,6 +98,11 @@ func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T
 	tunnels := r147TunnelCount(t)
 	beforeSock, beforeCurr, beforeKills := r147MemcgSnapshot(t)
 	peakSock, peakCurr := beforeSock, beforeCurr
+	var maxOwnedSockets int
+	var maxOwnedQueued uint64
+	var maxOwnedForward uint64
+	var maxOwnedBufferLimits uint64
+	var sockMetricErrors int
 	var samples int
 	started := time.Now()
 	for time.Since(started) < 18*time.Second {
@@ -109,14 +114,31 @@ func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T
 			peakCurr = curr
 		}
 		samples++
+		count, queued, forward, limits, metricErr := r147OwnedTunnelSocketMetrics(s)
+		if metricErr == nil {
+			if count > maxOwnedSockets {
+				maxOwnedSockets = count
+			}
+			if queued > maxOwnedQueued {
+				maxOwnedQueued = queued
+			}
+			if forward > maxOwnedForward {
+				maxOwnedForward = forward
+			}
+			if limits > maxOwnedBufferLimits {
+				maxOwnedBufferLimits = limits
+			}
+		} else {
+			sockMetricErrors++
+		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	endSock, endCurr, endKills := r147MemcgSnapshot(t)
 	if endKills != beforeKills {
 		t.Fatalf("proxy-only memcg OOM kills delta=%d", endKills-beforeKills)
 	}
-	t.Logf("R147_PROXY_ONLY_MEMCG_RESULT tunnels=%d memory_max=%d before_sock=%d peak_sock=%d after_sock=%d isolated_sock_peak_delta=%d before_current=%d peak_current=%d after_current=%d isolated_current_peak_delta=%d samples=%d oom_kill_delta=0 peer_cgroup_separate=true",
-		tunnels, limit, beforeSock, peakSock, endSock, int64(peakSock)-int64(beforeSock), beforeCurr, peakCurr, endCurr, int64(peakCurr)-int64(beforeCurr), samples)
+	t.Logf("R147_PROXY_ONLY_MEMCG_RESULT tunnels=%d memory_max=%d before_sock=%d peak_sock=%d after_sock=%d isolated_sock_peak_delta=%d before_current=%d peak_current=%d after_current=%d isolated_current_peak_delta=%d samples=%d owned_peak_sockets=%d owned_queued_peak_bytes=%d owned_forward_peak_bytes=%d owned_buffer_limit_peak_bytes=%d so_meminfo_errors=%d oom_kill_delta=0 peer_cgroup_separate=true",
+		tunnels, limit, beforeSock, peakSock, endSock, int64(peakSock)-int64(beforeSock), beforeCurr, peakCurr, endCurr, int64(peakCurr)-int64(beforeCurr), samples, maxOwnedSockets, maxOwnedQueued, maxOwnedForward, maxOwnedBufferLimits, sockMetricErrors)
 }
 
 // Entire peer workload runs in its OWN separately limited Docker cgroup.
