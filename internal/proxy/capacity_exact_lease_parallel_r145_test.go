@@ -3,10 +3,11 @@
 package proxy
 
 import (
-	"github.com/khanhkit/pxgo/internal/config"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 // Validate exact ID release in adversarial scheduling with double-close.

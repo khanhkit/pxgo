@@ -3,11 +3,12 @@
 package proxy
 
 import (
-	"github.com/khanhkit/pxgo/internal/config"
 	"net"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 // Research-only liveness counterexample using REAL TCP in a dedicated Docker

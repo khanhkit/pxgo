@@ -3,9 +3,10 @@
 package proxy
 
 import (
-	"github.com/khanhkit/pxgo/internal/config"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 // Red test: a pre-existing connection was admitted when the cgroup was

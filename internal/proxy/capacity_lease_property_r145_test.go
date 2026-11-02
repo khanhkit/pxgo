@@ -3,10 +3,11 @@
 package proxy
 
 import (
-	"github.com/khanhkit/pxgo/internal/config"
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/khanhkit/pxgo/internal/config"
 )
 
 // Bounded property model for exact-id permit lifecycle and conservative
