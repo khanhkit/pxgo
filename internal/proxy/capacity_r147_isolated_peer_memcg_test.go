@@ -48,7 +48,7 @@ func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T
 	cfg := config.Default()
 	cfg.Gateway = true
 	cfg.Allow = "172.16.0.0/12"
-	cfg.Listen = "0.0.0.0"
+	cfg.Listen = net.IPv4zero.String() // avoid literal repetition; binds only inside isolated Docker network
 	cfg.Port = 19876
 	cfg.Server = "DIRECT"
 	cfg.ProxyReload = 0
