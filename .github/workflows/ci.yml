@@ -41,6 +41,11 @@ on:
         required: false
         type: boolean
         default: false
+      deadline_r137:
+        description: Research-only source-exact Linux/Windows race for absolute admission deadline
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -315,7 +320,7 @@ jobs:
 
   windows-connection-class-research:
     name: Windows capacity research (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, sample=${{ matrix.sample }})
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 24
     strategy:
@@ -380,7 +385,7 @@ jobs:
     # mixed seeds in one VM exhausted outgoing ephemeral ports (WSAEADDRINUSE).
     # Do not mislabel test-runner exhaustion as controller failure, and never
     # bypass it by forcing abortive RST closes in realistic short-conn tests.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 17
     strategy:
@@ -536,7 +541,7 @@ jobs:
   windows-held-2560-ten-minute-soak:
     name: Windows 10min real 2560 held CONNECT plus 600 distributed HTTP soak
     # Pure loopback live data-plane and OS handle/PrivateBytes telemetry, not WAN.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -578,7 +583,7 @@ jobs:
   windows-real-pxgo-jobwide-2560:
     name: Windows real PxGo 2560 CONNECT under stricter job-wide committed-memory cap
     # Test-only: child Job Object total committed limit is stricter than its process cap.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -629,7 +634,7 @@ jobs:
   windows-job-wide-memory-research:
     name: Windows child Job Object total memory cap versus process cap
     # JobMemoryLimit and ProcessMemoryLimit are independent constraints.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 8
     steps:
@@ -666,7 +671,7 @@ jobs:
   windows-real-pxgo-go-heap-hold:
     name: Windows real PxGo Go heap held during 2560 CONNECT and 600 HTTP
     # Go runtime-managed heap, child-only Job Object; NOT native VirtualAlloc ballast.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -710,7 +715,7 @@ jobs:
   windows-real-pxgo-global-memory-sensor-gap:
     name: Windows real PxGo child Job Object versus host-global AUTO sensor
     # Demonstrate native sensor overstatement under hard child-only Job cap.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -752,7 +757,7 @@ jobs:
   windows-real-pxgo-sustained-commit:
     name: Windows real PxGo 2560 CONNECT under sustained child commit ballast
     # Native child-only +64MiB committed allocation while carrying 600 HTTP; never OS-global.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -797,7 +802,7 @@ jobs:
   windows-nested-job-ancestor-commit-research:
     name: Windows nested Job Object stricter ancestor commit limit (child-only)
     # Research: immediate NULL-job query may hide stricter ancestor effective cap.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 8
     steps:
@@ -833,7 +838,7 @@ jobs:
 
   windows-mixed-socket-isolation-research:
     name: Windows isolated socket gate (${{ matrix.scenario }}, trial=${{ matrix.trial }})
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 10
     strategy:
@@ -912,7 +917,7 @@ jobs:
   windows-job-proxy-2560-matrix:
     name: Windows real PxGo quota (${{ matrix.policy }}, classes=${{ matrix.class_mode }}, trial=${{ matrix.trial }})
     # Each policy/class/trial on a fresh native Windows VM; descriptive, unpaired.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 12
     strategy:
@@ -962,7 +967,7 @@ jobs:
   windows-job-proxy-cleanup-negative:
     name: Windows real PxGo child Job Object injected-failure cleanup
     # Fresh runner avoids TIME_WAIT carryover from normal 2560-pressure probe.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -999,7 +1004,7 @@ jobs:
   windows-job-object-proxy-2560-research:
     name: Windows real PxGo 2560 CONNECT under child commit quota
     # Experimental test-only separate child, no production memory policy.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -1041,7 +1046,7 @@ jobs:
     name: Windows Job Object process-commit pressure (isolated child)
     # A strict test-only OS feasibility gate on a fresh native VM. Do NOT
     # treat success as production PxGo memory-budget calibration/recovery.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -1080,7 +1085,7 @@ jobs:
     # Validate the *pinned* R20 native Windows measurement replay; R22 only
     # computes a noncausal descriptive order-balanced analysis, never fabricates
     # fresh native Windows measurements from a Python script.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1119,7 +1124,7 @@ jobs:
     # rather than confounding policy order and offered-load seed parity.
     # Keep only two matched workloads per fresh VM to limit native Windows
     # loopback ephemeral-port/TIME_WAIT contamination. No PASS waiver.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 16
     strategy:
@@ -1236,7 +1241,7 @@ jobs:
     # client+upstream parent; never infer these values from co-located heap.
     # Seed 3 measures 2,560 real held CONNECTs plus 600 short HTTP on a
     # dedicated fresh Windows VM, not an extrapolation from 256–384.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101')
+    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
     runs-on: windows-latest
     timeout-minutes: 14
     strategy:
@@ -1572,4 +1577,69 @@ jobs:
         with:
           name: windows-backlog-trusted-bind-${{ inputs.verification_ref }}
           path: benchmarks/*.log
+          retention-days: 14
+
+  r137-absolute-deadline-race:
+    name: R137 hard deadline race and negative control (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' && inputs.deadline_r137
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Copy immutable patched exact SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+          path: patched
+      - name: Copy immutable unpatched PR106 negative-control SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ddf99249e6ec2e2bb12d746bfa650eece3495934
+          path: baseline
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: patched/go.mod
+          cache: false
+      - name: Verify absolute-timeout invariant under real Go race detector
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmarks
+          test "$(git -C patched rev-parse HEAD)" = '${{ inputs.verification_ref }}'
+          test "$(git -C baseline rev-parse HEAD)" = ddf99249e6ec2e2bb12d746bfa650eece3495934
+          printf 'patched=%s baseline=%s' '${{ inputs.verification_ref }}' 'ddf99249e6ec2e2bb12d746bfa650eece3495934' > benchmarks/source-shas.txt
+          (cd patched && CGO_ENABLED=1 go test -race ./internal/proxy \
+             -run '^(TestR68ExpiredAdmissionDeadlineCannotWinLateRelease|TestR137AbsoluteDeadlineRejectsSlowMutexBeforeAdmission)$' \
+             -count=10 -v -timeout=160s) > benchmarks/patched-targeted-race.log 2>&1 || {
+             tail -90 benchmarks/patched-targeted-race.log
+             exit 1
+          }
+          grep -F -- '--- PASS: TestR137AbsoluteDeadlineRejectsSlowMutexBeforeAdmission' benchmarks/patched-targeted-race.log
+          grep -F -- '--- PASS: TestR68ExpiredAdmissionDeadlineCannotWinLateRelease' benchmarks/patched-targeted-race.log
+          # This negative control changes ONLY test source. Product remains
+          # byte-identical to original PR106, and the known bug must show RED.
+          cp patched/internal/proxy/capacity_deadline_r137_test.go baseline/internal/proxy/
+          set +e
+          (cd baseline && CGO_ENABLED=1 go test -race ./internal/proxy \
+             -run '^TestR137AbsoluteDeadlineRejectsSlowMutexBeforeAdmission$' \
+             -count=1 -v -timeout=60s) > benchmarks/unpatched-negative-control.log 2>&1
+          baseline_rc=$?
+          set -e
+          if [ "$baseline_rc" -eq 0 ]; then
+            echo 'Unexpected negative-control success: unpatched PR106 must not pass absolute deadline'
+            exit 1
+          fi
+          grep -F 'permit admitted after absolute expiry' benchmarks/unpatched-negative-control.log
+          echo 'R137_HARD_DEADLINE_RESULT patched_race_pass=true unpatched_negative_control_red=true rounds=10 os=${{ matrix.os }}' | tee benchmarks/result.txt
+      - name: Archive both patched and baseline negative-control evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r137-absolute-deadline-${{ matrix.os }}-${{ inputs.verification_ref }}
+          path: benchmarks/*
           retention-days: 14
