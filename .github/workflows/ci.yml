@@ -1652,8 +1652,17 @@ jobs:
               & ".\benchmarks\$variant.exe" @args 2>&1 | Tee-Object -FilePath $log
               if ($LASTEXITCODE -ne 0) { throw "A/B test failure policy=$policy variant=$variant repetition=$i" }
               $lines = @(Get-Content $log | Where-Object { $_ -match 'MIXED_RESULT profile=churn' })
-              if ($lines.Count -ne 1 -or $lines[0] -notmatch 'short_attempted=960 short_completed=960') {
-                throw "A/B evidence missing, incomplete, or ambiguous: $log"
+              # Source benchmark scales churn from 1200 by seed factor 80+(seed*13)%41.
+              # Seed0 => 960, seed1 => 1116; a hardcoded 960 gave TWO
+              # false-negative harness failures on the initial R135 run.
+              $seedValue = [int]'${{ matrix.seed }}'
+              $expected = [int][math]::Floor(1200 * (80 + (($seedValue * 13) % 41)) / 100)
+              if (($seedValue -eq 0 -and $expected -ne 960) -or ($seedValue -eq 1 -and $expected -ne 1116)) {
+                throw 'A/B source benchmark seed formula drifted'
+              }
+              $expectedMarker = "short_attempted=$expected short_completed=$expected"
+              if ($lines.Count -ne 1 -or -not $lines[0].Contains($expectedMarker)) {
+                throw "A/B evidence missing, incomplete, or ambiguous: $log; expected=$expectedMarker"
               }
               "AB_SOURCE_SUCCESS policy=$policy variant=$variant repetition=$i timewait_before=$timewait $($lines[0].Trim())" | Add-Content benchmarks/abba-results.txt
             }
