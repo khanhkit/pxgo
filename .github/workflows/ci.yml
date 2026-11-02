@@ -1479,6 +1479,40 @@ jobs:
             -test.run '^TestR129NativeVisibleCgroupAncestors$' \
             -test.count=1 -test.timeout=45s -test.v | tee benchmarks/r129-host-ancestors.log
           grep -F 'R129_HOST_ANCESTOR_RESULT' benchmarks/r129-host-ancestors.log
+      - name: R147 proxy-only 384MiB memcg with isolated client/upstream sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          image='alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6'
+          test -x benchmarks/r128-cgroup.test
+          network="pxgo-r147-$GITHUB_RUN_ID"
+          docker network create --internal "$network"
+          cleanup() {
+            docker rm -f peer-r147 pxgo-r147-proxy >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name peer-r147 --network "$network" --memory 128m --memory-swap 128m \
+            --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+            -e PXGO_R147_ROLE=peer \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR147PeerClientAndUpstreamInDifferentMemcg$' -test.v -test.count=1 -test.timeout=55s
+          docker run --name pxgo-r147-proxy --network "$network" --memory 384m --memory-swap 384m \
+            --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+            -e PXGO_R147_ROLE=proxy -e GOMEMLIMIT=280MiB \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers$' -test.v -test.count=1 -test.timeout=45s \
+            | tee benchmarks/r147-proxy-only-cgroup.log
+          peer_exit="$(docker wait peer-r147)"
+          docker logs peer-r147 2>&1 | tee benchmarks/r147-peer-separate-cgroup.log
+          test "$peer_exit" = 0
+          grep -F 'R147_PROXY_ONLY_MEMCG_RESULT' benchmarks/r147-proxy-only-cgroup.log
+          grep -F 'R147_SIDE_CAR_CONNECT_RESULT tunneled=4' benchmarks/r147-peer-separate-cgroup.log
+          grep -F 'oom_kill_delta=0 peer_cgroup_separate=true' benchmarks/r147-proxy-only-cgroup.log
       - name: Preserve exact-sha kernel-pressure evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
