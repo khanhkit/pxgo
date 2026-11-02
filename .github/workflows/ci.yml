@@ -36,6 +36,11 @@ on:
         required: false
         type: boolean
         default: false
+      windows_source_ab:
+        description: Research-only exact SHA same-Windows-host A/B baseline versus candidate
+        required: false
+        type: boolean
+        default: false
       linux_real_cgroup:
         description: Research-only finite Docker cgroup-v2 actual memory headroom test
         required: false
@@ -1572,4 +1577,96 @@ jobs:
         with:
           name: windows-backlog-trusted-bind-${{ inputs.verification_ref }}
           path: benchmarks/*.log
+          retention-days: 14
+
+  windows-samehost-exact-sha-ab:
+    name: Windows same-host source A/B (churn, classes=${{ matrix.classes }}, seed=${{ matrix.seed }})
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_source_ab
+    runs-on: windows-latest
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        seed: [0, 1]
+        classes: ['0', '1']
+    steps:
+      - name: Checkout immutable PR105 baseline source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: 0adc7218661409681c2a479206ee8fcc33f4abb1
+          path: baseline
+      - name: Checkout immutable PR106 candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ddf99249e6ec2e2bb12d746bfa650eece3495934
+          path: candidate
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: candidate/go.mod
+          cache: false
+      - name: Build both independent source-exact native test executables
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force benchmarks | Out-Null
+          if ((git -C baseline rev-parse HEAD) -ne '0adc7218661409681c2a479206ee8fcc33f4abb1') { throw 'baseline source SHA mismatch' }
+          if ((git -C candidate rev-parse HEAD) -ne 'ddf99249e6ec2e2bb12d746bfa650eece3495934') { throw 'candidate source SHA mismatch' }
+          "baseline=0adc7218661409681c2a479206ee8fcc33f4abb1" | Set-Content benchmarks/source-info.txt
+          "candidate=ddf99249e6ec2e2bb12d746bfa650eece3495934" | Add-Content benchmarks/source-info.txt
+          "go=$(go version)" | Add-Content benchmarks/source-info.txt
+          "os=$([Environment]::OSVersion.VersionString)" | Add-Content benchmarks/source-info.txt
+          "seed=${{ matrix.seed }} classes=${{ matrix.classes }}" | Add-Content benchmarks/source-info.txt
+          foreach ($variant in @('baseline','candidate')) {
+            Push-Location $variant
+            try {
+              go test ./internal/proxy -c -o "$env:GITHUB_WORKSPACE\benchmarks\$variant.exe"
+              if ($LASTEXITCODE -ne 0) { throw "native test binary build failed for $variant" }
+            } finally { Pop-Location }
+            & ".\benchmarks\$variant.exe" '-test.list=^TestCapacityMixedTrafficBench$' > "benchmarks/list-$variant.txt"
+            if ($LASTEXITCODE -ne 0 -or -not (Select-String "benchmarks/list-$variant.txt" -Pattern '^TestCapacityMixedTrafficBench$')) {
+              throw "native Go test entry missing for $variant"
+            }
+          }
+      - name: ABBA same-host Windows workload with source-exact variants
+        shell: pwsh
+        env:
+          PXGO_EXPERIMENTAL_CAPACITY_MODE: 'auto'
+          PXGO_EXPERIMENTAL_CONNECTION_CLASSES: ${{ matrix.classes }}
+          PXGO_CAPACITY_MIXED_BENCH: '1'
+          PXGO_CAPACITY_MIX_PROFILE: 'churn'
+          PXGO_CAPACITY_MIX_SEED: ${{ matrix.seed }}
+          PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG: ''
+          PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG_ALLOW_NON_LOOPBACK: ''
+        run: |
+          $sequence = @('baseline','candidate','candidate','baseline')
+          foreach ($policy in @('r11','fast_saturation')) {
+            $env:PXGO_RESEARCH_CAPACITY_POLICY = $policy
+            for ($i = 0; $i -lt $sequence.Count; $i++) {
+              $variant = $sequence[$i]
+              $timewait = try { @(Get-NetTCPConnection -State TimeWait -ErrorAction Stop).Count } catch { -1 }
+              $log = "benchmarks/sourceab-$policy-$variant-$i.log"
+              "AB_SOURCE_ORDER seed=${{ matrix.seed }} classes=${{ matrix.classes }} policy=$policy variant=$variant repetition=$i timewait_before=$timewait" | Tee-Object -FilePath benchmarks/abba-order.txt -Append
+              $args = @('-test.run=^TestCapacityMixedTrafficBench$', '-test.v=true', '-test.count=1', '-test.timeout=85s')
+              & ".\benchmarks\$variant.exe" @args 2>&1 | Tee-Object -FilePath $log
+              if ($LASTEXITCODE -ne 0) { throw "A/B test failure policy=$policy variant=$variant repetition=$i" }
+              $lines = @(Get-Content $log | Where-Object { $_ -match 'MIXED_RESULT profile=churn' })
+              if ($lines.Count -ne 1 -or $lines[0] -notmatch 'short_attempted=960 short_completed=960') {
+                throw "A/B evidence missing, incomplete, or ambiguous: $log"
+              }
+              "AB_SOURCE_SUCCESS policy=$policy variant=$variant repetition=$i timewait_before=$timewait $($lines[0].Trim())" | Add-Content benchmarks/abba-results.txt
+            }
+          }
+          $results = @(Get-Content benchmarks/abba-results.txt | Where-Object { $_ -match '^AB_SOURCE_SUCCESS' })
+          if ($results.Count -ne 8) { throw 'expected eight typed ABBA native samples per runner' }
+          'AB_SOURCE_COMPLETE samples=8 baseline=4 candidate=4 policies=2' | Tee-Object -FilePath benchmarks/completion.txt
+      - name: Archive even failed same-host A/B for postmortem
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-r135-source-ab-churn-classes-${{ matrix.classes }}-seed-${{ matrix.seed }}
+          path: |
+            benchmarks/*.log
+            benchmarks/*.txt
           retention-days: 14
