@@ -1495,14 +1495,14 @@ jobs:
           docker run --detach --name peer-r147 --network "$network" --memory 128m --memory-swap 128m \
             --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
             --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
-            -e PXGO_R147_ROLE=peer \
+            -e PXGO_R147_ROLE=peer -e PXGO_R147_TUNNELS=8 \
             -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
             --entrypoint /work/pxgo-cgroup.test "$image" \
             -test.run '^TestR147PeerClientAndUpstreamInDifferentMemcg$' -test.v -test.count=1 -test.timeout=55s
           docker run --name pxgo-r147-proxy --network "$network" --memory 384m --memory-swap 384m \
             --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
             --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
-            -e PXGO_R147_ROLE=proxy -e GOMEMLIMIT=280MiB \
+            -e PXGO_R147_ROLE=proxy -e PXGO_R147_TUNNELS=8 -e GOMEMLIMIT=280MiB \
             -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
             --entrypoint /work/pxgo-cgroup.test "$image" \
             -test.run '^TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers$' -test.v -test.count=1 -test.timeout=45s \
@@ -1511,7 +1511,7 @@ jobs:
           docker logs peer-r147 2>&1 | tee benchmarks/r147-peer-separate-cgroup.log
           test "$peer_exit" = 0
           grep -F 'R147_PROXY_ONLY_MEMCG_RESULT' benchmarks/r147-proxy-only-cgroup.log
-          grep -F 'R147_SIDE_CAR_CONNECT_RESULT tunneled=4' benchmarks/r147-peer-separate-cgroup.log
+          grep -F 'R147_SIDE_CAR_CONNECT_RESULT tunneled=8' benchmarks/r147-peer-separate-cgroup.log
           grep -F 'oom_kill_delta=0 peer_cgroup_separate=true' benchmarks/r147-proxy-only-cgroup.log
       - name: Preserve exact-sha kernel-pressure evidence
         if: always()

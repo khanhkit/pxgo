@@ -36,6 +36,19 @@ func r147MemcgSnapshot(t *testing.T) (uint64, uint64, uint64) {
 	return sock, curr, kills
 }
 
+func r147TunnelCount(t *testing.T) int {
+	t.Helper()
+	raw := os.Getenv("PXGO_R147_TUNNELS")
+	if raw == "" {
+		return 4
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > 16 {
+		t.Fatalf("research tunnel count must be 1..16, got %q", raw)
+	}
+	return n
+}
+
 func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T) {
 	if os.Getenv("PXGO_R147_ROLE") != "proxy" {
 		t.Skip("requires isolated 384MiB PxGo-only memcg")
@@ -82,6 +95,7 @@ func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T
 			t.Error("PxGo server did not drain")
 		}
 	}()
+	tunnels := r147TunnelCount(t)
 	beforeSock, beforeCurr, beforeKills := r147MemcgSnapshot(t)
 	peakSock, peakCurr := beforeSock, beforeCurr
 	var samples int
@@ -101,8 +115,8 @@ func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T
 	if endKills != beforeKills {
 		t.Fatalf("proxy-only memcg OOM kills delta=%d", endKills-beforeKills)
 	}
-	t.Logf("R147_PROXY_ONLY_MEMCG_RESULT memory_max=%d before_sock=%d peak_sock=%d after_sock=%d isolated_sock_peak_delta=%d before_current=%d peak_current=%d after_current=%d isolated_current_peak_delta=%d samples=%d oom_kill_delta=0 peer_cgroup_separate=true",
-		limit, beforeSock, peakSock, endSock, int64(peakSock)-int64(beforeSock), beforeCurr, peakCurr, endCurr, int64(peakCurr)-int64(beforeCurr), samples)
+	t.Logf("R147_PROXY_ONLY_MEMCG_RESULT tunnels=%d memory_max=%d before_sock=%d peak_sock=%d after_sock=%d isolated_sock_peak_delta=%d before_current=%d peak_current=%d after_current=%d isolated_current_peak_delta=%d samples=%d oom_kill_delta=0 peer_cgroup_separate=true",
+		tunnels, limit, beforeSock, peakSock, endSock, int64(peakSock)-int64(beforeSock), beforeCurr, peakCurr, endCurr, int64(peakCurr)-int64(beforeCurr), samples)
 }
 
 // Entire peer workload runs in its OWN separately limited Docker cgroup.
@@ -117,7 +131,7 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer upstream.Close()
-	const tunnels = 4
+	tunnels := r147TunnelCount(t)
 	var wg sync.WaitGroup
 	hold := make(chan struct{})
 	go func() {
