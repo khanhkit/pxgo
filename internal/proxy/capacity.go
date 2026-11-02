@@ -236,6 +236,10 @@ func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) err
 	if wait <= 0 {
 		return capacityWaitTimeout{}
 	}
+	// Deadline begins at entry, not when the first contended wait happens.
+	// A release notification and a timer can both be ready; selecting the
+	// release must never grant capacity after this absolute deadline.
+	deadline := time.Now().Add(wait)
 	var timer *time.Timer
 	registered := false
 	var ticket uint64
@@ -271,6 +275,14 @@ func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) err
 			g.mu.Unlock()
 			return net.ErrClosed
 		default:
+		}
+		// Check while holding the permit mutex, immediately before considering
+		// admission. The select below may choose a ready capacity notification
+		// instead of an already expired timer; neither can revive this deadline.
+		if !time.Now().Before(deadline) {
+			g.timeouts++
+			g.mu.Unlock()
+			return capacityWaitTimeout{}
 		}
 		g.expireSensorFreshnessLocked()
 		limit := g.effective
@@ -315,7 +327,9 @@ func (g *capacityGovernor) acquire(done <-chan struct{}, wait time.Duration) err
 			g.waitQueue = append(g.waitQueue, ticket)
 			registered = true
 			// No timer allocation on the successful uncontended hot path.
-			timer = time.NewTimer(wait)
+			// A queued waiter inherits the absolute deadline from function
+			// entry, including time previously spent acquiring the mutex.
+			timer = time.NewTimer(time.Until(deadline))
 		}
 		changed := g.changed
 		g.mu.Unlock()

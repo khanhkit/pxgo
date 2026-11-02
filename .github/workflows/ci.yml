@@ -41,6 +41,11 @@ on:
         required: false
         type: boolean
         default: false
+      deadline_r137:
+        description: Research-only source-exact Linux/Windows race for absolute admission deadline
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -1572,4 +1577,69 @@ jobs:
         with:
           name: windows-backlog-trusted-bind-${{ inputs.verification_ref }}
           path: benchmarks/*.log
+          retention-days: 14
+
+  r137-absolute-deadline-race:
+    name: R137 hard deadline race and negative control (${{ matrix.os }})
+    if: github.event_name == 'workflow_dispatch' && inputs.deadline_r137
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Copy immutable patched exact SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.verification_ref }}
+          path: patched
+      - name: Copy immutable unpatched PR106 negative-control SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ddf99249e6ec2e2bb12d746bfa650eece3495934
+          path: baseline
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: patched/go.mod
+          cache: false
+      - name: Verify absolute-timeout invariant under real Go race detector
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmarks
+          test "$(git -C patched rev-parse HEAD)" = '${{ inputs.verification_ref }}'
+          test "$(git -C baseline rev-parse HEAD)" = ddf99249e6ec2e2bb12d746bfa650eece3495934
+          printf 'patched=%s baseline=%s' '${{ inputs.verification_ref }}' 'ddf99249e6ec2e2bb12d746bfa650eece3495934' > benchmarks/source-shas.txt
+          (cd patched && CGO_ENABLED=1 go test -race ./internal/proxy \
+             -run '^(TestR68ExpiredAdmissionDeadlineCannotWinLateRelease|TestR137AbsoluteDeadlineRejectsSlowMutexBeforeAdmission)$' \
+             -count=10 -v -timeout=160s) > benchmarks/patched-targeted-race.log 2>&1 || {
+             tail -90 benchmarks/patched-targeted-race.log
+             exit 1
+          }
+          grep -F -- '--- PASS: TestR137AbsoluteDeadlineRejectsSlowMutexBeforeAdmission' benchmarks/patched-targeted-race.log
+          grep -F -- '--- PASS: TestR68ExpiredAdmissionDeadlineCannotWinLateRelease' benchmarks/patched-targeted-race.log
+          # This negative control changes ONLY test source. Product remains
+          # byte-identical to original PR106, and the known bug must show RED.
+          cp patched/internal/proxy/capacity_deadline_r137_test.go baseline/internal/proxy/
+          set +e
+          (cd baseline && CGO_ENABLED=1 go test -race ./internal/proxy \
+             -run '^TestR137AbsoluteDeadlineRejectsSlowMutexBeforeAdmission$' \
+             -count=1 -v -timeout=60s) > benchmarks/unpatched-negative-control.log 2>&1
+          baseline_rc=$?
+          set -e
+          if [ "$baseline_rc" -eq 0 ]; then
+            echo 'Unexpected negative-control success: unpatched PR106 must not pass absolute deadline'
+            exit 1
+          fi
+          grep -F 'permit admitted after absolute expiry' benchmarks/unpatched-negative-control.log
+          echo 'R137_HARD_DEADLINE_RESULT patched_race_pass=true unpatched_negative_control_red=true rounds=10 os=${{ matrix.os }}' | tee benchmarks/result.txt
+      - name: Archive both patched and baseline negative-control evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r137-absolute-deadline-${{ matrix.os }}-${{ inputs.verification_ref }}
+          path: benchmarks/*
           retention-days: 14
