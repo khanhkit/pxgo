@@ -186,7 +186,7 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 			t.Fatal(err)
 		}
 		clients = append(clients, c)
-		_ = c.SetDeadline(time.Now().Add(7 * time.Second))
+		_ = c.SetDeadline(time.Now().Add(20 * time.Second))
 		_, err = fmt.Fprintf(c, "CONNECT peer-r147:19877 HTTP/1.1\r\nHost: peer-r147:19877\r\n\r\n")
 		if err != nil {
 			t.Fatal(err)
@@ -200,13 +200,21 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 	}
-	for _, c := range clients {
-		n, err := c.Write(make([]byte, 2<<20))
-		if err != nil && !strings.Contains(err.Error(), "timeout") {
-			t.Logf("client partial buffered send err=%v", err)
-		}
-		sent = append(sent, n)
+	sent = make([]int, len(clients))
+	var writers sync.WaitGroup
+	for i, c := range clients {
+		writers.Add(1)
+		go func(i int, c net.Conn) {
+			defer writers.Done()
+			_ = c.SetWriteDeadline(time.Now().Add(6 * time.Second))
+			n, err := c.Write(make([]byte, 2<<20))
+			if err != nil && !strings.Contains(err.Error(), "timeout") {
+				t.Logf("client %d partial buffered send err=%v", i, err)
+			}
+			sent[i] = n
+		}(i, c)
 	}
+	writers.Wait()
 	// Keep live upstream sockets and client buffers in their PEER cgroup
 	// while PxGo's own cgroup records only the proxy's two tunnel ends.
 	time.Sleep(4 * time.Second)
