@@ -40,7 +40,7 @@ test("worker validates PR SHA and repo before using OCR secrets", async () => {
   for (const permission of ["contents: read", "statuses: write", "pull-requests: write"]) {
     assert.ok(y.includes(permission), permission);
   }
-  assert.ok(y.includes("runs-on: \${{ inputs.runner }}".replace("\\", "")));
+  assert.ok(y.includes("runs-on: " + "$" + "{{ inputs.runner }}"));
   assert.match(y, /cancel-in-progress:\s*true/);
   assert.doesNotMatch(y, /actions\/checkout@|npm\s+(?:ci|install)|uses:\s*\.\//);
   for (const check of [
