@@ -161,22 +161,22 @@ func requireRealADSSPIFixture(t *testing.T) string {
 
 	upnOut, err := exec.Command("whoami", "/upn").CombinedOutput()
 	if err != nil {
-		t.Fatalf("read domain UPN: %v: %s", err, strings.TrimSpace(string(upnOut)))
+		t.Fatalf("read domain UPN: %v", err)
 	}
 	upn := strings.TrimSpace(string(upnOut))
 	if upn == "" || !strings.Contains(upn, "@") {
-		t.Fatalf("runner identity %q is not a domain UPN", upn)
+		t.Fatal("protected AD runner identity is not a domain UPN")
 	}
 
 	spn := proxySPN(host)
 	klistOut, err := exec.Command("klist", "get", spn).CombinedOutput()
 	if err != nil {
-		t.Fatalf("obtain Kerberos service ticket for %s: %v: %s", spn, err, strings.TrimSpace(string(klistOut)))
+		t.Fatalf("obtain Kerberos service ticket: %v", err)
 	}
 	if !strings.Contains(strings.ToLower(string(klistOut)), strings.ToLower(spn)) {
-		t.Fatalf("klist output does not prove service ticket for %s:\n%s", spn, klistOut)
+		t.Fatal("Kerberos service ticket missing required SPN")
 	}
-	t.Logf("real AD runner identity=%s service=%s", upn, spn)
+	t.Log("real AD UPN and Kerberos service ticket verified")
 	return host
 }
 
@@ -208,7 +208,7 @@ func TestTCSSPIWINAD010RealADNegotiateUsesKerberos(t *testing.T) {
 
 	session, err := newSSPISession(authSchemeNeg, host)
 	if err != nil {
-		t.Fatalf("create PxGo Negotiate session for %s: %v", spn, err)
+		t.Fatalf("create PxGo Negotiate session: %v", err)
 	}
 	defer func() {
 		if err := session.Close(); err != nil {
@@ -229,7 +229,7 @@ func TestTCSSPIWINAD010RealADNegotiateUsesKerberos(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(initialToken, kerberosOID) {
-		t.Fatalf("Negotiate token for %s does not advertise the Kerberos mechanism OID", spn)
+		t.Fatal("Negotiate token does not advertise Kerberos mechanism OID")
 	}
 
 	serverCred, err := negotiate.AcquireServerCredentials("")
@@ -240,7 +240,7 @@ func TestTCSSPIWINAD010RealADNegotiateUsesKerberos(t *testing.T) {
 
 	serverCtx, serverDone, toClient, err := negotiate.NewServerContext(serverCred, initialToken)
 	if err != nil {
-		t.Fatalf("accept initial Negotiate token for %s: %v", spn, err)
+		t.Fatalf("accept initial Negotiate token: %v", err)
 	}
 	defer serverCtx.Release()
 
@@ -281,10 +281,10 @@ func TestTCSSPIWINAD010RealADNegotiateUsesKerberos(t *testing.T) {
 
 	tickets, err := exec.Command("klist").CombinedOutput()
 	if err != nil {
-		t.Fatalf("inspect Kerberos ticket cache after Negotiate: %v: %s", err, strings.TrimSpace(string(tickets)))
+		t.Fatalf("inspect Kerberos ticket cache after Negotiate: %v", err)
 	}
 	if !strings.Contains(strings.ToLower(string(tickets)), strings.ToLower(spn)) {
-		t.Fatalf("Kerberos cache does not contain %s after Negotiate:\n%s", spn, tickets)
+		t.Fatal("Kerberos ticket cache lacks verified service SPN after Negotiate")
 	}
-	t.Logf("real AD Negotiate/Kerberos exchange complete: service=%s user=%s", spn, username)
+	t.Log("real AD Negotiate/Kerberos exchange completed; domain identity and SPN verified")
 }
