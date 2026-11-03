@@ -44,4 +44,4 @@ pxgo --pac=http://proxy.company.com/proxy.pac
 - **Upstream authentication.** Select `ANY`, `ANYSAFE`, `NEGOTIATE`, `NTLM`, `DIGEST`, `BASIC`, or pass-through modes.
 - **Kerberos/SPNEGO upstream auth.** Linux/macOS create and refresh a per-process credential cache and consume it for upstream HTTP/CONNECT Negotiate authentication; Windows uses current-user SSPI.
 - **PAC and bypass rules.** Load PAC files and bypass upstream proxies for local hosts, domains, CIDR ranges, IP ranges, and wildcard IPv4 globs.
-- **Remote access controls.** Keep the default loopback-only listener or opt in to gateway and host-only modes.
+- **Remote access controls.** By default, only loopback clients may connect, even when bound to 0.0.0.0; explicitly configure gateway or host-only access for remote clients.
