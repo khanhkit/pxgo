@@ -104,6 +104,9 @@ var (
 	scoopDefaultRoot  = regexp.MustCompile(`^[a-z]:/(?:users/[^/]+|programdata)/scoop$`)
 	wingetUserRoot    = regexp.MustCompile(`^[a-z]:/users/[^/]+/appdata/local/microsoft/winget/packages$`)
 	wingetMachineRoot = regexp.MustCompile(`^[a-z]:/program files(?: \(x86\))?/winget/packages$`)
+	// Hint only when the path has a package-manager install structure, not
+	// merely a Windows username or a directory named like a manager.
+	brewManagedExecutableHint = regexp.MustCompile(`(?i)/cellar/[^/]+/[^/]+/bin/pxgo$`)
 )
 
 func managedPath(value string, caseInsensitive bool) string {
@@ -226,15 +229,15 @@ func detectManagedProviderHint(executable, goos string) (Provider, bool) {
 	switch strings.ToLower(strings.TrimSpace(goos)) {
 	case goosWindows:
 		switch {
-		case strings.Contains(full, "/scoop/"):
+		case strings.Contains(full, "/scoop/apps/"), strings.Contains(full, "/scoop/shims/"):
 			return ProviderScoop, true
-		case strings.Contains(full, "/winget/"):
+		case strings.Contains(full, "/winget/packages/"), strings.Contains(full, "/winget/links/"):
 			return ProviderWinGet, true
 		}
 	case goosDarwin, goosLinux:
 		// A manager-shaped path is ambiguous even if case prevents it from
 		// matching the genuine case-sensitive Homebrew root.
-		if strings.Contains(strings.ToLower(full), "/cellar/") {
+		if brewManagedExecutableHint.MatchString(full) {
 			return ProviderBrew, true
 		}
 	}

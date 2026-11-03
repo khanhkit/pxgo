@@ -176,3 +176,27 @@ func TestResolveProviderUnixCaseSensitiveBrewRoot(t *testing.T) {
 		t.Fatalf("case-sensitive Linux root is not the official /opt/homebrew: %q", detected)
 	}
 }
+
+func TestResolveProviderPortableManagerNamedProfileIsDirect(t *testing.T) {
+	for _, file := range []string{
+		`C:\Users\scoop\Downloads\pxgo.exe`,
+		`C:\Users\winget\Desktop\pxgo.exe`,
+	} {
+		for _, configured := range []Provider{ProviderAuto, ProviderDirect} {
+			got, err := ResolveProvider(configured, file, "windows")
+			if err != nil || got != ProviderDirect {
+				t.Errorf("manager name in username is not an install owner: file=%q configured=%q got=%q err=%v", file, configured, got, err)
+			}
+		}
+	}
+}
+
+func TestResolveProviderPortableCellarNamedProfileIsDirect(t *testing.T) {
+	file := "/Users/Cellar/Downloads/pxgo"
+	for _, configured := range []Provider{ProviderAuto, ProviderDirect} {
+		got, err := ResolveProvider(configured, file, "darwin")
+		if err != nil || got != ProviderDirect {
+			t.Errorf("plain user named Cellar should not mark Homebrew: got=%q err=%v", got, err)
+		}
+	}
+}
