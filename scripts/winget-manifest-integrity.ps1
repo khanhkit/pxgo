@@ -53,6 +53,13 @@ function Get-WingetManifestMetadata {
             }
             $result[$key] = $Matches[2]
         }
+        elseif ($line -cmatch '^[A-Za-z]' -or
+                ($line -cmatch '^[^ \t#\r\n]' -and $line -cnotmatch '^-[ \t]+')) {
+            # YAML permits forms such as "InstallerType : exe" and explicit
+            # tags. Ignoring these creates ambiguous values across parsers.
+            # The trusted WingetCreate portable subset never needs them.
+            throw "unsupported WinGet manifest root syntax: $line"
+        }
     }
     return $result
 }
@@ -77,6 +84,19 @@ function Assert-WingetInstallerManifest {
             $fields['PackageVersion'] -cne $Version -or
             $fields['ManifestType'] -cne $entry.Type) {
             throw "WinGet $($entry.Name) manifest identity/version/type does not match $PackageIdentifier $Version"
+        }
+        # Unknown root keys could add executable launch behavior despite
+        # identical ZIP URL and SHA256. Reject unreviewed packaging semantics.
+        $allowed = if ($entry.Type -eq 'version') {
+            @('PackageIdentifier', 'PackageVersion', 'DefaultLocale', 'ManifestType', 'ManifestVersion')
+        } else {
+            @('PackageIdentifier', 'PackageVersion', 'InstallerType', 'NestedInstallerType',
+              'NestedInstallerFiles', 'Installers', 'ManifestType', 'ManifestVersion', 'ReleaseDate')
+        }
+        foreach ($field in $fields.Keys) {
+            if ($field -cnotin $allowed) {
+                throw "unsupported WinGet manifest root field: $field"
+            }
         }
     }
 
@@ -207,14 +227,27 @@ function Get-OptionalGitHubManifest {
         throw
     }
 
-    if ($response.encoding -cne 'base64' -or [string]::IsNullOrWhiteSpace([string]$response.content)) {
-        throw "GitHub API response for $Uri lacks base64 file content"
+    $truncated = ($null -ne $response.PSObject.Properties['truncated'] -and
+        $response.truncated -eq $true)
+    if ($response.encoding -cne 'base64' -or
+        $response.type -cne 'file' -or
+        $truncated -or
+        [string]::IsNullOrWhiteSpace([string]$response.content)) {
+        throw "GitHub API response for $Uri has unverified or truncated file content"
     }
     try {
         $raw = [Convert]::FromBase64String(([string]$response.content -replace '\s', ''))
-        return [System.Text.Encoding]::UTF8.GetString($raw)
     }
     catch {
         throw "GitHub API response for $Uri contains invalid base64 data"
+    }
+    if ($null -eq $response.size -or [int64]$response.size -ne $raw.Length) {
+        throw "GitHub API response for $Uri has mismatched manifest size"
+    }
+    try {
+        return [System.Text.UTF8Encoding]::new($false, $true).GetString($raw)
+    }
+    catch {
+        throw "GitHub API response for $Uri contains invalid UTF-8 data"
     }
 }

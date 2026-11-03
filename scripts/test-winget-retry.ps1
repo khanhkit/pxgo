@@ -99,6 +99,17 @@ Assert-ThrowsLike {
 Assert-ThrowsLike {
     Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('NestedInstallerType: portable', 'NestedInstallerType: exe')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
 } 'packaging semantics'
+# YAML supports an optional space before ':'. A second root key written
+# that way must not be ignored by our subset parser and result in false green.
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('InstallerType: zip', "InstallerType: zip`nInstallerType : exe")) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'unsupported WinGet manifest root syntax'
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('InstallerType: zip', "InstallerType: zip`nInstallerSwitches: /quiet")) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'unsupported WinGet manifest root field'
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent ($global:MockVersionContent + "`nExtraSchema: trust-bypass") -InstallerContent $global:MockInstallerContent -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'unsupported WinGet manifest root field'
 Assert-ThrowsLike {
     Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('RelativeFilePath: pxgo.exe', 'RelativeFilePath: evil.exe')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
 } 'nested executable'
@@ -204,9 +215,20 @@ function Invoke-RestMethod {
         else {
             throw "unexpected manifest API path: $Uri"
         }
+        $rawBytes = [System.Text.Encoding]::UTF8.GetBytes($content)
+        if ($global:WingetMockMode -eq 'invalid-utf8') {
+            $rawBytes = [byte[]]@(0xff, 0xfe)
+        }
+        $fileType = 'file'
+        if ($global:WingetMockMode -eq 'manifest-symlink') {
+            $fileType = 'symlink'
+        }
         return [pscustomobject]@{
+            type = $fileType
             encoding = 'base64'
-            content = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($content))
+            truncated = ($global:WingetMockMode -eq 'truncated-manifest')
+            size = $rawBytes.Length + [int]($global:WingetMockMode -eq 'incorrect-manifest-size')
+            content = [Convert]::ToBase64String($rawBytes)
         }
     }
     if ($Uri -like 'https://api.github.com/search/issues*') {
@@ -248,11 +270,22 @@ try {
     Assert-ThrowsLike {
         & ./scripts/submit-winget-release.ps1 -Version '0.9.0' -Tag 'v0.9.0'
     } 'lacks installer'
+    foreach ($invalid in @(
+        @{ Mode = 'truncated-manifest'; Error = 'unverified or truncated' },
+        @{ Mode = 'manifest-symlink'; Error = 'unverified or truncated' },
+        @{ Mode = 'incorrect-manifest-size'; Error = 'mismatched manifest size' },
+        @{ Mode = 'invalid-utf8'; Error = 'invalid UTF-8' }
+    )) {
+        $global:WingetMockMode = $invalid.Mode
+        Assert-ThrowsLike {
+            & ./scripts/submit-winget-release.ps1 -Version '0.9.0' -Tag 'v0.9.0'
+        } $invalid.Error
+    }
     $global:WingetMockMode = 'pending-unverified'
     Assert-ThrowsLike {
         & ./scripts/submit-winget-release.ps1 -Version '0.9.0' -Tag 'v0.9.0'
     } 'pending manual SHA verification'
-    Write-Host 'PASS: transient failure, verified retry-only convergence, tampered/missing installer, and unverified pending PR fail-closed'
+    Write-Host 'PASS: retry-only convergence plus truncated, symlink, malformed size, UTF-8, tampered/missing installer and pending PR all fail closed'
 }
 finally {
     [Environment]::SetEnvironmentVariable('WINGET_CREATE_GITHUB_TOKEN', $originalToken)
