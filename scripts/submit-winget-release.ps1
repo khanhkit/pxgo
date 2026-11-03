@@ -23,17 +23,6 @@ if ([string]::IsNullOrWhiteSpace($env:WINGET_CREATE_GITHUB_TOKEN)) {
     throw 'WINGET_CREATE_GITHUB_TOKEN is required for WinGet submission'
 }
 
-$wingetCreateVersion = '1.12.13.0'
-$wingetCreateSha256 = '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'
-$wingetCreateUrl = "https://github.com/microsoft/winget-create/releases/download/v$wingetCreateVersion/wingetcreate.exe"
-$wingetCreatePath = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
-
-Invoke-WebRequest -Uri $wingetCreateUrl -OutFile $wingetCreatePath -UseBasicParsing
-$actualHash = (Get-FileHash -Path $wingetCreatePath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actualHash -ne $wingetCreateSha256) {
-    throw "WingetCreate checksum mismatch: expected=$wingetCreateSha256 actual=$actualHash"
-}
-
 $apiHeaders = @{
     'Authorization' = "Bearer $($env:WINGET_CREATE_GITHUB_TOKEN)"
     'User-Agent' = 'PxGo-WinGet-Publisher'
@@ -179,6 +168,19 @@ $pending = Invoke-RestMethod -Uri "https://api.github.com/search/issues?q=$searc
 if ($pending.total_count -gt 0) {
     $urls = @($pending.items | ForEach-Object { $_.html_url }) -join ', '
     throw "WinGet submission pending but content is not yet verified upstream for $PackageIdentifier ${Version}: $urls"
+}
+
+# Only download/execute WingetCreate when a new submission is genuinely needed.
+# A converged retry must work even if the WingetCreate CDN is temporarily down.
+$wingetCreateVersion = '1.12.13.0'
+$wingetCreateSha256 = '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'
+$wingetCreateUrl = "https://github.com/microsoft/winget-create/releases/download/v$wingetCreateVersion/wingetcreate.exe"
+$wingetCreatePath = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
+
+Invoke-WebRequest -Uri $wingetCreateUrl -OutFile $wingetCreatePath -UseBasicParsing
+$actualHash = (Get-FileHash -Path $wingetCreatePath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualHash -ne $wingetCreateSha256) {
+    throw "WingetCreate checksum mismatch: expected=$wingetCreateSha256 actual=$actualHash"
 }
 
 $prTitle = "New version: $PackageIdentifier version $Version"

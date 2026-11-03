@@ -50,7 +50,7 @@ ManifestVersion: 1.12.0
 function Invoke-WebRequest {
     param($Uri, $OutFile, $Method, $MaximumRedirection, [switch]$UseBasicParsing)
     $global:WingetMockCalls.Add("web:" + [string]$Uri)
-    if ($global:WingetMockMode -eq 'download-failure') {
+    if ($global:WingetMockMode -eq 'download-failure' -and $OutFile) {
         throw 'INJECTED_WIN_GET_CREATE_DOWNLOAD_FAILURE'
     }
     if ($OutFile) {
@@ -86,7 +86,7 @@ function Invoke-RestMethod {
         }
     }
     if ($Uri -like '*winget-pkgs/contents/*') {
-        if ($global:WingetMockMode -in @('not-published-with-pending', 'not-published-without-pending')) {
+        if ($global:WingetMockMode -in @('download-failure', 'not-published-with-pending', 'not-published-without-pending')) {
             throw [System.Net.Http.HttpRequestException]::new('mock 404', $null, [System.Net.HttpStatusCode]::NotFound)
         }
         $yaml = if ($Uri -like '*.installer.yaml') { $installerYaml } else { $versionYaml }
@@ -105,6 +105,7 @@ function Invoke-RestMethod {
         }
     }
     if ($Uri -like '*api.github.com/search/issues*') {
+        if ($global:WingetMockMode -eq 'download-failure') { return [pscustomobject]@{ total_count = 0; items = @() } }
         if ($global:WingetMockMode -eq 'not-published-with-pending') {
             return [pscustomobject]@{ total_count = 1; items = @([pscustomobject]@{ html_url = 'https://github.com/microsoft/winget-pkgs/pull/999999' }) }
         }
@@ -140,8 +141,8 @@ try {
     $global:WingetMockCalls.Clear()
     & ./scripts/submit-winget-release.ps1 -Version '0.9.0' -Tag 'v0.9.0'
     if (@($global:WingetMockCalls | Where-Object { $_ -like '*KhanhKit.PxGo.installer.yaml' }).Count -ne 1 -or
-        -not (Test-Path (Join-Path $tempDir 'wingetcreate.exe'))) {
-        throw 'Exact upstream idempotency proof did not read both manifests'
+        @($global:WingetMockCalls | Where-Object { $_ -like '*wingetcreate.exe' }).Count -ne 0) {
+        throw 'Exact upstream idempotency proof did not read both manifests or attempted unnecessary WingetCreate download'
     }
     $global:WingetPassCount++
     Write-Host 'PASS: exact upstream merged WinGet URLs and SHA256 converge without release promotion'
