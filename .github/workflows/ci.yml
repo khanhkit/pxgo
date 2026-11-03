@@ -46,6 +46,11 @@ on:
         required: false
         type: boolean
         default: false
+      r149_windows_2560_10min:
+        description: Research-only exact SHA Windows 2560 held CONNECT/600 short 10m soak
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -541,14 +546,14 @@ jobs:
   windows-held-2560-ten-minute-soak:
     name: Windows 10min real 2560 held CONNECT plus 600 distributed HTTP soak
     # Pure loopback live data-plane and OS handle/PrivateBytes telemetry, not WAN.
-    if: github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')
+    if: (github.event_name == 'pull_request' && (github.head_ref == 'experiment/capacity-two-class-windows-20261023' || github.head_ref == 'experiment/r110-frozen-ci-20261101' || github.head_ref == 'experiment/r133-windows-nonloopback-guard-20261101' || github.head_ref == 'experiment/r137-absolute-deadline-20261102')) || (github.event_name == 'workflow_dispatch' && inputs.r149_windows_2560_10min)
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.event.pull_request.head.sha }}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -556,7 +561,7 @@ jobs:
       - name: Hold 2560 native TCP tunnels for 30x20s cycles with 600 short HTTP and resource gates
         shell: pwsh
         env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.event.pull_request.head.sha }}
           PXGO_EXPERIMENTAL_CAPACITY_MODE: auto
           PXGO_EXPERIMENTAL_CONNECTION_CLASSES: '1'
           PXGO_RESEARCH_CAPACITY_POLICY: r11
@@ -576,7 +581,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: win-2560-ten-minute-soak-${{ github.event.pull_request.head.sha }}
+          name: win-2560-ten-minute-soak-${{ github.event_name == 'workflow_dispatch' && inputs.verification_ref || github.event.pull_request.head.sha }}
           path: benchmarks/
           retention-days: 14
 
