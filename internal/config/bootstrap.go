@@ -295,10 +295,18 @@ func patchSystemRouting(raw string, system SystemProxyImport) string {
 
 func patchINIKeys(raw string, values map[string]*string) string {
 	lines := strings.Split(raw, "\n")
-	seen := map[string]bool{}
+	seen := make(map[string]bool)
+	section := ""
+	// ReadINI intentionally remains section-agnostic for historical configs.
+	// In particular, a duplicate key in [settings] remains active unless
+	// explicitly disabled. Keep system routing canonical in [proxy] only.
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, "[") {
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")))
+			continue
+		}
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
 			continue
 		}
 		key, _, ok := strings.Cut(trimmed, "=")
@@ -310,26 +318,52 @@ func patchINIKeys(raw string, values map[string]*string) string {
 		if !wanted {
 			continue
 		}
-		if seen[key] || value == nil || *value == "" {
+		// Keep the first active key in [proxy]; disable copies elsewhere so
+		// the section-agnostic legacy parser cannot override the new policy.
+		if section != "proxy" || seen[key] || value == nil || *value == "" {
 			lines[i] = "# " + strings.TrimSpace(line) + "  # disabled by --apply-system-proxy"
 			continue
 		}
 		lines[i] = key + " = " + *value
 		seen[key] = true
 	}
-	var appendLines []string
+	var missing []string
 	for _, key := range []string{keyPAC, keyServer, keyNoProxy} {
 		value := values[key]
 		if value != nil && *value != "" && !seen[key] {
-			appendLines = append(appendLines, key+" = "+*value)
+			missing = append(missing, key+" = "+*value)
 		}
 	}
-	if len(appendLines) > 0 {
-		text := strings.Join(lines, "\n")
-		text = strings.TrimRight(text, "\n") + "\n\n# Applied from operating-system proxy configuration.\n" + strings.Join(appendLines, "\n") + "\n"
-		return text
+	if len(missing) == 0 {
+		return strings.Join(lines, "\n")
 	}
-	return strings.Join(lines, "\n")
+	// Insert new routing keys inside the *first* [proxy] section, before the
+	// next section starts. Never append active proxy keys after [settings].
+	proxyStart := -1
+	for i, line := range lines {
+		if strings.EqualFold(strings.TrimSpace(line), "[proxy]") {
+			proxyStart = i
+			break
+		}
+	}
+	if proxyStart < 0 {
+		return strings.TrimRight(strings.Join(lines, "\n"), "\n") +
+			"\n\n[proxy]\n# Applied from operating-system proxy configuration.\n" +
+			strings.Join(missing, "\n") + "\n"
+	}
+	insertAt := len(lines)
+	for i := proxyStart + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			insertAt = i
+			break
+		}
+	}
+	inserted := append([]string(nil), lines[:insertAt]...)
+	inserted = append(inserted, "# Applied from operating-system proxy configuration.")
+	inserted = append(inserted, missing...)
+	inserted = append(inserted, lines[insertAt:]...)
+	return strings.Join(inserted, "\n")
 }
 
 func activeINIKeys(raw []byte) map[string]bool {
