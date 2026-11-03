@@ -29,7 +29,7 @@ $apiHeaders = @{
     'Accept' = 'application/vnd.github+json'
 }
 $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository/releases/tags/$Tag" -Headers $apiHeaders
-if ($release.tag_name -ne $Tag -or $release.draft -or $release.prerelease) {
+if ($release.tag_name -cne $Tag -or $release.draft -or $release.prerelease) {
     throw "WinGet publication requires a stable GitHub Release: $Tag"
 }
 $releaseDate = ([DateTimeOffset]$release.published_at).UtcDateTime.ToString('yyyy-MM-dd')
@@ -90,13 +90,22 @@ function Assert-UpstreamExactRelease {
             throw "WinGet upstream package identity/version/type differs from release $Tag"
         }
     }
-    if ($InstallerText -notmatch '(?m)^Installers:[ \t]*\r?$' -or
+    $installerKeys = [regex]::Matches($InstallerText, '(?m)^Installers:[^\r\n]*')
+    if ($installerKeys.Count -ne 1 -or
+        $installerKeys[0].Value -notmatch '^Installers:[ \t]*$' -or
         $InstallerText -match '(?m)^[ \t]*<<:') {
         throw 'upstream WinGet installer manifest structure is unsupported'
     }
-
-    $installers = [regex]::Matches($InstallerText, '(?m)^-[ \t]*Architecture:[ \t]*([^\r\n \t]+)[ \t]*\r?$')
-    if ($installers.Count -ne 2) {
+    $afterInstallers = $InstallerText.Substring($installerKeys[0].Index + $installerKeys[0].Length)
+    $nextRootField = [regex]::Match($afterInstallers, '(?m)^[A-Za-z][A-Za-z0-9]*:')
+    $installerBlock = if ($nextRootField.Success) {
+        $afterInstallers.Substring(0, $nextRootField.Index)
+    } else {
+        $afterInstallers
+    }
+    $installers = [regex]::Matches($installerBlock, '(?m)^-[ \t]*Architecture:[ \t]*([^\r\n \t]+)[ \t]*\r?$')
+    $allListItems = [regex]::Matches($installerBlock, '(?m)^-[ \t]*[^\r\n]+')
+    if ($installers.Count -ne 2 -or $allListItems.Count -ne 2) {
         throw 'upstream WinGet must contain exactly two explicit installers'
     }
     $expectedAssets = @{
@@ -111,8 +120,8 @@ function Assert-UpstreamExactRelease {
         }
         $seen[$architecture] = $true
         $start = $installers[$i].Index
-        $end = if ($i + 1 -lt $installers.Count) { $installers[$i + 1].Index } else { $InstallerText.Length }
-        $section = $InstallerText.Substring($start, $end - $start)
+        $end = if ($i + 1 -lt $installers.Count) { $installers[$i + 1].Index } else { $installerBlock.Length }
+        $section = $installerBlock.Substring($start, $end - $start)
         $url = [regex]::Matches($section, '(?m)^[ \t]+InstallerUrl:[ \t]*([^\r\n \t#]+)[ \t]*\r?$')
         $digest = [regex]::Matches($section, '(?m)^[ \t]+InstallerSha256:[ \t]*([0-9a-fA-F]{64})[ \t]*\r?$')
         if ($url.Count -ne 1 -or $digest.Count -ne 1 -or

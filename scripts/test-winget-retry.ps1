@@ -96,6 +96,9 @@ function Invoke-RestMethod {
             'wrong-upstream-version' { if ($Uri -like '*KhanhKit.PxGo.yaml') { $yaml = $yaml.Replace('PackageVersion: 0.9.0', 'PackageVersion: 0.9.1') } }
             'duplicate-installer' { if ($Uri -like '*.installer.yaml') { $yaml += "`n- Architecture: x64`n  InstallerUrl: $x64Url`n  InstallerSha256: $x64Digest`n" } }
             'duplicate-package-identity' { if ($Uri -like '*.installer.yaml') { $yaml += "`nPackageIdentifier: Malicious.Proxy`n" } }
+            'duplicate-installers-key' { if ($Uri -like '*.installer.yaml') { $yaml += "`nInstallers: []`n" } }
+            'unrecognized-list-item' { if ($Uri -like '*.installer.yaml') { $yaml = $yaml.Replace('ManifestType: installer', "- SurprisingKey: suspicious`nManifestType: installer") } }
+            'duplicate-architecture-sha' { if ($Uri -like '*.installer.yaml') { $yaml = $yaml.Replace("  InstallerSha256: $x64Digest", "  InstallerSha256: $x64Digest`n  InstallerSha256: $x64Digest") } }
             'truncated-manifest' { return [pscustomobject]@{ content = ''; encoding = 'base64'; truncated = $true } }
         }
         return [pscustomobject]@{
@@ -152,6 +155,9 @@ try {
     Assert-PublisherFailure 'wrong-upstream-version' 'package identity/version/type differs'
     Assert-PublisherFailure 'duplicate-installer' 'exactly two explicit installers'
     Assert-PublisherFailure 'duplicate-package-identity' 'missing or ambiguous'
+    Assert-PublisherFailure 'duplicate-installers-key' 'structure is unsupported'
+    Assert-PublisherFailure 'unrecognized-list-item' 'exactly two explicit installers'
+    Assert-PublisherFailure 'duplicate-architecture-sha' 'URL or digest fields'
     Assert-PublisherFailure 'truncated-manifest' 'unverifiable upstream'
     Assert-PublisherFailure 'missing-release-digest' 'missing or untrusted SHA256 identity'
     Assert-PublisherFailure 'wrong-release-url' 'missing or untrusted SHA256 identity'
