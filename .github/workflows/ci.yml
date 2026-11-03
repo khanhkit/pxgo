@@ -1599,6 +1599,43 @@ jobs:
               fi
             done
           done
+          # R149 controlled slow-consumer sweep, three independent runs for
+          # default, 64KiB, 128KiB and 256KiB SO_RCVBUF/SO_SNDBUF. Source
+          # is research-only; no production AUTO memory changes. Record actual
+          # delivery, client send time, PxGo-only memcg and physical OOM.
+          for profile in default cap64 cap128 cap256; do
+            case "$profile" in
+              default) cap="" ;;
+              cap64) cap=65536 ;;
+              cap128) cap=131072 ;;
+              cap256) cap=262144 ;;
+            esac
+            for rep in 1 2 3; do
+              docker rm -f peer-r147 pxgo-r147-proxy >/dev/null 2>&1 || true
+              docker run --detach --name peer-r147 --network "$network" --memory 128m --memory-swap 128m \
+                --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+                --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+                -e PXGO_R147_ROLE=peer -e PXGO_R147_TUNNELS=8 -e PXGO_R148_PEER_WAIT_CAP=1 \
+                -e PXGO_R148_PEER_DRAIN=1 -e PXGO_R148_SLOW_READ_MS=10 \
+                -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+                --entrypoint /work/pxgo-cgroup.test "$image" \
+                -test.run '^TestR147PeerClientAndUpstreamInDifferentMemcg$' -test.v -test.count=1 -test.timeout=55s
+              docker run --name pxgo-r147-proxy --network "$network" --memory 384m --memory-swap 384m \
+                --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+                --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+                -e PXGO_R147_ROLE=proxy -e PXGO_R147_TUNNELS=8 -e PXGO_R148_SOCKET_CAP_BYTES="$cap" -e GOMEMLIMIT=280MiB \
+                -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+                --entrypoint /work/pxgo-cgroup.test "$image" \
+                -test.run '^TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers$' -test.v -test.count=1 -test.timeout=45s \
+                | tee "benchmarks/r149-$profile-rep$rep-proxy.log"
+              peer_exit="$(docker wait peer-r147)"
+              docker logs peer-r147 2>&1 | tee "benchmarks/r149-$profile-rep$rep-peer.log"
+              test "$peer_exit" = 0
+              grep -F 'R148_SLOW_CONSUMER_RESULT tunnels=8 bytes=33554432' "benchmarks/r149-$profile-rep$rep-peer.log"
+              grep -F 'all_payload_received=true' "benchmarks/r149-$profile-rep$rep-peer.log"
+              grep -F 'oom_kill_delta=0 peer_cgroup_separate=true' "benchmarks/r149-$profile-rep$rep-proxy.log"
+            done
+          done
       - name: Preserve exact-sha kernel-pressure evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
