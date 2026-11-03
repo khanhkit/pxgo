@@ -110,6 +110,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
           CLAIM_CONTEXT: ${{ inputs.claim_context }}
+          EXPECTED_RUNNER_LABEL: ${{ inputs.runner }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -124,12 +125,16 @@ jobs:
                 per_page: 100,
               });
               const claim = statuses.find((status) => status.context === claimContext);
-              if (claim?.state === 'success') {
+              const expectedGrant = 'runner claim granted: ' + process.env.EXPECTED_RUNNER_LABEL;
+              if (claim?.state === 'success' && claim.description === expectedGrant) {
                 core.info(`Scheduler claim granted: ${claimContext}`);
                 return;
               }
-              if (claim?.state === 'failure' || claim?.state === 'error') {
-                core.setFailed(`Scheduler claim denied: ${claimContext}`);
+              // GitHub has no neutral commit-status state: a denied/expired
+              // queue attempt may have state=success with a DENIED verdict.
+              // Never allow that status to pass the secret-bearing gate.
+              if (claim?.state === 'success' || claim?.state === 'failure' || claim?.state === 'error') {
+                core.setFailed(`Scheduler claim not granted: ${claimContext}`);
                 return;
               }
               await new Promise((resolve) => setTimeout(resolve, 1000));

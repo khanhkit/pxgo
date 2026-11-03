@@ -58,7 +58,12 @@ test("worker validates PR SHA and repo before using OCR secrets", async () => {
     "Revalidate requested PR context after scheduler claim",
     "RUNNER_READY_CONTEXT",
     "CLAIM_CONTEXT",
+    "EXPECTED_RUNNER_LABEL",
+    "claim?.state === 'success' && claim.description === expectedGrant",
+    "claim?.state === 'success' || claim?.state === 'failure'",
   ]) assert.ok(y.includes(check), check);
+  assert.ok(y.includes("const expectedGrant = 'runner claim granted: ' + process.env.EXPECTED_RUNNER_LABEL"));
+  assert.doesNotMatch(y, /if \(claim\?\.state === 'success'\) \{/);
   const a = y.indexOf("Wait for scheduler claim before secret-bearing review");
   const b = y.indexOf("Revalidate requested PR context after scheduler claim");
   const c = y.indexOf("Detect OCR configuration");

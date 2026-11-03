@@ -106,6 +106,19 @@ export function buildWorkerDispatchArgs({ repo, workerWorkflow, workflowRef, inp
   return args;
 }
 
+export function buildClaimStatus(state, runner) {
+  if (!["pending", "granted", "denied"].includes(state)) {
+    throw new Error("invalid runner claim verdict: " + state);
+  }
+  return {
+    // GitHub commit statuses have no neutral/skipped state. A deliberate
+    // queue-timeout denial is a successful scheduling decision, not a red
+    // source-code check. The worker requires an exact grant description.
+    state: state === "pending" ? "pending" : "success",
+    description: "runner claim " + state + ": " + runner,
+  };
+}
+
 export function createGitHubAdapter({
   repo,
   sourceSha,
@@ -115,7 +128,6 @@ export function createGitHubAdapter({
   workerInputs = {},
 }) {
   const runById = new Map();
-  const statusState = { pending: "pending", granted: "success", denied: "failure" };
 
   async function locate(attempt) {
     if (attempt.runId) return attempt.runId;
@@ -176,6 +188,7 @@ export function createGitHubAdapter({
       return { status: job.status, conclusion: job.conclusion };
     },
     async setClaim(attempt, state) {
+      const status = buildClaimStatus(state, attempt.runner);
       const target = attempt.runId
         ? `https://github.com/${repo}/actions/runs/${attempt.runId}`
         : "";
@@ -184,11 +197,11 @@ export function createGitHubAdapter({
         "POST",
         `repos/${repo}/statuses/${sourceSha}`,
         "-f",
-        `state=${statusState[state]}`,
+        `state=${status.state}`,
         "-f",
         `context=${attempt.claimContext}`,
         "-f",
-        `description=runner claim ${state}: ${attempt.runner}`,
+        `description=${status.description}`,
         ...(target ? ["-f", `target_url=${target}`] : []),
       ]);
     },
