@@ -73,7 +73,7 @@ test("worker validates PR SHA and repo before using OCR secrets", async () => {
     assert.ok(y.includes(input), input);
   }
   assert.ok(y.includes("steps.ocr-config.outputs.ready == 'true'"));
-  assert.ok(y.includes("alibaba/open-code-review@fabbdb296b0d97e2140ada8d54ca7d6d6d1d7ad4"));
+  assert.ok(y.includes("alibaba/open-code-review@375f64cd6f67a48a135da83cfcf59c52669a09cb"));
   for (const key of ["ocr_version: \"1.12.13\"", "sticky_summary: \"true\"",
     "incremental: \"true\"", "checkpoint_range: \"true\"",
     "stream_progress: \"true\"", "upload_artifacts: \"true\"",
