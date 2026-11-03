@@ -40,7 +40,7 @@ $apiHeaders = @{
     'Accept' = 'application/vnd.github+json'
 }
 $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository/releases/tags/$Tag" -Headers $apiHeaders
-if ($release.draft -or $release.prerelease) {
+if ($release.tag_name -ne $Tag -or $release.draft -or $release.prerelease) {
     throw "WinGet publication requires a stable GitHub Release: $Tag"
 }
 $releaseDate = ([DateTimeOffset]$release.published_at).UtcDateTime.ToString('yyyy-MM-dd')
@@ -57,21 +57,120 @@ foreach ($url in @($x64Url, $arm64Url)) {
     }
 }
 
-# Idempotency: once the exact version is merged upstream, a workflow rerun must
-# not create another submission.
+# A published manifest is converged only when BOTH architectures match the
+# immutable GitHub Release assets, not merely when a version YAML file exists.
+# Read metadata through the GitHub contents API; fail closed on unparseable YAML.
+function Get-UpstreamManifestText {
+    param([string]$Uri)
+    $response = Invoke-RestMethod -Uri $Uri -Headers $apiHeaders
+    if ($null -eq $response -or $response.encoding -ne 'base64' -or
+        $response.truncated -eq $true -or [string]::IsNullOrWhiteSpace($response.content)) {
+        throw "unverifiable upstream WinGet manifest content: $Uri"
+    }
+    try {
+        return [Text.Encoding]::UTF8.GetString(
+            [Convert]::FromBase64String(($response.content -replace '\s', ''))
+        )
+    }
+    catch {
+        throw "invalid base64 upstream WinGet manifest content: $Uri"
+    }
+}
+
+function Get-UniqueManifestScalar {
+    param([string]$Text, [string]$Name)
+    # Only accept the unquoted flat syntax emitted by pinned WingetCreate.
+    # Missing, duplicate, quoted, or complex YAML fields are not proof.
+    $pattern = '(?m)^' + [regex]::Escape($Name) + ':[ \t]*([^\r\n# \t]+)[ \t]*$'
+    $found = [regex]::Matches($Text, $pattern)
+    if ($found.Count -ne 1) {
+        throw "missing or ambiguous WinGet $Name"
+    }
+    return $found[0].Groups[1].Value
+}
+
+function Assert-UpstreamExactRelease {
+    param([string]$VersionText, [string]$InstallerText)
+    foreach ($manifest in @(
+        @{ Text = $VersionText; Type = 'version' },
+        @{ Text = $InstallerText; Type = 'installer' }
+    )) {
+        if ((Get-UniqueManifestScalar $manifest.Text 'PackageIdentifier') -cne $PackageIdentifier -or
+            (Get-UniqueManifestScalar $manifest.Text 'PackageVersion') -cne $Version -or
+            (Get-UniqueManifestScalar $manifest.Text 'ManifestType') -cne $manifest.Type) {
+            throw "WinGet upstream package identity/version/type differs from release $Tag"
+        }
+    }
+    if ($InstallerText -notmatch '(?m)^Installers:[ \t]*$' -or
+        $InstallerText -match '(?m)^[ \t]*<<:') {
+        throw 'upstream WinGet installer manifest structure is unsupported'
+    }
+
+    $installers = [regex]::Matches($InstallerText, '(?m)^-[ \t]*Architecture:[ \t]*([^\r\n \t]+)[ \t]*$')
+    if ($installers.Count -ne 2) {
+        throw 'upstream WinGet must contain exactly two explicit installers'
+    }
+    $expectedAssets = @{
+        'x64' = @{ Name = 'pxgo_windows_amd64.zip'; Url = $x64Url }
+        'arm64' = @{ Name = 'pxgo_windows_arm64.zip'; Url = $arm64Url }
+    }
+    $seen = @{}
+    for ($i = 0; $i -lt $installers.Count; $i++) {
+        $architecture = $installers[$i].Groups[1].Value
+        if (-not $expectedAssets.ContainsKey($architecture) -or $seen.ContainsKey($architecture)) {
+            throw "unexpected or duplicate WinGet installer architecture: $architecture"
+        }
+        $seen[$architecture] = $true
+        $start = $installers[$i].Index
+        $end = if ($i + 1 -lt $installers.Count) { $installers[$i + 1].Index } else { $InstallerText.Length }
+        $section = $InstallerText.Substring($start, $end - $start)
+        $url = [regex]::Matches($section, '(?m)^[ \t]+InstallerUrl:[ \t]*([^\r\n \t#]+)[ \t]*$')
+        $digest = [regex]::Matches($section, '(?m)^[ \t]+InstallerSha256:[ \t]*([0-9a-fA-F]{64})[ \t]*$')
+        if ($url.Count -ne 1 -or $digest.Count -ne 1 -or
+            $url[0].Groups[1].Value -cne $expectedAssets[$architecture].Url) {
+            throw "WinGet upstream URL or digest fields do not match release: $architecture"
+        }
+        $assetMatches = @($release.assets | Where-Object { $_.name -ceq $expectedAssets[$architecture].Name })
+        if ($assetMatches.Count -ne 1 -or
+            $assetMatches[0].digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or
+            $assetMatches[0].browser_download_url -cne $expectedAssets[$architecture].Url -or
+            $assetMatches[0].size -le 0) {
+            throw "GitHub Release asset has missing or untrusted SHA256 identity: $architecture"
+        }
+        $releaseDigest = $assetMatches[0].digest.Substring(7)
+        if ($digest[0].Groups[1].Value.ToLowerInvariant() -cne $releaseDigest) {
+            throw "WinGet upstream installer checksum conflicts with GitHub Release: $architecture"
+        }
+    }
+}
+
+# Idempotency: when both merged manifests and the immutable release metadata
+# prove matching identity, retry may return without re-submitting.
 $manifestPath = "manifests/k/KhanhKit/PxGo/$Version/KhanhKit.PxGo.yaml"
 $encodedPath = [System.Uri]::EscapeDataString($manifestPath).Replace('%2F', '/')
 $manifestApi = "https://api.github.com/repos/microsoft/winget-pkgs/contents/$encodedPath"
+$versionManifest = $null
 try {
-    Invoke-RestMethod -Uri $manifestApi -Headers $apiHeaders | Out-Null
-    Write-Host "WinGet $PackageIdentifier $Version already exists upstream; submission is converged."
-    exit 0
+    $versionManifest = Get-UpstreamManifestText $manifestApi
 }
 catch {
-    $statusCode = [int]$_.Exception.Response.StatusCode
-    if ($statusCode -ne 404) {
-        throw
+    # Only genuine 404 allows a new submission. Parse failures and all other
+    # HTTP failures MUST block rather than permit an overwrite or false green.
+    $status = $null
+    if ($null -ne $_.Exception.PSObject.Properties['Response'] -and $null -ne $_.Exception.Response) {
+        $status = [int]$_.Exception.Response.StatusCode
     }
+    elseif ($null -ne $_.Exception.PSObject.Properties['StatusCode'] -and $null -ne $_.Exception.StatusCode) {
+        $status = [int]$_.Exception.StatusCode
+    }
+    if ($status -ne 404) { throw }
+}
+if ($null -ne $versionManifest) {
+    $installerApi = $manifestApi.Replace('/KhanhKit.PxGo.yaml', '/KhanhKit.PxGo.installer.yaml')
+    $installerManifest = Get-UpstreamManifestText $installerApi
+    Assert-UpstreamExactRelease $versionManifest $installerManifest
+    Write-Host "Verified WinGet $PackageIdentifier $Version merged upstream: URLs and SHA256 match GitHub Release."
+    return
 }
 
 # Avoid duplicate PRs on workflow re-runs while Microsoft moderation is pending.
@@ -79,8 +178,7 @@ $searchQuery = [System.Uri]::EscapeDataString("repo:microsoft/winget-pkgs is:pr 
 $pending = Invoke-RestMethod -Uri "https://api.github.com/search/issues?q=$searchQuery" -Headers $apiHeaders
 if ($pending.total_count -gt 0) {
     $urls = @($pending.items | ForEach-Object { $_.html_url }) -join ', '
-    Write-Host "WinGet submission already pending for $PackageIdentifier ${Version}: $urls"
-    exit 0
+    throw "WinGet submission pending but content is not yet verified upstream for $PackageIdentifier ${Version}: $urls"
 }
 
 $prTitle = "New version: $PackageIdentifier version $Version"
