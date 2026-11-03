@@ -67,9 +67,11 @@ jobs:
         with:
           version: v2.12.2
 
-      - name: Verify OpenCodeReview workflow contracts
+      - name: Verify OpenCodeReview workflow and claim-fallback regressions
         if: runner.os == 'Linux'
-        run: node --test tests/unit/build/ocr-review-workflow-contract.test.mjs
+        run: |
+          node --test tests/unit/build/ocr-review-workflow-contract.test.mjs \
+            tests/unit/build/ocr-review-regressions.test.mjs
 
       - name: Verify release contracts
         if: runner.os == 'Linux'
@@ -179,7 +181,7 @@ jobs:
 
       - name: Install Syft for container verification
         if: runner.os == 'Linux'
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.33.0
 
