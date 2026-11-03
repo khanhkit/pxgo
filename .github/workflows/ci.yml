@@ -124,6 +124,20 @@ jobs:
           go test ./internal/wproxy -run '^$' -fuzz '^FuzzParseProxyCanonical$' -fuzztime=1000x
           go test ./internal/wproxy -run '^$' -fuzz '^FuzzParseNoProxyCanonical$' -fuzztime=1000x
 
+      - name: R148 native Windows TCP buffer contract (research only)
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.linux_real_cgroup
+        shell: pwsh
+        run: |
+          go test ./internal/proxy -run '^TestR148NativeWinSockConfiguredBufferDeliversPayload$' -count=3 -v 2>&1 | Tee-Object -FilePath r148-winsock-buffer.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Archive exact-sha Windows buffer experiment
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.linux_real_cgroup && always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: r148-windows-buffer-research
+          path: r148-winsock-buffer.log
+          retention-days: 14
+
       - name: Validate protected AD bootstrap PowerShell
         if: runner.os == 'Windows'
         shell: pwsh
