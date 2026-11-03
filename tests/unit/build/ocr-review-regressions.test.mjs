@@ -134,15 +134,29 @@ test("actual trusted-base claim gate rejects spoofed, missing, duplicate and fai
     new URL("../../../.github/workflows/ocr-review-worker.yml", import.meta.url),
     "utf8"
   );
-  const beginMarker = "// OCR_CLAIM_GATE_BEGIN";
-  const endMarker = "// OCR_CLAIM_GATE_END";
-  const begin = workflow.indexOf(beginMarker);
-  const end = workflow.indexOf(endMarker, begin + beginMarker.length);
-  assert.ok(begin > 0 && end > begin, "trusted-base claim gate markers missing");
-  const script = workflow.slice(begin + beginMarker.length, end)
-    .split("\n")
-    .map((line) => line.startsWith("            ") ? line.slice(12) : line)
-    .join("\n");
+  function extractClaimScript(yaml) {
+    const beginMarker = "// OCR_CLAIM_GATE_BEGIN";
+    const endMarker = "// OCR_CLAIM_GATE_END";
+    const begin = yaml.indexOf(beginMarker);
+    const end = yaml.indexOf(endMarker, begin + beginMarker.length);
+    assert.ok(begin > 0 && end > begin, "trusted-base claim gate markers missing");
+    const before = yaml.slice(0, begin).split("\n");
+    const indentation = before.at(-1);
+    // Both markers must remain in the actual script block. Infer the YAML
+    // indentation rather than assuming a particular workflow formatter.
+    assert.match(before.at(-2), /^\s*script: \|\s*$/);
+    assert.match(indentation, /^ +$/);
+    const lines = yaml.slice(begin + beginMarker.length, end).split("\n");
+    return lines.map((line) => {
+      if (!line.trim()) return "";
+      assert.ok(line.startsWith(indentation), "claim gate escaped its script block");
+      return line.slice(indentation.length);
+    }).join("\n");
+  }
+  const script = extractClaimScript(workflow);
+  // Reformatting YAML indentation must not change the executed gate.
+  const reindented = workflow.replace(/^ {12}(?=\S| +\S)/gm, "              ");
+  assert.equal(extractClaimScript(reindented), script);
 
   const claimContext = "pxgo/runner-claim/ocr-review/synthetic-1/2";
   const grantDescription = "runner claim granted: ubuntu-latest";
