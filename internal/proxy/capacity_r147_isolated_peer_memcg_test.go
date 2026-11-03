@@ -6,12 +6,14 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -212,6 +214,8 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 	defer upstream.Close()
 	tunnels := r147TunnelCount(t)
 	var wg sync.WaitGroup
+	var upstreamReceived atomic.Int64
+	drain := os.Getenv("PXGO_R148_PEER_DRAIN") == "1"
 	hold := make(chan struct{})
 	go func() {
 		for i := 0; i < tunnels; i++ {
@@ -220,7 +224,16 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 				return
 			}
 			wg.Add(1)
-			go func(c net.Conn) { defer wg.Done(); defer c.Close(); <-hold }(c)
+			go func(c net.Conn) {
+				defer wg.Done()
+				defer c.Close()
+				if drain {
+					n, _ := io.Copy(io.Discard, c)
+					upstreamReceived.Add(n)
+				} else {
+					<-hold
+				}
+			}(c)
 		}
 	}()
 	// Wait for PxGo container to bind its listener.
@@ -260,29 +273,58 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 	if os.Getenv("PXGO_R148_PEER_WAIT_CAP") == "1" {
 		time.Sleep(250 * time.Millisecond)
 	}
+	payload := 2 << 20
+	if drain {
+		payload = 4 << 20 // 4MiB per tunnel, 32MiB delivered expected
+	}
 	sent = make([]int, len(clients))
+	sendStarted := time.Now()
 	var writers sync.WaitGroup
 	for i, c := range clients {
 		writers.Add(1)
 		go func(i int, c net.Conn) {
 			defer writers.Done()
-			_ = c.SetWriteDeadline(time.Now().Add(6 * time.Second))
-			n, err := c.Write(make([]byte, 2<<20))
-			if err != nil && !strings.Contains(err.Error(), "timeout") {
-				t.Logf("client %d partial buffered send err=%v", i, err)
+			_ = c.SetWriteDeadline(time.Now().Add(12 * time.Second))
+			if drain {
+				data := make([]byte, 64<<10)
+				for sent[i] < payload {
+					want := min(len(data), payload-sent[i])
+					n, err := c.Write(data[:want])
+					sent[i] += n
+					if err != nil {
+						t.Logf("end-to-end writer %d partial sent=%d err=%v", i, sent[i], err)
+						break
+					}
+				}
+			} else {
+				n, err := c.Write(make([]byte, payload))
+				sent[i] = n
+				if err != nil && !strings.Contains(err.Error(), "timeout") {
+					t.Logf("client %d partial buffered send err=%v", i, err)
+				}
 			}
-			sent[i] = n
 		}(i, c)
 	}
 	writers.Wait()
-	// Keep live upstream sockets and client buffers in their PEER cgroup
-	// while PxGo's own cgroup records only the proxy's two tunnel ends.
-	time.Sleep(4 * time.Second)
+	sendElapsed := time.Since(sendStarted)
+	if !drain {
+		// Keep live upstream sockets and client buffers in their PEER cgroup
+		// while PxGo's own cgroup records only the proxy's two tunnel ends.
+		time.Sleep(4 * time.Second)
+	}
 	for _, c := range clients {
 		_ = c.Close()
 	}
 	close(hold)
 	wg.Wait()
+	if drain {
+		want := int64(tunnels * payload)
+		received := upstreamReceived.Load()
+		if received != want {
+			t.Fatalf("upstream confirmed %d of %d required delivered bytes", received, want)
+		}
+		t.Logf("R148_DRAIN_END_TO_END_RESULT tunnels=%d delivered_bytes=%d send_elapsed_ms=%d all_payload_received=true", tunnels, received, sendElapsed.Milliseconds())
+	}
 	t.Logf("R147_SIDE_CAR_CONNECT_RESULT tunneled=%d sent_bytes=%v total_sent_bytes=%d peer_memcg_separate=true", tunnels, sent, func() int {
 		n := 0
 		for _, x := range sent {
