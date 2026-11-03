@@ -434,3 +434,34 @@ func TestPatchSystemRoutingCreatesProxySectionWhenAbsent(t *testing.T) {
 		t.Fatalf("routing appeared before [proxy]:\n%s", got)
 	}
 }
+
+func TestPatchSystemRoutingReusesNormalizedProxySection(t *testing.T) {
+	for _, header := range []string{"[ Proxy ]", "[PROXY]", "[ pRoXy ]"} {
+		t.Run(header, func(t *testing.T) {
+			original := header + "\nserver = stale.example:8080\n[settings]\nworkers = 2\n"
+			system := SystemProxyImport{
+				Found:   true,
+				PAC:     "http://system.example/proxy.pac",
+				NoProxy: "localhost;*.intranet",
+			}
+			got := patchSystemRouting(original, system)
+			sectionCount := 0
+			for _, line := range strings.Split(got, "\n") {
+				if name, ok := normalizedINISectionName(line); ok && name == sectionProxy {
+					sectionCount++
+				}
+			}
+			if sectionCount != 1 {
+				t.Fatalf("created duplicate [proxy] section for %q:\n%s", header, got)
+			}
+			proxyBody := strings.SplitN(got, "[settings]", 2)[0]
+			if !strings.Contains(proxyBody, "pac = http://system.example/proxy.pac") ||
+				!strings.Contains(proxyBody, "noproxy = localhost;*.intranet") {
+				t.Fatalf("missing active proxy keys inside %q:\n%s", header, got)
+			}
+			if second := patchSystemRouting(got, system); second != got {
+				t.Fatalf("second apply modified normalized section %q:\nfirst=%s\nsecond=%s", header, got, second)
+			}
+		})
+	}
+}

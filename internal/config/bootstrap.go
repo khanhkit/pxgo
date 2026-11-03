@@ -293,6 +293,16 @@ func patchSystemRouting(raw string, system SystemProxyImport) string {
 	return patchINIKeys(raw, values)
 }
 
+// normalizedINISectionName keeps section scanning and the insertion pass
+// consistent for case and whitespace variants such as [ Proxy ].
+func normalizedINISectionName(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) < 2 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSpace(trimmed[1 : len(trimmed)-1])), true
+}
+
 func patchINIKeys(raw string, values map[string]*string) string {
 	lines := strings.Split(raw, "\n")
 	seen := make(map[string]bool)
@@ -302,8 +312,8 @@ func patchINIKeys(raw string, values map[string]*string) string {
 	// explicitly disabled. Keep system routing canonical in [proxy] only.
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			section = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")))
+		if name, ok := normalizedINISectionName(line); ok {
+			section = name
 			continue
 		}
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
@@ -341,7 +351,7 @@ func patchINIKeys(raw string, values map[string]*string) string {
 	// next section starts. Never append active proxy keys after [settings].
 	proxyStart := -1
 	for i, line := range lines {
-		if strings.EqualFold(strings.TrimSpace(line), "[proxy]") {
+		if name, ok := normalizedINISectionName(line); ok && name == sectionProxy {
 			proxyStart = i
 			break
 		}
@@ -353,8 +363,7 @@ func patchINIKeys(raw string, values map[string]*string) string {
 	}
 	insertAt := len(lines)
 	for i := proxyStart + 1; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+		if _, ok := normalizedINISectionName(lines[i]); ok {
 			insertAt = i
 			break
 		}
