@@ -400,6 +400,9 @@ func (p *Policy) DialContext(ctx context.Context, network, address string, looku
 		timeout = p.timeout
 	}
 	dialer := net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
+	if err := r149ConfigureResearchDialSocketBuffer(&dialer); err != nil {
+		return nil, err
+	}
 	if p == nil || p.system {
 		return dialer.DialContext(ctx, network, address)
 	}

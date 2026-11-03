@@ -1459,6 +1459,17 @@ jobs:
           grep -F 'R128_REAL_CGROUP_RESULT' benchmarks/r128-real-cgroup.log
           grep -F 'new_tcp_denied=true' benchmarks/r128-real-cgroup.log
           grep -F 'oom_kill_delta=0' benchmarks/r128-real-cgroup.log
+          # R149: genuine kernel SO_RESERVE_MEM TCP precharge, read-only
+          # application experiment under finite disposable cgroup only.
+          docker run --rm --network none --memory 384m --memory-swap 384m --pids-limit 128 --cpus 2 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 -e PXGO_R149_RESERVE_CGROUP=1 \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR149LinuxRealMemcgSockReservePrecharge$' \
+            -test.count=1 -test.timeout=40s -test.v | tee benchmarks/r149-socket-reserve.log
+          grep -F 'R149_SO_RESERVE_MEM_RESULT' benchmarks/r149-socket-reserve.log
+          grep -F 'oom_kill_delta=0' benchmarks/r149-socket-reserve.log
           # R146 temporary research branch ONLY. Same bounded 384MiB cgroup
           # but actual admissionListener + real unrelated 24MiB OS process.
           docker run --rm --network none --memory 384m --memory-swap 384m --pids-limit 128 --cpus 2 \
@@ -1572,7 +1583,7 @@ jobs:
           for scenario in fast slow; do
             slow=""
             if [ "$scenario" = slow ]; then slow=10; fi
-            for profile in default cap64 prelisten64; do
+            for profile in default cap64 prelisten64 preboth64; do
             docker rm -f peer-r147 pxgo-r147-proxy >/dev/null 2>&1 || true
             docker run --detach --name peer-r147 --network "$network" --memory 128m --memory-swap 128m \
               --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
@@ -1583,12 +1594,14 @@ jobs:
               -test.run '^TestR147PeerClientAndUpstreamInDifferentMemcg$' -test.v -test.count=1 -test.timeout=55s
             cap=""
             prelisten=""
+            predial=""
             if [ "$profile" = cap64 ]; then cap=65536; fi
-            if [ "$profile" = prelisten64 ]; then prelisten=65536; fi
+            if [ "$profile" = prelisten64 ] || [ "$profile" = preboth64 ]; then prelisten=65536; fi
+            if [ "$profile" = preboth64 ]; then predial=65536; fi
             docker run --name pxgo-r147-proxy --network "$network" --memory 384m --memory-swap 384m \
               --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
               --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
-              -e PXGO_R147_ROLE=proxy -e PXGO_R147_TUNNELS=8 -e PXGO_R148_SOCKET_CAP_BYTES="$cap" -e PXGO_R149_LINUX_PRELISTEN_BUFFER_BYTES="$prelisten" -e GOMEMLIMIT=280MiB \
+              -e PXGO_R147_ROLE=proxy -e PXGO_R147_TUNNELS=8 -e PXGO_R148_SOCKET_CAP_BYTES="$cap" -e PXGO_R149_LINUX_PRELISTEN_BUFFER_BYTES="$prelisten" -e PXGO_R149_LINUX_PREDIAL_BUFFER_BYTES="$predial" -e GOMEMLIMIT=280MiB \
               -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
               --entrypoint /work/pxgo-cgroup.test "$image" \
               -test.run '^TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers$' -test.v -test.count=1 -test.timeout=45s \
