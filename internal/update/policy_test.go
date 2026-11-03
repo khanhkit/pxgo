@@ -101,3 +101,78 @@ func TestResolveProviderAutoRequiresExecutable(t *testing.T) {
 		t.Fatal("expected empty executable path failure")
 	}
 }
+
+func TestAutoProviderRequiresCanonicalRootAndPackageIdentity(t *testing.T) {
+	invalid := []struct {
+		goos string
+		file string
+	}{
+		{"windows", "C:/Temp/scoop/apps/pxgo/current/pxgo.exe"},
+		{"windows", "C:/Users/me/scoop/apps/pxgo/current/other.exe"},
+		{"windows", "C:/Users/me/scoop/apps/pxgo-copy/current/pxgo.exe"},
+		{"windows", "C:/Temp/WinGet/Packages/KhanhKit.PxGo_unverified/pxgo.exe"},
+		{"windows", "C:/Users/me/AppData/Local/Microsoft/WinGet/Packages/OtherApp_unverified/pxgo.exe"},
+		{"windows", "C:/Users/me/AppData/Local/Microsoft/WinGet/Packages/KhanhKit.PxGo_unverified/other.exe"},
+		{"windows", "C:/Users/me/AppData/Local/Microsoft/WinGet/Packages/KhanhKit.PxGo_/pxgo.exe"},
+		{"darwin", "/tmp/Cellar/pxgo/0.9.0/bin/pxgo"},
+		{"darwin", "/opt/homebrew/Cellar/pxgo-copy/0.9.0/bin/pxgo"},
+		{"linux", "/home/me/fake/Cellar/pxgo/0.9.0/bin/pxgo"},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.file, func(t *testing.T) {
+			provider, err := ResolveProvider(ProviderAuto, tc.file, tc.goos)
+			if err == nil {
+				t.Fatalf("ambiguous manager-shaped path trusted as %q", provider)
+			}
+		})
+	}
+}
+
+func TestKnownAndExplicitCustomPackageManagerRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name, goos, file string
+		want             Provider
+	}{
+		{"global scoop", "windows", "C:/ProgramData/scoop/apps/pxgo/current/pxgo.exe", ProviderScoop},
+		{"machine winget", "windows", "C:/Program Files/WinGet/Packages/KhanhKit.PxGo_foo/pxgo.exe", ProviderWinGet},
+		{"machine winget x86", "windows", "C:/Program Files (x86)/WinGet/Packages/KhanhKit.PxGo_foo/pxgo.exe", ProviderWinGet},
+		{"win user", "windows", "C:/Users/me/AppData/Local/Microsoft/WinGet/Packages/KhanhKit.PxGo_foo/pxgo.exe", ProviderWinGet},
+		{"mac brew", "darwin", "/opt/homebrew/Cellar/pxgo/0.9.0/bin/pxgo", ProviderBrew},
+		{"linuxbrew", "linux", "/home/linuxbrew/.linuxbrew/Cellar/pxgo/0.9.0/bin/pxgo", ProviderBrew},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolveProvider(ProviderAuto, tc.file, tc.goos)
+			if err != nil || got != tc.want {
+				t.Fatalf("got=%q err=%v want=%q", got, err, tc.want)
+			}
+		})
+	}
+
+	t.Setenv("SCOOP", "D:/Installed/ScoopRoot")
+	if got, err := ResolveProvider(ProviderAuto,
+		"D:/Installed/ScoopRoot/apps/pxgo/current/pxgo.exe", "windows"); err != nil || got != ProviderScoop {
+		t.Fatalf("explicit Scoop root not recognized: %q %v", got, err)
+	}
+	t.Setenv("HOMEBREW_PREFIX", "/opt/custombrew")
+	if got, err := ResolveProvider(ProviderAuto,
+		"/opt/custombrew/Cellar/pxgo/0.9.0/bin/pxgo", "darwin"); err != nil || got != ProviderBrew {
+		t.Fatalf("explicit Homebrew prefix not recognized: %q %v", got, err)
+	}
+}
+
+func TestResolveProviderExplicitWingetInsideScoopNamedProfile(t *testing.T) {
+	file := `C:\Users\scoop\AppData\Local\Microsoft\WinGet\Packages\KhanhKit.PxGo_test\pxgo.exe`
+	if detected, err := ResolveProvider(ProviderAuto, file, "windows"); err != nil || detected != ProviderWinGet {
+		t.Fatalf("auto should recognize WinGet: %q %v", detected, err)
+	}
+	if explicit, err := ResolveProvider(ProviderWinGet, file, "windows"); err != nil || explicit != ProviderWinGet {
+		t.Fatalf("explicit WinGet must preserve recognized ownership: %q %v", explicit, err)
+	}
+}
+
+func TestResolveProviderUnixCaseSensitiveBrewRoot(t *testing.T) {
+	file := `/OPT/HOMEBREW/Cellar/pxgo/0.9.0/bin/pxgo`
+	if detected, err := ResolveProvider(ProviderAuto, file, "linux"); err == nil && detected == ProviderBrew {
+		t.Fatalf("case-sensitive Linux root is not the official /opt/homebrew: %q", detected)
+	}
+}
