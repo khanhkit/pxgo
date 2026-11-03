@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -108,6 +109,11 @@ func managedPath(value string) string {
 
 func managedEnvRoot(key string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		// macOS maps /var to /private/var. Compare canonical roots with
+		// Service.Check's already-resolved executable path.
+		if real, err := filepath.EvalSymlinks(value); err == nil && real != "" {
+			value = real
+		}
 		return managedPath(value)
 	}
 	return ""
@@ -132,12 +138,12 @@ func isScoopOwned(full string) bool {
 		return false
 	}
 	parts := strings.Split(full[i+len(marker):], "/")
-	return len(parts) == 2 && parts[0] != "" && parts[1] == "pxgo.exe"
+	return len(parts) == 2 && parts[0] != "" && parts[1] == windowsExecutableName
 }
 
 func validWingetPackagePath(relative string) bool {
 	parts := strings.Split(relative, "/")
-	if len(parts) < 2 || len(parts) > 3 || parts[len(parts)-1] != "pxgo.exe" {
+	if len(parts) < 2 || len(parts) > 3 || parts[len(parts)-1] != windowsExecutableName {
 		return false
 	}
 	packageDir := parts[0]
@@ -183,7 +189,7 @@ func isBrewOwned(full string) bool {
 			continue
 		}
 		parts := strings.Split(relative, "/")
-		if len(parts) == 3 && parts[0] != "" && parts[1] == "bin" && parts[2] == "pxgo" {
+		if len(parts) == 3 && parts[0] != "" && parts[1] == "bin" && parts[2] == productName {
 			return true
 		}
 	}
