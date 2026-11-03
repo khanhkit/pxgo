@@ -59,8 +59,10 @@ workflow SHA, fetches the specified tag and requires
 that SHA to be an ancestor of the repository's current `main`. It then runs
 the same pinned/checksummed WingetCreate publisher with repository-scoped
 credentials. The publisher checks GitHub Release stability and artifact
-availability, and short-circuits if that exact version has already landed
-in `microsoft/winget-pkgs` or has an open upstream submission.
+availability, and short-circuits only when the exact version has already
+landed in `microsoft/winget-pkgs` with both installer URLs and SHA256
+values verified against the published release. An unverified open submission
+does not qualify as success and instead produces an actionable failure.
 
 A successful synchronization workflow only proves that submission was
 accepted or already converged at the publisher. As specified by the green

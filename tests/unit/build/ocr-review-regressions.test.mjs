@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 import test from "node:test";
 import { buildClaimStatus, isRetryableGhRead, parseWorkerInputs } from "../../../scripts/ci/github-runner-fallback.mjs";
 import { summarizeRunnerSamples } from "../../../scripts/ci/summarize-runner-fallback.mjs";
@@ -123,4 +125,104 @@ test("queue timeout is neutral-looking but cannot authorize OCR, and fallback wa
   assert.equal(failed.conclusion, "failure");
   assert.equal(failure.events.filter(([kind]) => kind === "dispatch").length, 1,
     "a failed cancellation must never dispatch a second worker");
+});
+
+
+
+test("actual trusted-base claim gate rejects spoofed, missing, duplicate and failed statuses", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/ocr-review-worker.yml", import.meta.url),
+    "utf8"
+  );
+  function extractClaimScript(yaml) {
+    const beginMarker = "// OCR_CLAIM_GATE_BEGIN";
+    const endMarker = "// OCR_CLAIM_GATE_END";
+    const begin = yaml.indexOf(beginMarker);
+    const end = yaml.indexOf(endMarker, begin + beginMarker.length);
+    assert.ok(begin > 0 && end > begin, "trusted-base claim gate markers missing");
+    const before = yaml.slice(0, begin).split("\n");
+    const indentation = before.at(-1);
+    // Both markers must remain in the actual script block. Infer the YAML
+    // indentation rather than assuming a particular workflow formatter.
+    assert.match(before.at(-2), /^\s*script: \|\s*$/);
+    assert.match(indentation, /^ +$/);
+    const lines = yaml.slice(begin + beginMarker.length, end).split("\n");
+    return lines.map((line) => {
+      if (!line.trim()) return "";
+      assert.ok(line.startsWith(indentation), "claim gate escaped its script block");
+      return line.slice(indentation.length);
+    }).join("\n");
+  }
+  const script = extractClaimScript(workflow);
+  // Reformatting YAML indentation must not change the executed gate.
+  const reindented = workflow.replace(/^ {12}(?=\S| +\S)/gm, "              ");
+  assert.equal(extractClaimScript(reindented), script);
+
+  const claimContext = "pxgo/runner-claim/ocr-review/synthetic-1/2";
+  const grantDescription = "runner claim granted: ubuntu-latest";
+
+  async function evaluateClaim(statuses, options = {}) {
+    const info = [];
+    const failures = [];
+    const fakeDate = options.advanceClock ? {
+      now: (() => { let clock = 0; return () => { clock += 60_001; return clock; }; })(),
+    } : Date;
+    const github = {
+      rest: { repos: { listCommitStatusesForRef: async (args) => {
+        assert.equal(args.ref, "0123456789abcdef");
+        assert.equal(args.per_page, 100);
+        if (options.apiFailure) throw Error("injected 503");
+        return { data: statuses };
+      } } },
+    };
+    await vm.runInNewContext("(async () => {\n" + script + "\n})()", {
+      context: { repo: { owner: "khanhkit", repo: "pxgo" } },
+      process: { env: {
+        SOURCE_SHA: "0123456789abcdef",
+        CLAIM_CONTEXT: claimContext,
+        EXPECTED_RUNNER_LABEL: "ubuntu-latest",
+      } },
+      github,
+      core: {
+        info: (message) => info.push(message),
+        setFailed: (message) => failures.push(message),
+      },
+      Date: fakeDate, Promise,
+      setTimeout: (callback) => { callback(); },
+    }, { timeout: 1000 });
+    return { info, failures };
+  }
+
+  const claim = (state, description) => ({ context: claimContext, state, description });
+  for (const status of [
+    claim("success", "runner claim denied: ubuntu-latest"),
+    claim("success", "runner claim granted: ubuntu-24.04-arm"),
+    claim("failure", grantDescription),
+    claim("success", grantDescription + " "),
+  ]) {
+    const result = await evaluateClaim([status]);
+    assert.deepEqual(result.info, [], "unexpected authorization diagnostic");
+    assert.deepEqual(result.failures, ["Scheduler claim not granted: " + claimContext]);
+  }
+
+  const duplicates = await evaluateClaim([
+    claim("success", "runner claim denied: ubuntu-latest"),
+    claim("success", grantDescription),
+  ]);
+  assert.equal(duplicates.info.length, 0);
+  assert.equal(duplicates.failures.length, 1);
+
+  const absent = await evaluateClaim([{ context: "other", state: "success", description: grantDescription }],
+    { advanceClock: true });
+  assert.deepEqual(absent.info, []);
+  assert.deepEqual(absent.failures, ["Timed out waiting for scheduler claim: " + claimContext]);
+
+  await assert.rejects(evaluateClaim([], { apiFailure: true }), /injected 503/);
+
+  const granted = await evaluateClaim([
+    { context: "some-other-runner", state: "success", description: grantDescription },
+    claim("success", grantDescription),
+  ]);
+  assert.deepEqual(granted.failures, []);
+  assert.deepEqual(granted.info, ["Scheduler claim granted: " + claimContext]);
 });
