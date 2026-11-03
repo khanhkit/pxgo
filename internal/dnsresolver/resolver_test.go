@@ -315,21 +315,31 @@ func startTruncatedDNSFixture(t *testing.T, answer net.IP) (string, *atomic.Int3
 	var tcpLn net.Listener
 	var udpPC net.PacketConn
 	var port int
-	for attempt := 0; attempt < 20; attempt++ {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lastBindErr error
+	// Windows can reserve dynamic/ephemeral ports that TCP Listen(:0)
+	// chooses but UDP cannot subsequently bind. Try a randomized starting
+	// point below the dynamic range and retain both sockets once acquired.
+	// The whole candidate range is unprivileged; collisions are retried.
+	const basePort, portSpan = 20000, 12000
+	start := int(time.Now().UnixNano() % portSpan)
+	for attempt := 0; attempt < 96; attempt++ {
+		candidate := basePort + ((start + attempt*131) % portSpan)
+		address := net.JoinHostPort("127.0.0.1", strconv.Itoa(candidate))
+		ln, err := net.Listen("tcp", address)
 		if err != nil {
-			t.Fatal(err)
+			lastBindErr = err
+			continue
 		}
-		candidate := ln.Addr().(*net.TCPAddr).Port
-		pc, err := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(candidate)))
+		pc, err := net.ListenPacket("udp", address)
 		if err == nil {
 			tcpLn, udpPC, port = ln, pc, candidate
 			break
 		}
+		lastBindErr = err
 		_ = ln.Close()
 	}
 	if tcpLn == nil || udpPC == nil {
-		t.Fatal("unable to allocate shared TCP/UDP DNS fixture port")
+		t.Fatalf("unable to allocate shared TCP/UDP DNS fixture port below dynamic range: %v", lastBindErr)
 	}
 	var tcpCalls atomic.Int32
 	doneUDP := make(chan struct{})
