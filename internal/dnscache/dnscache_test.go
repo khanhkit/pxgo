@@ -176,7 +176,8 @@ func TestLookupContextRejectsNilContext(t *testing.T) {
 		t.Fatal("nil context reached underlying resolver")
 		return nil, nil
 	})
-	if _, err := cache.LookupContext(nil, "example.test"); err == nil {
+	var missingContext context.Context
+	if _, err := cache.LookupContext(missingContext, "example.test"); err == nil {
 		t.Fatal("expected error for nil context")
 	}
 }
