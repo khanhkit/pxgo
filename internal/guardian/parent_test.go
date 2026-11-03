@@ -312,7 +312,7 @@ func TestTCGUARDPARENT029ControlCloseRecyclesImmediately(t *testing.T) {
 	spec, countPath := helperSpec(t, "ready-close-control")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- RunParent(ctx, spec, fastParentOptions()) }()
+	go func() { done <- RunParent(ctx, spec, stopLifecycleParentOptions()) }()
 	waitForGenerations(t, countPath, 2)
 	cancel()
 	select {
