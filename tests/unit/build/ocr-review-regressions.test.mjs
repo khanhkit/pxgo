@@ -128,33 +128,37 @@ test("queue timeout is neutral-looking but cannot authorize OCR, and fallback wa
 });
 
 
-test("actual trusted-base OCR claim script rejects denied and forged success statuses", async () => {
+
+test("actual trusted-base claim gate rejects spoofed, missing, duplicate and failed statuses", async () => {
   const workflow = await readFile(
     new URL("../../../.github/workflows/ocr-review-worker.yml", import.meta.url),
     "utf8"
   );
-  const stepName = "      - name: Wait for scheduler claim before secret-bearing review";
-  const begin = workflow.indexOf(stepName);
-  assert.ok(begin >= 0, "trusted-base claim gate not present");
-  const next = workflow.indexOf("\n      - name: ", begin + stepName.length);
-  assert.ok(next > begin, "claim gate step boundary missing");
-  const step = workflow.slice(begin, next);
-  const marker = "          script: |\n";
-  const start = step.indexOf(marker);
-  assert.ok(start >= 0, "claim gate action script missing");
-  const script = step.slice(start + marker.length)
+  const beginMarker = "// OCR_CLAIM_GATE_BEGIN";
+  const endMarker = "// OCR_CLAIM_GATE_END";
+  const begin = workflow.indexOf(beginMarker);
+  const end = workflow.indexOf(endMarker, begin + beginMarker.length);
+  assert.ok(begin > 0 && end > begin, "trusted-base claim gate markers missing");
+  const script = workflow.slice(begin + beginMarker.length, end)
     .split("\n")
     .map((line) => line.startsWith("            ") ? line.slice(12) : line)
     .join("\n");
 
-  const claimContext = "pxgo/runner-claim/ocr-review/fictional-1/2";
-  async function evaluateClaim(state, description) {
-    const events = [];
+  const claimContext = "pxgo/runner-claim/ocr-review/synthetic-1/2";
+  const grantDescription = "runner claim granted: ubuntu-latest";
+
+  async function evaluateClaim(statuses, options = {}) {
+    const info = [];
+    const failures = [];
+    const fakeDate = options.advanceClock ? {
+      now: (() => { let clock = 0; return () => { clock += 60_001; return clock; }; })(),
+    } : Date;
     const github = {
       rest: { repos: { listCommitStatusesForRef: async (args) => {
         assert.equal(args.ref, "0123456789abcdef");
         assert.equal(args.per_page, 100);
-        return { data: [{ context: claimContext, state, description }] };
+        if (options.apiFailure) throw Error("injected 503");
+        return { data: statuses };
       } } },
     };
     await vm.runInNewContext("(async () => {\n" + script + "\n})()", {
@@ -166,16 +170,45 @@ test("actual trusted-base OCR claim script rejects denied and forged success sta
       } },
       github,
       core: {
-        info: (message) => events.push(["grant", message]),
-        setFailed: (message) => events.push(["denied", message]),
+        info: (message) => info.push(message),
+        setFailed: (message) => failures.push(message),
       },
-      Date, Promise,
+      Date: fakeDate, Promise,
+      setTimeout: (callback) => { callback(); },
     }, { timeout: 1000 });
-    return events.map(([kind]) => kind);
+    return { info, failures };
   }
-  assert.deepEqual(await evaluateClaim("success", "runner claim denied: ubuntu-latest"), ["denied"]);
-  assert.deepEqual(await evaluateClaim("success", "runner claim granted: ubuntu-24.04-arm"), ["denied"]);
-  assert.deepEqual(await evaluateClaim("failure", "runner claim granted: ubuntu-latest"), ["denied"]);
-  assert.deepEqual(await evaluateClaim("success", "runner claim granted: ubuntu-latest "), ["denied"]);
-  assert.deepEqual(await evaluateClaim("success", "runner claim granted: ubuntu-latest"), ["grant"]);
+
+  const claim = (state, description) => ({ context: claimContext, state, description });
+  for (const status of [
+    claim("success", "runner claim denied: ubuntu-latest"),
+    claim("success", "runner claim granted: ubuntu-24.04-arm"),
+    claim("failure", grantDescription),
+    claim("success", grantDescription + " "),
+  ]) {
+    const result = await evaluateClaim([status]);
+    assert.deepEqual(result.info, [], "unexpected authorization diagnostic");
+    assert.deepEqual(result.failures, ["Scheduler claim not granted: " + claimContext]);
+  }
+
+  const duplicates = await evaluateClaim([
+    claim("success", "runner claim denied: ubuntu-latest"),
+    claim("success", grantDescription),
+  ]);
+  assert.equal(duplicates.info.length, 0);
+  assert.equal(duplicates.failures.length, 1);
+
+  const absent = await evaluateClaim([{ context: "other", state: "success", description: grantDescription }],
+    { advanceClock: true });
+  assert.deepEqual(absent.info, []);
+  assert.deepEqual(absent.failures, ["Timed out waiting for scheduler claim: " + claimContext]);
+
+  await assert.rejects(evaluateClaim([], { apiFailure: true }), /injected 503/);
+
+  const granted = await evaluateClaim([
+    { context: "some-other-runner", state: "success", description: grantDescription },
+    claim("success", grantDescription),
+  ]);
+  assert.deepEqual(granted.failures, []);
+  assert.deepEqual(granted.info, ["Scheduler claim granted: " + claimContext]);
 });
