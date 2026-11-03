@@ -1507,7 +1507,7 @@ jobs:
           docker run --detach --name peer-r147 --network "$network" --memory 128m --memory-swap 128m \
             --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
             --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
-            -e PXGO_R147_ROLE=peer -e PXGO_R147_TUNNELS=8 \
+            -e PXGO_R147_ROLE=peer -e PXGO_R147_TUNNELS=8 -e PXGO_R148_PEER_WAIT_CAP=1 \
             -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
             --entrypoint /work/pxgo-cgroup.test "$image" \
             -test.run '^TestR147PeerClientAndUpstreamInDifferentMemcg$' -test.v -test.count=1 -test.timeout=55s
@@ -1525,6 +1525,31 @@ jobs:
           grep -F 'R147_PROXY_ONLY_MEMCG_RESULT' benchmarks/r147-proxy-only-cgroup.log
           grep -F 'R147_SIDE_CAR_CONNECT_RESULT tunneled=8' benchmarks/r147-peer-separate-cgroup.log
           grep -F 'oom_kill_delta=0 peer_cgroup_separate=true' benchmarks/r147-proxy-only-cgroup.log
+          # R148 paired case: same isolated network and eight real CONNECTs
+          # with test-only 64KiB socket read/write caps on PxGo-owned FDs.
+          # Never apply these settings to PR107 or a production listener.
+          docker rm -f peer-r147 pxgo-r147-proxy >/dev/null 2>&1 || true
+          docker run --detach --name peer-r147 --network "$network" --memory 128m --memory-swap 128m \
+            --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+            -e PXGO_R147_ROLE=peer -e PXGO_R147_TUNNELS=8 -e PXGO_R148_PEER_WAIT_CAP=1 \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR147PeerClientAndUpstreamInDifferentMemcg$' -test.v -test.count=1 -test.timeout=55s
+          docker run --name pxgo-r147-proxy --network "$network" --memory 384m --memory-swap 384m \
+            --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+            -e PXGO_R147_ROLE=proxy -e PXGO_R147_TUNNELS=8 -e PXGO_R148_SOCKET_CAP_BYTES=65536 -e GOMEMLIMIT=280MiB \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers$' -test.v -test.count=1 -test.timeout=45s \
+            | tee benchmarks/r148-proxy-capped-cgroup.log
+          capped_peer_exit="$(docker wait peer-r147)"
+          docker logs peer-r147 2>&1 | tee benchmarks/r148-peer-capped-cgroup.log
+          test "$capped_peer_exit" = 0
+          grep -F 'test_socket_cap_bytes=65536 cap_applied_sockets=16' benchmarks/r148-proxy-capped-cgroup.log
+          grep -F 'R147_SIDE_CAR_CONNECT_RESULT tunneled=8' benchmarks/r148-peer-capped-cgroup.log
+          grep -F 'oom_kill_delta=0 peer_cgroup_separate=true' benchmarks/r148-proxy-capped-cgroup.log
       - name: Preserve exact-sha kernel-pressure evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

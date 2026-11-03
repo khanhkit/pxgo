@@ -49,6 +49,46 @@ func r147TunnelCount(t *testing.T) int {
 	return n
 }
 
+// Benchmark-only socket buffer enforcement. Does NOT bound all kernel memory
+// or Go heap. Track exact TCPConn pointers to avoid repeated socket syscalls.
+func r148CapOwnedTCPBuffers(s *Server, n int, seen map[*net.TCPConn]struct{}) (int, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	s.tunnelMu.Lock()
+	tunnels := make([]*managedTunnel, 0, len(s.tunnels))
+	for tunnel := range s.tunnels {
+		tunnels = append(tunnels, tunnel)
+	}
+	s.tunnelMu.Unlock()
+	for _, t := range tunnels {
+		upstream, ok := t.upstream.(net.Conn)
+		if !ok {
+			continue
+		}
+		for _, raw := range []net.Conn{t.client, upstream} {
+			if c, ok := raw.(*admissionConn); ok {
+				raw = c.Conn
+			}
+			c, ok := raw.(*net.TCPConn)
+			if !ok {
+				continue
+			}
+			if _, ok := seen[c]; ok {
+				continue
+			}
+			if err := c.SetReadBuffer(n); err != nil {
+				return len(seen), err
+			}
+			if err := c.SetWriteBuffer(n); err != nil {
+				return len(seen), err
+			}
+			seen[c] = struct{}{}
+		}
+	}
+	return len(seen), nil
+}
+
 func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T) {
 	if os.Getenv("PXGO_R147_ROLE") != "proxy" {
 		t.Skip("requires isolated 384MiB PxGo-only memcg")
@@ -104,6 +144,16 @@ func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T
 	var maxOwnedBufferLimits uint64
 	var sockMetricErrors int
 	var samples int
+	capBytes := 0
+	if raw := os.Getenv("PXGO_R148_SOCKET_CAP_BYTES"); raw != "" {
+		var err error
+		capBytes, err = strconv.Atoi(raw)
+		if err != nil || capBytes < 4096 || capBytes > 1<<20 {
+			t.Fatalf("invalid test-only socket buffer cap %q", raw)
+		}
+	}
+	seen := make(map[*net.TCPConn]struct{})
+	applied := 0
 	started := time.Now()
 	for time.Since(started) < 18*time.Second {
 		sock, curr, _ := r147MemcgSnapshot(t)
@@ -114,6 +164,13 @@ func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T
 			peakCurr = curr
 		}
 		samples++
+		if capBytes != 0 {
+			n, err := r148CapOwnedTCPBuffers(s, capBytes, seen)
+			if err != nil {
+				t.Fatalf("test-only TCP buffer setting: %v", err)
+			}
+			applied = n
+		}
 		count, queued, forward, limits, metricErr := r147OwnedTunnelSocketMetrics(s)
 		if metricErr == nil {
 			if count > maxOwnedSockets {
@@ -137,8 +194,8 @@ func TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers(t *testing.T
 	if endKills != beforeKills {
 		t.Fatalf("proxy-only memcg OOM kills delta=%d", endKills-beforeKills)
 	}
-	t.Logf("R147_PROXY_ONLY_MEMCG_RESULT tunnels=%d memory_max=%d before_sock=%d peak_sock=%d after_sock=%d isolated_sock_peak_delta=%d before_current=%d peak_current=%d after_current=%d isolated_current_peak_delta=%d samples=%d owned_peak_sockets=%d owned_queued_peak_bytes=%d owned_forward_peak_bytes=%d owned_buffer_limit_peak_bytes=%d so_meminfo_errors=%d oom_kill_delta=0 peer_cgroup_separate=true",
-		tunnels, limit, beforeSock, peakSock, endSock, int64(peakSock)-int64(beforeSock), beforeCurr, peakCurr, endCurr, int64(peakCurr)-int64(beforeCurr), samples, maxOwnedSockets, maxOwnedQueued, maxOwnedForward, maxOwnedBufferLimits, sockMetricErrors)
+	t.Logf("R147_PROXY_ONLY_MEMCG_RESULT tunnels=%d memory_max=%d before_sock=%d peak_sock=%d after_sock=%d isolated_sock_peak_delta=%d before_current=%d peak_current=%d after_current=%d isolated_current_peak_delta=%d samples=%d test_socket_cap_bytes=%d cap_applied_sockets=%d owned_peak_sockets=%d owned_queued_peak_bytes=%d owned_forward_peak_bytes=%d owned_buffer_limit_peak_bytes=%d so_meminfo_errors=%d oom_kill_delta=0 peer_cgroup_separate=true",
+		tunnels, limit, beforeSock, peakSock, endSock, int64(peakSock)-int64(beforeSock), beforeCurr, peakCurr, endCurr, int64(peakCurr)-int64(beforeCurr), samples, capBytes, applied, maxOwnedSockets, maxOwnedQueued, maxOwnedForward, maxOwnedBufferLimits, sockMetricErrors)
 }
 
 // Entire peer workload runs in its OWN separately limited Docker cgroup.
@@ -199,6 +256,9 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 			t.Fatalf("real PxGo CONNECT i=%d status=%d", i, resp.StatusCode)
 		}
 		_ = resp.Body.Close()
+	}
+	if os.Getenv("PXGO_R148_PEER_WAIT_CAP") == "1" {
+		time.Sleep(250 * time.Millisecond)
 	}
 	sent = make([]int, len(clients))
 	var writers sync.WaitGroup
