@@ -1466,6 +1466,18 @@ jobs:
             -test.count=1 -test.timeout=50s -test.v | tee benchmarks/r146-real-tcp-churn.log
           grep -F 'R146_REAL_TCP_CHURN_RESULT' benchmarks/r146-real-tcp-churn.log
           grep -F 'oom_kill_delta=0' benchmarks/r146-real-tcp-churn.log
+          # R148: Observe REAL Linux socket charges at multiple Close boundaries.
+          # This is NOT a per-socket charge guarantee, nor a production criterion.
+          docker run --rm --network none --memory 384m --memory-swap 384m --pids-limit 128 --cpus 2 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            --user 65532:65532 -e PXGO_R148_REAL_CGROUP=1 \
+            -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
+            --entrypoint /work/pxgo-cgroup.test "$image" \
+            -test.run '^TestR148NativeKernelPostCloseSocketChargeObservations$' \
+            -test.count=1 -test.timeout=50s -test.v | tee benchmarks/r148-close-lifetime.log
+          grep -F 'R148_REAL_CLOSE_OBSERVATION mode=graceful' benchmarks/r148-close-lifetime.log
+          grep -F 'R148_REAL_CLOSE_OBSERVATION mode=rst' benchmarks/r148-close-lifetime.log
+          grep -F 'R148_REAL_CLOSE_OBSERVATION mode=halfclose' benchmarks/r148-close-lifetime.log
       - name: Verify genuine visible cgroup ancestors through host cgroup namespace
         shell: bash
         run: |
