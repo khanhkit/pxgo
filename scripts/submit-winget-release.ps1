@@ -81,7 +81,7 @@ function Get-UniqueManifestScalar {
     param([string]$Text, [string]$Name)
     # Only accept the unquoted flat syntax emitted by pinned WingetCreate.
     # Missing, duplicate, quoted, or complex YAML fields are not proof.
-    $pattern = '(?m)^' + [regex]::Escape($Name) + ':[ \t]*([^\r\n# \t]+)[ \t]*$'
+    $pattern = '(?m)^' + [regex]::Escape($Name) + ':[ \t]*([^\r\n# \t]+)[ \t]*\r?$'
     $found = [regex]::Matches($Text, $pattern)
     if ($found.Count -ne 1) {
         throw "missing or ambiguous WinGet $Name (matches=$($found.Count), length=$($Text.Length), firstCode=$([int]$Text[0]), pattern=$pattern, prefix=$($Text.Substring(0, [Math]::Min(42, $Text.Length))))"
@@ -101,12 +101,12 @@ function Assert-UpstreamExactRelease {
             throw "WinGet upstream package identity/version/type differs from release $Tag"
         }
     }
-    if ($InstallerText -notmatch '(?m)^Installers:[ \t]*$' -or
+    if ($InstallerText -notmatch '(?m)^Installers:[ \t]*\r?$' -or
         $InstallerText -match '(?m)^[ \t]*<<:') {
         throw 'upstream WinGet installer manifest structure is unsupported'
     }
 
-    $installers = [regex]::Matches($InstallerText, '(?m)^-[ \t]*Architecture:[ \t]*([^\r\n \t]+)[ \t]*$')
+    $installers = [regex]::Matches($InstallerText, '(?m)^-[ \t]*Architecture:[ \t]*([^\r\n \t]+)[ \t]*\r?$')
     if ($installers.Count -ne 2) {
         throw 'upstream WinGet must contain exactly two explicit installers'
     }
@@ -124,8 +124,8 @@ function Assert-UpstreamExactRelease {
         $start = $installers[$i].Index
         $end = if ($i + 1 -lt $installers.Count) { $installers[$i + 1].Index } else { $InstallerText.Length }
         $section = $InstallerText.Substring($start, $end - $start)
-        $url = [regex]::Matches($section, '(?m)^[ \t]+InstallerUrl:[ \t]*([^\r\n \t#]+)[ \t]*$')
-        $digest = [regex]::Matches($section, '(?m)^[ \t]+InstallerSha256:[ \t]*([0-9a-fA-F]{64})[ \t]*$')
+        $url = [regex]::Matches($section, '(?m)^[ \t]+InstallerUrl:[ \t]*([^\r\n \t#]+)[ \t]*\r?$')
+        $digest = [regex]::Matches($section, '(?m)^[ \t]+InstallerSha256:[ \t]*([0-9a-fA-F]{64})[ \t]*\r?$')
         if ($url.Count -ne 1 -or $digest.Count -ne 1 -or
             $url[0].Groups[1].Value -cne $expectedAssets[$architecture].Url) {
             throw "WinGet upstream URL or digest fields do not match release: $architecture"
