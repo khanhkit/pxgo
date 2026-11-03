@@ -30,6 +30,9 @@ on:
       base_ref:
         required: true
         type: string
+      base_sha:
+        required: true
+        type: string
 
 permissions: {}
 
@@ -53,6 +56,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           BASE_REF: ${{ inputs.base_ref }}
+          BASE_SHA: ${{ inputs.base_sha }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -76,6 +80,11 @@ jobs:
             }
             if (pullRequest.base.ref !== process.env.BASE_REF) {
               throw new Error('OCR review base ref does not match current PR base');
+            }
+            // GitHub workflow_dispatch resolves a mutable branch. Refuse to
+            // run a newer control plane than the base SHA checked by dispatcher.
+            if (pullRequest.base.sha !== process.env.BASE_SHA || context.sha !== process.env.BASE_SHA) {
+              throw new Error('OCR worker trusted base SHA changed during dispatch');
             }
 
       - name: Signal allocated runner readiness
@@ -133,6 +142,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           BASE_REF: ${{ inputs.base_ref }}
+          BASE_SHA: ${{ inputs.base_sha }}
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -156,6 +166,11 @@ jobs:
             }
             if (pullRequest.base.ref !== process.env.BASE_REF) {
               throw new Error('OCR review base ref changed while waiting for scheduler claim');
+            }
+            // GitHub workflow_dispatch resolves a mutable branch. Refuse to
+            // run a newer control plane than the base SHA checked by dispatcher.
+            if (pullRequest.base.sha !== process.env.BASE_SHA || context.sha !== process.env.BASE_SHA) {
+              throw new Error('OCR worker trusted base SHA changed during dispatch');
             }
 
       - name: Detect OCR configuration

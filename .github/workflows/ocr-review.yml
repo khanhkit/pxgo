@@ -71,4 +71,5 @@ jobs:
             --worker-workflow ocr-review-worker.yml \
             --worker-input "pr_number=${PR_NUMBER}" \
             --worker-input "base_ref=${BASE_REF}" \
+            --worker-input "base_sha=${{ github.event.pull_request.base.sha }}" \
             --wait-completion

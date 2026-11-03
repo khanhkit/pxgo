@@ -2,15 +2,15 @@ package wproxy
 
 import (
 	"context"
-	"time"
-
-	"github.com/khanhkit/pxgo/internal/dnscache"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/khanhkit/pxgo/internal/dnscache"
 
 	"github.com/khanhkit/pxgo/internal/systemproxy"
 )

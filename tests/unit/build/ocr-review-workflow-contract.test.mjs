@@ -30,6 +30,7 @@ test("trusted-base OCR dispatcher only handles same-repo non-draft PRs to main",
   assert.ok(y.includes("--wait-completion"));
   assert.ok(y.includes("--worker-input \"pr_number="));
   assert.ok(y.includes("--worker-input \"base_ref="));
+  assert.ok(y.includes("--worker-input \"base_sha="));
   assert.doesNotMatch(y, /OCR_LLM_AUTH_TOKEN|alibaba\/open-code-review@/);
 });
 
@@ -50,6 +51,8 @@ test("worker validates PR SHA and repo before using OCR secrets", async () => {
     "pullRequest.head.repo?.full_name !== process.env.GITHUB_REPOSITORY",
     "pullRequest.head.sha !== process.env.SOURCE_SHA",
     "pullRequest.base.ref !== process.env.BASE_REF",
+    "pullRequest.base.sha !== process.env.BASE_SHA",
+    "context.sha !== process.env.BASE_SHA",
     "Wait for scheduler claim before secret-bearing review",
     "Revalidate requested PR context after scheduler claim",
     "RUNNER_READY_CONTEXT",
