@@ -117,8 +117,11 @@ func (s *Server) beginTunnelShutdown() <-chan struct{} {
 		tunnels = append(tunnels, tunnel)
 	}
 	s.tunnelMu.Unlock()
+	// Initiate independent shutdown of every live tunnel; one remote
+	// upstream.Close must not prevent physical closure of other clients.
+	// waitTunnelDrain(ctx, done) still owns the deadline policy.
 	for _, tunnel := range tunnels {
-		tunnel.Close()
+		go tunnel.Close()
 	}
 	return done
 }
