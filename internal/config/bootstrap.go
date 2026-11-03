@@ -154,8 +154,8 @@ func migrationBlock(keys map[string]bool) string {
 		b.WriteString("listen = 0.0.0.0\n")
 	}
 	if !keys[keyAllow] {
-		b.WriteString("# Client allow list. *.*.*.* permits every IPv4 client that can reach the listener.\n")
-		b.WriteString("allow = *.*.*.*\n")
+		b.WriteString("# Loopback clients only by default; set a deliberate allow list for remote access.\n")
+		b.WriteString("allow = 127.0.0.0/8,::1\n")
 	}
 	if !keys[keyDNS] {
 		b.WriteString("\n# Custom DNS / DoH is optional. Leave these commented to use system/VPN DNS.\n")
@@ -212,9 +212,10 @@ func renderFreshINI(system SystemProxyImport) string {
 port = 3128
 listen = 0.0.0.0
 
-# WARNING: listen=0.0.0.0 exposes PxGo on every reachable interface.
-# Restrict allow and/or enable client authentication on untrusted networks.
-allow = *.*.*.*
+# WARNING: listen=0.0.0.0 binds every interface, but the default allow list
+# only permits loopback clients. Explicitly change allow and/or configure
+# client authentication to permit remote clients.
+allow = 127.0.0.0/8,::1
 
 # gateway = 0
 # hostonly = 0

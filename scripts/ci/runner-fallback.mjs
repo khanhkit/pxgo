@@ -23,10 +23,14 @@ export function decideAttemptAction({
 
 export async function waitForAttemptCompletion(adapter, attempt, options = {}) {
   const pollIntervalMs = options.pollIntervalMs ?? 1000;
+  const deadline = adapter.now() + (options.timeoutSeconds ?? 35 * 60);
   for (;;) {
     const observation = await adapter.observeAttempt(attempt);
     if (observation.status === "completed") {
       return { status: "completed", conclusion: observation.conclusion ?? null };
+    }
+    if (adapter.now() >= deadline) {
+      throw new Error("worker completion wait exceeded its deadline");
     }
     await adapter.sleep(pollIntervalMs);
   }

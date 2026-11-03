@@ -43,7 +43,14 @@ export function findReadyStatus(fetchPage, context, perPage = 100) {
 }
 
 export function isRetryableGhRead(args) {
-  return !args.includes("-X") && !args.includes("--method");
+  // Do not retry mutating gh api operations, regardless of flag spelling.
+  return !args.some((a) =>
+    a === "-X" || a.startsWith("-X") || a === "--method" || a.startsWith("--method=") ||
+    a === "-f" || a.startsWith("-f") || a === "-F" || a.startsWith("-F") ||
+    a === "--field" || a.startsWith("--field=") ||
+    a === "--raw-field" || a.startsWith("--raw-field=") ||
+    a === "--input" || a.startsWith("--input=")
+  );
 }
 
 function gh(args) {
@@ -163,6 +170,9 @@ export function createGitHubAdapter({
           : { status: "queued" };
       }
       const job = jobs.find((item) => item.name.startsWith("Portable ")) || jobs[0];
+      // In-progress does not mean safe to claim until the worker publishes
+      // its readiness status after validating the PR and source SHA.
+      if (job.status === "in_progress" && !ready) return { status: "queued" };
       return { status: job.status, conclusion: job.conclusion };
     },
     async setClaim(attempt, state) {

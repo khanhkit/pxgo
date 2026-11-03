@@ -414,3 +414,9 @@ func TestTCGUARDSOAKRepeatedReadyCrashRecycle(t *testing.T) {
 		t.Fatalf("recycle soak generations=%d want %d..%d", got, want, want+1)
 	}
 }
+
+func TestGuardianStopReapDeadlineIsNotSilenced(t *testing.T) {
+	if err := normalizeParentStopError(context.DeadlineExceeded); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lost unreaped child timeout: %v", err)
+	}
+}

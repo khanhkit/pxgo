@@ -170,3 +170,13 @@ func TestTTLResolverClampsPositiveTTL(t *testing.T) {
 		})
 	}
 }
+
+func TestLookupContextRejectsNilContext(t *testing.T) {
+	cache := New(func(context.Context, string) ([]net.IP, error) {
+		t.Fatal("nil context reached underlying resolver")
+		return nil, nil
+	})
+	if _, err := cache.LookupContext(nil, "example.test"); err == nil {
+		t.Fatal("expected error for nil context")
+	}
+}

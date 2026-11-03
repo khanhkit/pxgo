@@ -20,6 +20,7 @@ import (
 func TestGatewayRejectsOpenUnauthenticatedDefault(t *testing.T) {
 	cfg := config.Default()
 	cfg.Gateway = true
+	cfg.Allow = "*.*.*.*"
 	if _, err := New(cfg); err == nil {
 		t.Fatal("gateway accepted wildcard allow with client auth disabled")
 	}
@@ -246,6 +247,7 @@ func TestConnectionAdmissionUsesWorkersTimesThreads(t *testing.T) {
 func TestGatewayPolicyErrorIsActionable(t *testing.T) {
 	cfg := config.Default()
 	cfg.Gateway = true
+	cfg.Allow = "*.*.*.*"
 	_, err := New(cfg)
 	if err == nil {
 		t.Fatal("expected gateway policy error")

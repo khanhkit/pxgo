@@ -3,13 +3,16 @@
 package update
 
 import (
-	"errors"
-	"os"
+	"golang.org/x/sys/windows"
 )
 
 func replaceStateFile(source, target string) error {
-	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return os.Rename(source, target)
+	// The source is a temporary file in the destination directory. Never
+	// delete the old state before a replacement is ready: failed moves must
+	// leave the previous durable state intact.
+	return windows.MoveFileEx(
+		windows.StringToUTF16Ptr(source),
+		windows.StringToUTF16Ptr(target),
+		windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH,
+	)
 }

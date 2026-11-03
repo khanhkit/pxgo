@@ -1,5 +1,5 @@
 function median(values){
-  const a=[...values].sort((x,y)=>x-y); if(!a.length) return null;
+  const a=values.filter(Number.isFinite).sort((x,y)=>x-y); if(!a.length) return null;
   const m=Math.floor(a.length/2); return a.length%2?a[m]:(a[m-1]+a[m])/2;
 }
 export function buildFallbackSummary(result){
@@ -20,5 +20,5 @@ export function summarizeRunnerSamples(samples){
     medianExecutionSeconds:median(rows.map(r=>r.completedAt-r.startedAt)),
     medianTotalSeconds:median(rows.map(r=>r.completedAt-r.queuedAt)),
     successRate:rows.filter(r=>r.conclusion==='success').length/rows.length,
-  })).sort((a,b)=>a.medianTotalSeconds-b.medianTotalSeconds || a.runner.localeCompare(b.runner));
+  })).sort((a,b)=>(a.medianTotalSeconds??Infinity)-(b.medianTotalSeconds??Infinity) || a.runner.localeCompare(b.runner));
 }

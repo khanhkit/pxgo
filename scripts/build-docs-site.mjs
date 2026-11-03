@@ -39,6 +39,15 @@ function escAttr(s) {
   return esc(s).replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
 
+function safeMarkdownHref(href) {
+  const value = href.trim();
+  // Attribute escaping alone does not prevent javascript:/data: navigation.
+  if (!value || /[\x00-\x1f\x7f]/.test(value) || value.startsWith("//")) return "#";
+  const scheme = /^[a-z][a-z0-9+.-]*:/i.exec(value);
+  if (scheme && !/^(https?|mailto):$/i.test(scheme[0])) return "#";
+  return value;
+}
+
 function stash(s, buf) { const k=`\x00${buf.length}\x00`; buf.push(s); return k; }
 function unstash(s, buf) { return s.replace(/\x00(\d+)\x00/g,(_,i)=>buf[+i]); }
 
@@ -110,6 +119,7 @@ function inline(text, buf) {
   text=text.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>");
   text=text.replace(/\*(.+?)\*/g,"<em>$1</em>");
   text=text.replace(/\[([^\]]+)\]\(([^)]+)\)/g,(_,label,href)=>{
+    href=safeMarkdownHref(href);
     const ext=href.startsWith("http")?` target="_blank" rel="noopener"`:"";
     return stash(`<a href="${escAttr(href)}"${ext}>${label}</a>`,buf);
   });

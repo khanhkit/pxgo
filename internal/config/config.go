@@ -90,7 +90,7 @@ var Defaults = map[string]string{
 	keyListen:          defaultListenIP,
 	keyGateway:         "0",
 	keyHostonly:        "0",
-	keyAllow:           "*.*.*.*",
+	keyAllow:           "127.0.0.0/8,::1",
 	keyNoProxy:         "",
 	keyDNS:             "",
 	keyDNSOnly:         "",

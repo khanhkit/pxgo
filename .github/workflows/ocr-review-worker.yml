@@ -41,6 +41,7 @@ jobs:
   execute:
     name: Portable ${{ inputs.logical_task }} (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: 40
     permissions:
       contents: read
       statuses: write
