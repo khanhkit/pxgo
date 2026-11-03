@@ -320,7 +320,7 @@ func patchINIKeys(raw string, values map[string]*string) string {
 		}
 		// Keep the first active key in [proxy]; disable copies elsewhere so
 		// the section-agnostic legacy parser cannot override the new policy.
-		if section != "proxy" || seen[key] || value == nil || *value == "" {
+		if section != sectionProxy || seen[key] || value == nil || *value == "" {
 			lines[i] = "# " + strings.TrimSpace(line) + "  # disabled by --apply-system-proxy"
 			continue
 		}
