@@ -79,6 +79,11 @@ jobs:
       - name: Extract canonical source snapshot
         shell: pwsh
         run: |
+          # A persistent self-hosted runner can retain files absent from the
+          # current SHA. Remove the previous extraction before unpacking.
+          if (Test-Path -LiteralPath source) {
+            Remove-Item -LiteralPath source -Recurse -Force
+          }
           New-Item -ItemType Directory -Force -Path source | Out-Null
           tar -xf staged-source/real-ad-source.tar -C source
           if (-not (Test-Path source/go.mod)) {

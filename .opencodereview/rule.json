@@ -1,0 +1,9 @@
+{
+  "rules": [
+    {
+      "path": "**/*",
+      "merge_system_rule": true,
+      "rule": "PxGo source code, repository tests, and security and configuration contracts are authoritative; this OpenCodeReview overlay supplements them and must not weaken established behavior. Focus on high-impact Go proxy correctness and security: HTTP CONNECT tunnel isolation and full-duplex stream lifetime, deadlines, half-close and cancellation; upstream HTTP proxy authentication including NTLM/Negotiate (Windows SSPI) and Kerberos/SPNEGO (Linux/macOS), credential leakage, downgrade and fallback safety; PAC and WPAD parsing, JavaScript evaluation, precedence and unreachable proxy handling; DNS, custom resolvers, DoH, DNS_Only and DNS_Bypass including split DNS, VPN compatibility, caching and SSRF or DNS-rebinding risks; local listener exposure, gateway allowlists and downstream authentication; header normalization, request smuggling, IPv6, IPv4, host canonicalization and proxy bypass rules; goroutine leaks, data races, shared-connection state and resource pressure; keyring secrets, INI migration, backup integrity and system proxy trust boundaries; portable auto-update, signature or checksum validation, staged replacement and package-manager ownership; cross-platform Windows, Linux and macOS behavior and documented integration tests. Prefer concrete semantic defects with cross-file reproductions over style, formatting or lint findings already covered by CI."
+    }
+  ]
+}

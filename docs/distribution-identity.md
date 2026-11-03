@@ -25,12 +25,51 @@ Fork-owned package `KhanhKit.PxGo` was established by moderator-approved
 channel and every stable PxGo release is submitted from CI with the pinned
 WingetCreate client. `WINGET_CREATE_GITHUB_TOKEN` is mandatory for stable release
 submission; the token is consumed through WingetCreate's environment variable and
-is never placed on the command line. Submission is idempotent when the exact
-version is already upstream or an exact-version PR is still open:
+is never placed on the command line. Submission retries are idempotent only
+when upstream installer manifest identity, x64/ARM64 ZIP URLs, portable
+packaging fields, and SHA256s match the exact published GitHub Release assets.
+An open WinGet PR with unverified contents prevents duplicate submission, but
+fails closed instead of being reported as a successful convergence:
 
 ```powershell
 winget install --id KhanhKit.PxGo --exact
 ```
+
+## Retry WinGet after GitHub Release promotion
+
+A failed **Submit WinGet update** job can occur after the immutable GitHub
+Release has already been published. **Do not rerun the entire Release
+workflow** to repair this distribution-only failure: that would repeat
+release candidate/promotion stages unnecessarily.
+
+Use the already-installed [WinGet Sync workflow](https://github.com/khanhkit/pxgo/actions/workflows/winget-sync.yml)
+to retry the exact published stable tag. For example:
+
+```bash
+gh workflow run winget-sync.yml -R khanhkit/pxgo --ref main -f tag=v0.9.0
+```
+
+Replace `v0.9.0` with the **exact already-published release tag** requiring
+synchronization; do not create a new release to repair WinGet. An existing
+public WinGet manifest is accepted only after its exact installer ZIP hashes
+and URLs match the published GitHub Release. A mismatched manifest, missing
+installer metadata, or unverified open WinGet PR causes an actionable failure,
+rather than silently claiming success. The workflow checks out the trusted
+workflow SHA, fetches the specified tag and requires
+that SHA to be an ancestor of the repository's current `main`. It then runs
+the same pinned/checksummed WingetCreate publisher with repository-scoped
+credentials. The publisher checks GitHub Release stability and artifact
+availability, and short-circuits if that exact version has already landed
+in `microsoft/winget-pkgs` or has an open upstream submission.
+
+A successful synchronization workflow only proves that submission was
+accepted or already converged at the publisher. As specified by the green
+release policy, a pending unmerged WinGet PR does **not** make the release
+green. Verify the exact version is published to the public WinGet source.
+
+This independent path means a post-promotion WinGet failure remains visible
+as a failure while a retry never rebuilds or re-promotes the immutable
+GitHub Release.
 
 ## Green release convergence
 

@@ -20,6 +20,9 @@ func ApplyCandidateWithRestart(ctx context.Context, candidate, target, expectedV
 	return ApplyCandidateWithRestartState(ctx, candidate, target, expectedVersion, restartArgs, "", Status{})
 }
 
+// Unix replaces the executable while it is still running. The owning guardian
+// records update state and restarts after ApplyPreparedWithRestart returns;
+// spawning here would create a second listener before the old process exits.
 func ApplyCandidateWithRestartState(ctx context.Context, candidate, target, expectedVersion string, _ []string, _ string, _ Status) (ApplyResult, error) {
 	if ctx == nil {
 		return ApplyResult{}, errors.New("nil context")

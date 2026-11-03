@@ -1,12 +1,16 @@
 package wproxy
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/khanhkit/pxgo/internal/dnscache"
 
 	"github.com/khanhkit/pxgo/internal/systemproxy"
 )
@@ -321,5 +325,27 @@ func TestWproxyConfigPACRejectsBrokenGeneration(t *testing.T) {
 	}
 	if _, err := New(ModeConfigPAC, []Server{{Host: path, Scheme: "pac"}}, "", ""); err == nil {
 		t.Fatal("broken configured PAC must prevent activation")
+	}
+}
+
+func TestNoProxyDNSLookupHasDeadline(t *testing.T) {
+	cache := dnscache.New(func(ctx context.Context, host string) ([]net.IP, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	w, err := NewWithDNS(ModeConfig, []Server{{Host: "upstream.example", Port: 8080, Scheme: "http"}}, "10.0.0.0/8", "", cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	servers, _, _, err := w.FindProxyForURL("http://stalled.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("noproxy DNS lookup exceeded deadline: %v", elapsed)
+	}
+	if len(servers) != 1 || servers[0].Host != "upstream.example" {
+		t.Fatalf("timeout unexpectedly bypassed configured proxy: %#v", servers)
 	}
 }

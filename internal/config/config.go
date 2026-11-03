@@ -37,6 +37,7 @@ const (
 	envPrefix       = "PXGO_"
 	legacyEnvPrefix = "PX_"
 
+	sectionProxy       = "proxy"
 	keyServer          = "server"
 	keyPAC             = "pac"
 	keyPACEncoding     = "pac_encoding"
@@ -90,7 +91,7 @@ var Defaults = map[string]string{
 	keyListen:          defaultListenIP,
 	keyGateway:         "0",
 	keyHostonly:        "0",
-	keyAllow:           "*.*.*.*",
+	keyAllow:           "127.0.0.0/8,::1",
 	keyNoProxy:         "",
 	keyDNS:             "",
 	keyDNSOnly:         "",
@@ -689,7 +690,7 @@ func loadDotenvFile(path string, values map[string]string) (bool, error) {
 
 func canonicalConfigKey(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "proxy" {
+	if name == sectionProxy {
 		return keyServer
 	}
 	return name
@@ -768,7 +769,7 @@ func applyValue(cfg *Config, name, val string) error {
 		return err
 	}
 	switch name {
-	case keyServer, "proxy":
+	case keyServer, sectionProxy:
 		cfg.Server = val
 	case keyPAC:
 		pac, err := normalizePACLocation(val)

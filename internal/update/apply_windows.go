@@ -138,16 +138,37 @@ func RunApplyHelper(args []string) (bool, int) {
 		return true, 2
 	}
 	if err := runApplyHelper(payload); err != nil {
-		_ = writeApplyHelperState(payload, false)
-		if payload.Restart {
-			_ = startUpdatedProcessFunc(payload.Target, payload.RestartArgs)
+		if stateErr := writeApplyHelperState(payload, false); stateErr != nil {
+			fmt.Fprintln(os.Stderr, "PxGo update: failed to record failure state:", stateErr)
 		}
-		_ = writeApplyHelperResult(false, err)
+		// Do not restart a missing/invalid target or a target with an
+		// outstanding rollback backup. Those states are not proven safe.
+		if payload.Restart && safeToRestartExistingTarget(payload.Target) {
+			if restartErr := startUpdatedProcessFunc(payload.Target, payload.RestartArgs); restartErr != nil {
+				fmt.Fprintln(os.Stderr, "PxGo update: failed to restart previous executable:", restartErr)
+			}
+		}
+		if resultErr := writeApplyHelperResult(false, err); resultErr != nil {
+			fmt.Fprintln(os.Stderr, "PxGo update: failed to record helper error:", resultErr)
+		}
 		return true, 7
 	}
-	_ = writeApplyHelperState(payload, true)
-	_ = writeApplyHelperResult(true, nil)
+	stateErr := writeApplyHelperState(payload, true)
+	resultErr := writeApplyHelperResult(true, nil)
+	if stateErr != nil || resultErr != nil {
+		fmt.Fprintln(os.Stderr, "PxGo update: applied but failed to persist status:", errors.Join(stateErr, resultErr))
+		return true, 8
+	}
 	return true, 0
+}
+
+func safeToRestartExistingTarget(target string) bool {
+	info, err := os.Lstat(target)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	_, err = os.Lstat(target + ".pxgo-update-backup")
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func runApplyHelper(payload applyHelperPayload) error {
@@ -249,7 +270,10 @@ func runApplyHelper(payload applyHelperPayload) error {
 		return errors.Join(fmt.Errorf("installed candidate failed version check: %w", verifyErr), removeErr, rollbackErr)
 	}
 	if err := os.Remove(backup); err != nil {
-		return fmt.Errorf("remove update backup: %w", err)
+		// The new executable passed verification and is already installed.
+		// Failure to clean a stale backup is a maintenance problem, not a
+		// rollback; do not misreport successful activation as failed.
+		fmt.Fprintln(os.Stderr, "PxGo update: backup cleanup deferred:", err)
 	}
 	if payload.Restart {
 		if err := startUpdatedProcessFunc(targetPath, payload.RestartArgs); err != nil {

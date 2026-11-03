@@ -275,3 +275,26 @@ var osReadFile = func(path string) ([]byte, error) {
 	defer file.Close()
 	return io.ReadAll(file)
 }
+
+func TestRedirectLimitOverridesCustomClientRedirectCallback(t *testing.T) {
+	called := false
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		called = true
+		return nil
+	}}
+	check := clientWithRedirectValidation(client, func(string, bool) error { return nil })
+	request, err := http.NewRequest(http.MethodGet, "https://github.com/khanhkit/pxgo/releases/download/v1/pxgo.zip", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	via := make([]*http.Request, 10)
+	for i := range via {
+		via[i] = request
+	}
+	if err := check.CheckRedirect(request, via); err == nil {
+		t.Fatal("redirect limit bypassed by caller-provided CheckRedirect")
+	}
+	if called {
+		t.Fatal("original redirect callback was invoked past enforced limit")
+	}
+}

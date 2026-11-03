@@ -1,0 +1,84 @@
+name: OpenCodeReview
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: ocr-review-dispatch-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: OpenCodeReview dispatcher
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+      statuses: write
+    steps:
+      - name: Checkout trusted PR base control plane
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify OCR control plane exists on trusted base
+        id: base-contract
+        shell: bash
+        run: |
+          required=(
+            scripts/ci/github-runner-fallback.mjs
+            .github/ci/ocr-review-job.json
+            .github/workflows/ocr-review-worker.yml
+          )
+          for path in "${required[@]}"; do
+            if [[ ! -f "${path}" ]]; then
+              echo "ready=false" >> "${GITHUB_OUTPUT}"
+              echo "::notice::OpenCodeReview bootstrap skipped: trusted base does not yet contain ${path}."
+              exit 0
+            fi
+          done
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Setup Node.js
+        if: steps.base-contract.outputs.ready == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Select one compatible OCR runner and wait for review completion
+        if: steps.base-contract.outputs.ready == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # The trusted-base worker may predate the optional base SHA input
+          # while this PR upgrades the dispatcher. Check the checked-out main
+          # version before advertising new workflow_dispatch inputs.
+          worker_inputs=(
+            --worker-input "pr_number=${PR_NUMBER}"
+            --worker-input "base_ref=${BASE_REF}"
+          )
+          if grep -Fq '      base_sha:' .github/workflows/ocr-review-worker.yml; then
+            worker_inputs+=(--worker-input "base_sha=${BASE_SHA}")
+          fi
+          node scripts/ci/github-runner-fallback.mjs \
+            --logical-task ocr-review \
+            --source-sha "${HEAD_SHA}" \
+            --workflow-ref "${BASE_REF}" \
+            --manifest .github/ci/ocr-review-job.json \
+            --worker-workflow ocr-review-worker.yml \
+            "${worker_inputs[@]}" \
+            --wait-completion

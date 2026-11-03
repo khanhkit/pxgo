@@ -263,6 +263,7 @@ func TestAPISS0016ServeHTTPKnownOversizeReturns413(t *testing.T) {
 
 	src := &countingReadCloser{Reader: bytes.NewReader([]byte("tiny"))}
 	req := httptest.NewRequest(http.MethodPost, "http://origin.example.test/upload", http.NoBody)
+	req.RemoteAddr = "127.0.0.1:1234"
 	req.Body = src
 	req.ContentLength = defaultMaxReplayBodyBytes + 1
 

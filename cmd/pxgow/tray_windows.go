@@ -3,8 +3,10 @@
 package main
 
 import (
+	"context"
 	"os/exec"
 	"runtime"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -99,6 +101,17 @@ var (
 func runTray(child *exec.Cmd, quit func()) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	// Ensure a started child cannot become orphaned if tray creation or the
+	// message loop fails. The waiter goroutine owns Wait once it starts.
+	waiterStarted := false
+	defer func() {
+		if child != nil && child.Process != nil {
+			_ = child.Process.Kill()
+			if !waiterStarted {
+				_, _ = child.Process.Wait()
+			}
+		}
+	}()
 	trayQuitCommand = quit
 	defer func() { trayQuitCommand = nil }()
 
@@ -125,6 +138,7 @@ func runTray(child *exec.Cmd, quit func()) error {
 	}
 	defer procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&nid)))
 
+	waiterStarted = true
 	go func() {
 		_ = child.Wait()
 		procPostMessage.Call(hwnd, wmClose, 0, 0)
@@ -185,7 +199,9 @@ func showTrayMenu(hwnd uintptr) {
 
 func quitBackground(pxgo string, args []string) error {
 	quitArgs := controlArgs(args, "--quit")
-	cmd := exec.Command(pxgo, quitArgs...)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, pxgo, quitArgs...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
 	if err := configureWindowlessChild(cmd); err != nil {
 		return err

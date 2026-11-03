@@ -38,6 +38,7 @@ func TestEnsureCanonicalINIFreshDocumentsOptionalFeatures(t *testing.T) {
 	for _, want := range []string{
 		"# pxgo-config-schema: 1",
 		"listen = 0.0.0.0",
+		"allow = 127.0.0.0/8,::1",
 		"auto_update = install",
 		"update_interval = 24h",
 		"update_channel = stable",
@@ -338,5 +339,129 @@ func TestSchemaUpgradeBackupFailureLeavesOriginalUntouched(t *testing.T) {
 	}
 	if string(got) != string(original) {
 		t.Fatalf("failed upgrade mutated config:\n%s", got)
+	}
+}
+
+func TestBootstrapLoopbackOnlyByDefault(t *testing.T) {
+	if got := Default().Allow; got != "127.0.0.0/8,::1" {
+		t.Fatalf("default allow=%q want loopback-only", got)
+	}
+	dir := t.TempDir()
+	setBootstrapConfigDir(t, dir)
+	path, _, err := EnsureCanonicalINI("", SystemProxyImport{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "allow = 127.0.0.0/8,::1") {
+		t.Fatalf("new config is open to remote clients: %s", raw)
+	}
+}
+
+func TestApplySystemRoutingWritesOnlyInsideProxySection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pxgo.ini")
+	original := "# user comment\n[proxy]\nserver = initial.example:8080\n[settings]\nworkers = 4\n" +
+		"server = override.example:8080\nnoproxy = stale.local\n[client]\nclient_auth = NONE\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	system := SystemProxyImport{
+		Found:   true,
+		PAC:     "http://sys.example/proxy.pac",
+		Server:  "unused.example:8080",
+		NoProxy: "localhost;*.intranet",
+	}
+	if _, err := ApplySystemProxyINI(path, system); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	proxySection := strings.SplitN(strings.SplitN(text, "[proxy]\n", 2)[1], "[settings]", 2)[0]
+	if !strings.Contains(proxySection, "pac = http://sys.example/proxy.pac") ||
+		!strings.Contains(proxySection, "noproxy = localhost;*.intranet") {
+		t.Fatalf("proxy routing escaped [proxy] section:\n%s", text)
+	}
+	settingsSection := strings.SplitN(strings.SplitN(text, "[settings]\n", 2)[1], "[client]", 2)[0]
+	if strings.Contains(settingsSection, "\nserver =") || strings.Contains(settingsSection, "\nnoproxy =") {
+		t.Fatalf("duplicate routing in [settings] remains active:\n%s", text)
+	}
+	if !strings.Contains(text, "workers = 4") || !strings.Contains(text, "client_auth = NONE") {
+		t.Fatalf("unrelated user settings lost:\n%s", text)
+	}
+	cfg, err := ReadINI(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PAC != "http://sys.example/proxy.pac" || cfg.Server != "" || cfg.NoProxy != "localhost;*.intranet" {
+		t.Fatalf("parser sees stale routing: PAC=%q Server=%q NoProxy=%q", cfg.PAC, cfg.Server, cfg.NoProxy)
+	}
+	backups, err := filepath.Glob(path + ".bak.*")
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backup not preserved: %v %v", backups, err)
+	}
+	originalBackup, err := os.ReadFile(backups[0])
+	if err != nil || string(originalBackup) != original {
+		t.Fatalf("original config backup differs: %v", err)
+	}
+
+	// Reapplying the same policy must not create another active routing key.
+	if _, err := ApplySystemProxyINI(path, system); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(second) != text {
+		t.Fatalf("system routing patch is not idempotent:\nfirst=%s\nsecond=%s", text, second)
+	}
+}
+
+func TestPatchSystemRoutingCreatesProxySectionWhenAbsent(t *testing.T) {
+	original := "[settings]\nworkers = 7\n[client]\nclient_auth = NONE\n"
+	got := patchSystemRouting(original, SystemProxyImport{Found: true, Server: "proxy.example:3128"})
+	if !strings.Contains(got, "\n[proxy]\n") || !strings.Contains(got, "server = proxy.example:3128") {
+		t.Fatalf("missing [proxy] section:\n%s", got)
+	}
+	if strings.Index(got, "server = proxy.example:3128") < strings.Index(got, "[proxy]") {
+		t.Fatalf("routing appeared before [proxy]:\n%s", got)
+	}
+}
+
+func TestPatchSystemRoutingReusesNormalizedProxySection(t *testing.T) {
+	for _, header := range []string{"[ Proxy ]", "[PROXY]", "[ pRoXy ]"} {
+		t.Run(header, func(t *testing.T) {
+			original := header + "\nserver = stale.example:8080\n[settings]\nworkers = 2\n"
+			system := SystemProxyImport{
+				Found:   true,
+				PAC:     "http://system.example/proxy.pac",
+				NoProxy: "localhost;*.intranet",
+			}
+			got := patchSystemRouting(original, system)
+			sectionCount := 0
+			for _, line := range strings.Split(got, "\n") {
+				if name, ok := normalizedINISectionName(line); ok && name == sectionProxy {
+					sectionCount++
+				}
+			}
+			if sectionCount != 1 {
+				t.Fatalf("created duplicate [proxy] section for %q:\n%s", header, got)
+			}
+			proxyBody := strings.SplitN(got, "[settings]", 2)[0]
+			if !strings.Contains(proxyBody, "pac = http://system.example/proxy.pac") ||
+				!strings.Contains(proxyBody, "noproxy = localhost;*.intranet") {
+				t.Fatalf("missing active proxy keys inside %q:\n%s", header, got)
+			}
+			if second := patchSystemRouting(got, system); second != got {
+				t.Fatalf("second apply modified normalized section %q:\nfirst=%s\nsecond=%s", header, got, second)
+			}
+		})
 	}
 }

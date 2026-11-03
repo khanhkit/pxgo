@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "defaultQueueTimeoutSeconds": 45,
+  "jobs": {
+    "ocr-review": {
+      "class": "portable-compute",
+      "mutationClass": "claim-guarded-review",
+      "claimBeforeMutation": true,
+      "fallbackEnabled": true,
+      "queueTimeoutSeconds": 45,
+      "waitOnExhaustion": true,
+      "compatibleRunners": ["ubuntu-24.04-arm", "ubuntu-latest", "macos-15-intel"],
+      "compatibility": {
+        "os": ["linux", "macos"],
+        "arch": ["x64", "arm64"],
+        "runtimeRequirements": ["github-action", "bash", "git", "node", "posix-temp"]
+      },
+      "evidence": "OpenCodeReview v1.12.13 composite action uses bash and POSIX /tmp paths; Linux arm64/x64 and macOS x64 are package-supported. Windows CLI binaries exist but the full composite Action path is not enabled until Git-Bash /tmp to Node path handling is proven by an Action-level run."
+    }
+  }
+}
