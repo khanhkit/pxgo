@@ -58,7 +58,12 @@ func TestRealADPublicLogRedactionContract(t *testing.T) {
 				return true
 			}
 			receiver, ok := method.X.(*ast.Ident)
-			if !ok || receiver.Name != "t" || !strings.Contains("|Log|Logf|Fatal|Fatalf|Error|Errorf|", "|"+method.Sel.Name+"|") {
+			if !ok || receiver.Name != "t" {
+				return true
+			}
+			switch method.Sel.Name {
+			case "Log", "Logf", "Fatal", "Fatalf", "Error", "Errorf":
+			default:
 				return true
 			}
 			for _, arg := range call.Args {
