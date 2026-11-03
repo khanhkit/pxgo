@@ -113,6 +113,7 @@ jobs:
           EXPECTED_RUNNER_LABEL: ${{ inputs.runner }}
         with:
           script: |
+            // OCR_CLAIM_GATE_BEGIN
             const { owner, repo } = context.repo;
             const sourceSha = process.env.SOURCE_SHA;
             const claimContext = process.env.CLAIM_CONTEXT;
@@ -140,6 +141,7 @@ jobs:
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
             core.setFailed(`Timed out waiting for scheduler claim: ${claimContext}`);
+            // OCR_CLAIM_GATE_END
 
       - name: Revalidate requested PR context after scheduler claim
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v8.0.0
@@ -201,7 +203,7 @@ jobs:
 
       - name: Run OpenCodeReview
         if: steps.ocr-config.outputs.ready == 'true'
-        uses: alibaba/open-code-review@fabbdb296b0d97e2140ada8d54ca7d6d6d1d7ad4 # v1.12.13
+        uses: alibaba/open-code-review@375f64cd6f67a48a135da83cfcf59c52669a09cb # v1.13.3
         with:
           ocr_version: "1.12.13"
           llm_url: ${{ secrets.OCR_LLM_URL }}

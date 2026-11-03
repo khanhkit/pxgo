@@ -73,7 +73,7 @@ func ApplyCandidateWithRestartState(ctx context.Context, candidate, target, expe
 	if strings.EqualFold(candidatePath, targetPath) {
 		return ApplyResult{}, errors.New("candidate and target executable paths are identical")
 	}
-	if !strings.EqualFold(filepath.Base(targetPath), "pxgo.exe") {
+	if !strings.EqualFold(filepath.Base(targetPath), windowsExecutableName) {
 		return ApplyResult{}, errors.New("direct Windows update target must be pxgo.exe")
 	}
 	if _, err := normalizeVersion(expectedVersion); err != nil {
@@ -190,7 +190,7 @@ func runApplyHelper(payload applyHelperPayload) error {
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(filepath.Base(targetPath), "pxgo.exe") {
+	if !strings.EqualFold(filepath.Base(targetPath), windowsExecutableName) {
 		return errors.New("update helper target must be pxgo.exe")
 	}
 	if strings.EqualFold(helperPath, targetPath) {

@@ -20,6 +20,9 @@ import (
 
 func TestServiceResolvesManagedProviderThroughSymlink(t *testing.T) {
 	root := t.TempDir()
+	// A custom Homebrew Cellar is an authority only when its owner is
+	// explicitly configured; matching a directory substring is insufficient.
+	t.Setenv("HOMEBREW_PREFIX", root)
 	target := filepath.Join(root, "Cellar", "pxgo", "1.2.3", "bin", "pxgo")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)

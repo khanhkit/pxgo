@@ -20,10 +20,11 @@ import (
 )
 
 const (
-	DefaultRepository = "khanhkit/pxgo"
-	defaultAPIBase    = "https://api.github.com"
-	productName       = "pxgo"
-	goosWindows       = "windows"
+	DefaultRepository     = "khanhkit/pxgo"
+	defaultAPIBase        = "https://api.github.com"
+	productName           = "pxgo"
+	windowsExecutableName = "pxgo.exe"
+	goosWindows           = "windows"
 )
 
 type Channel string
