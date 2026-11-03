@@ -312,7 +312,10 @@ func TestTCGUARDPARENT029ControlCloseRecyclesImmediately(t *testing.T) {
 	spec, countPath := helperSpec(t, "ready-close-control")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- RunParent(ctx, spec, fastParentOptions()) }()
+	// Only the shutdown/reap budget changes. The 80ms hang watchdog,
+	// restart backoff, and generation-count check remain fast; busy Windows
+	// runners need more than 50ms to reap a just-force-killed test child.
+	go func() { done <- RunParent(ctx, spec, stopLifecycleParentOptions()) }()
 	waitForGenerations(t, countPath, 2)
 	cancel()
 	select {
