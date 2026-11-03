@@ -112,6 +112,46 @@ Assert-ThrowsLike {
 } 'exactly one'
 Write-Host 'PASS: valid x64/arm64 manifests and injected SHA, URL, identity, duplicate-arch, duplicate-field, packaging, nested executable, and release-asset conflicts'
 
+# Published 0.7.1 used per-architecture nested executable mappings, while
+# 0.8.1+ use a top-level shared mapping. Both forms must be checked exactly.
+$legacyInstallerContent = @'
+PackageIdentifier: KhanhKit.PxGo
+PackageVersion: 0.7.1
+InstallerType: zip
+NestedInstallerType: portable
+Installers:
+- Architecture: x64
+  NestedInstallerFiles:
+  - RelativeFilePath: pxgo.exe
+    PortableCommandAlias: pxgo
+  InstallerUrl: https://github.com/khanhkit/pxgo/releases/download/v0.7.1/pxgo_windows_amd64.zip
+  InstallerSha256: 2BC91ED0CF23C3B1755008192776CB597BA6D145598F87977A3DDA2F2888CEFC
+- Architecture: arm64
+  NestedInstallerFiles:
+  - RelativeFilePath: pxgo.exe
+    PortableCommandAlias: pxgo
+  InstallerUrl: https://github.com/khanhkit/pxgo/releases/download/v0.7.1/pxgo_windows_arm64.zip
+  InstallerSha256: 4A686C273293D9535933DF5BC5683E8BBE198D51C29071430DDD29210547AF7E
+ManifestType: installer
+ManifestVersion: 1.12.0
+'@
+$legacyExpected = @{
+    x64 = @{
+        Url = 'https://github.com/khanhkit/pxgo/releases/download/v0.7.1/pxgo_windows_amd64.zip'
+        Sha256 = '2bc91ed0cf23c3b1755008192776cb597ba6d145598f87977a3dda2f2888cefc'
+    }
+    arm64 = @{
+        Url = 'https://github.com/khanhkit/pxgo/releases/download/v0.7.1/pxgo_windows_arm64.zip'
+        Sha256 = '4a686c273293d9535933df5bc5683e8bbe198d51c29071430ddd29210547af7e'
+    }
+}
+$legacyVersionContent = $global:MockVersionContent.Replace('0.9.0', '0.7.1')
+Assert-WingetInstallerManifest -VersionContent $legacyVersionContent -InstallerContent $legacyInstallerContent -PackageIdentifier 'KhanhKit.PxGo' -Version '0.7.1' -ExpectedInstallers $legacyExpected | Out-Null
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $legacyVersionContent -InstallerContent ($legacyInstallerContent.Replace('PortableCommandAlias: pxgo', 'PortableCommandAlias: wrong')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.7.1' -ExpectedInstallers $legacyExpected
+} 'nested executable'
+Write-Host 'PASS: legacy per-architecture nested installer layout and wrong-alias rejection'
+
 $originalToken = [Environment]::GetEnvironmentVariable('WINGET_CREATE_GITHUB_TOKEN')
 $originalRunnerTemp = [Environment]::GetEnvironmentVariable('RUNNER_TEMP')
 $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pxgo-winget-retry-" + [guid]::NewGuid().ToString('N'))

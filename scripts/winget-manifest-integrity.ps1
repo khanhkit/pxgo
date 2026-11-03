@@ -90,15 +90,17 @@ function Assert-WingetInstallerManifest {
         $InstallerContent,
         '(?ms)^NestedInstallerFiles:[ \t]*\r?\n(?<body>.*?)(?=^[A-Za-z][A-Za-z0-9]*:|\z)'
     )
-    if (-not $nestedBlock.Success) {
-        throw 'WinGet nested executable block is missing'
-    }
-    $nestedLines = @($nestedBlock.Groups['body'].Value -split '\r?\n' |
-        Where-Object { $_ -notmatch '^[ \t]*(#|$)' })
-    if ($nestedLines.Count -ne 2 -or
-        $nestedLines[0] -cnotmatch '^-[ \t]+RelativeFilePath:[ \t]*pxgo\.exe[ \t]*$' -or
-        $nestedLines[1] -cnotmatch '^[ \t]+PortableCommandAlias:[ \t]*pxgo[ \t]*$') {
-        throw 'WinGet nested executable or portable command alias conflicts with PxGo'
+    # WinGet 0.7.1 used per-architecture nested files; subsequent releases
+    # use a single top-level nested file. Both are valid for identical ZIPs.
+    $globalNested = $nestedBlock.Success
+    if ($globalNested) {
+        $nestedLines = @($nestedBlock.Groups['body'].Value -split '\r?\n' |
+            Where-Object { $_ -notmatch '^[ \t]*(#|$)' })
+        if ($nestedLines.Count -ne 2 -or
+            $nestedLines[0] -cnotmatch '^-[ \t]+RelativeFilePath:[ \t]*pxgo\.exe[ \t]*$' -or
+            $nestedLines[1] -cnotmatch '^[ \t]+PortableCommandAlias:[ \t]*pxgo[ \t]*$') {
+            throw 'WinGet nested executable or portable command alias conflicts with PxGo'
+        }
     }
 
     $entries = @{}
@@ -135,7 +137,11 @@ function Assert-WingetInstallerManifest {
         if ($null -eq $current) {
             throw "WinGet installer field without architecture: $line"
         }
-        if ($line -cmatch '^[ \t]+([A-Za-z][A-Za-z0-9]*):[ \t]*(.*?)[ \t]*$') {
+        if ($line -cmatch '^[ \t]+-[ \t]+RelativeFilePath:[ \t]*(.*?)[ \t]*$') {
+            $key = 'RelativeFilePath'
+            $value = $Matches[1]
+        }
+        elseif ($line -cmatch '^[ \t]+([A-Za-z][A-Za-z0-9]*):[ \t]*(.*?)[ \t]*$') {
             $key = $Matches[1]
             $value = $Matches[2]
         } else {
@@ -153,8 +159,20 @@ function Assert-WingetInstallerManifest {
     foreach ($arch in $ExpectedInstallers.Keys) {
         $actual = $entries[$arch]
         $expected = $ExpectedInstallers[$arch]
-        if ($null -eq $actual -or $actual.Count -ne 2 -or
-            $actual['InstallerUrl'] -cne $expected.Url -or
+        if ($null -eq $actual) {
+            throw "WinGet $arch installer is missing"
+        }
+        if ($globalNested) {
+            if ($actual.Count -ne 2) {
+                throw "WinGet $arch has unexpected per-architecture installer fields"
+            }
+        } elseif ($actual.Count -ne 5 -or
+                  $actual['NestedInstallerFiles'] -cne '' -or
+                  $actual['RelativeFilePath'] -cne 'pxgo.exe' -or
+                  $actual['PortableCommandAlias'] -cne 'pxgo') {
+            throw "WinGet $arch nested executable or portable command alias conflicts with PxGo"
+        }
+        if ($actual['InstallerUrl'] -cne $expected.Url -or
             $actual['InstallerSha256'] -cnotmatch '^[0-9a-fA-F]{64}$' -or
             $actual['InstallerSha256'].ToLowerInvariant() -cne $expected.Sha256) {
             throw "WinGet $arch URL/SHA256 conflicts with immutable GitHub Release assets"
