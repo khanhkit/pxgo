@@ -44,6 +44,11 @@ func run() error {
 	return runTray(cmd, func() {
 		if err := quitBackground(pxgo, os.Args[1:]); err != nil {
 			logEarlyError(err)
+			// The tray owns this child; failed shutdown must not leave a
+			// hidden proxy process indefinitely after Quit was requested.
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
 		}
 	})
 }

@@ -109,3 +109,8 @@ test("PxGo OCR project rule merges default language rules and covers proxy secur
     assert.match(rule, new RegExp(focus, "i"));
   }
 });
+
+test("persistent Windows real-AD runner removes stale extracted files", async () => {
+  const y = await read(".github/workflows/real-ad-verification.yml");
+  assert.match(y, /Remove-Item -LiteralPath source -Recurse -Force/);
+});
