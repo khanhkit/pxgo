@@ -94,7 +94,7 @@ function Invoke-RestMethod {
             'wrong-upstream-sha' { if ($Uri -like '*.installer.yaml') { $yaml = $yaml.Replace($x64Digest, ('a' * 64)) } }
             'wrong-upstream-url' { if ($Uri -like '*.installer.yaml') { $yaml = $yaml.Replace($x64Url, 'https://example.com/evil.zip') } }
             'wrong-upstream-version' { if ($Uri -like '*KhanhKit.PxGo.yaml') { $yaml = $yaml.Replace('PackageVersion: 0.9.0', 'PackageVersion: 0.9.1') } }
-            'duplicate-installer' { if ($Uri -like '*.installer.yaml') { $yaml += "`n- Architecture: x64`n  InstallerUrl: $x64Url`n  InstallerSha256: $x64Digest`n" } }
+            'duplicate-installer' { if ($Uri -like '*.installer.yaml') { $yaml = $yaml.Replace('ManifestType: installer', "- Architecture: x64`n  InstallerUrl: $x64Url`n  InstallerSha256: $x64Digest`nManifestType: installer") } }
             'duplicate-package-identity' { if ($Uri -like '*.installer.yaml') { $yaml += "`nPackageIdentifier: Malicious.Proxy`n" } }
             'duplicate-installers-key' { if ($Uri -like '*.installer.yaml') { $yaml += "`nInstallers: []`n" } }
             'unrecognized-list-item' { if ($Uri -like '*.installer.yaml') { $yaml = $yaml.Replace('ManifestType: installer', "- SurprisingKey: suspicious`nManifestType: installer") } }
