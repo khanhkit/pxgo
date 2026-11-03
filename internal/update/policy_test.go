@@ -200,3 +200,24 @@ func TestResolveProviderPortableCellarNamedProfileIsDirect(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveProviderNonPxGoManagerShapedPathsStayDirect(t *testing.T) {
+	for _, tc := range []struct {
+		goos string
+		file string
+	}{
+		{"darwin", "/tmp/Cellar/other/1.0/bin/pxgo"},
+		{"linux", "/opt/sandbox/Cellar/notpxgo/1.0/bin/pxgo"},
+		{"windows", "C:/tmp/not-scoop/apps/other/current/pxgo.exe"},
+		{"windows", "C:/tmp/scoop/apps/other/current/pxgo.exe"},
+		{"windows", "C:/tmp/winget/packages/OtherApp_1.0/pxgo.exe"},
+		{"windows", "C:/tmp/not-winget/packages/KhanhKit.PxGo_test/pxgo.exe"},
+	} {
+		for _, configured := range []Provider{ProviderAuto, ProviderDirect} {
+			got, err := ResolveProvider(configured, tc.file, tc.goos)
+			if err != nil || got != ProviderDirect {
+				t.Errorf("unrelated manager-shaped path must remain portable: %q %q got=%q err=%v", tc.goos, tc.file, got, err)
+			}
+		}
+	}
+}

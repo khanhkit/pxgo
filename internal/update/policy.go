@@ -106,7 +106,8 @@ var (
 	wingetMachineRoot = regexp.MustCompile(`^[a-z]:/program files(?: \(x86\))?/winget/packages$`)
 	// Hint only when the path has a package-manager install structure, not
 	// merely a Windows username or a directory named like a manager.
-	brewManagedExecutableHint = regexp.MustCompile(`(?i)/cellar/[^/]+/[^/]+/bin/pxgo$`)
+	brewManagedExecutableHint = regexp.MustCompile(`(?i)/cellar/pxgo/[^/]+/bin/pxgo$`)
+	brewDefaultRootHint       = regexp.MustCompile(`(?i)^(/opt/homebrew|/usr/local|/home/linuxbrew/\.linuxbrew)/cellar/[^/]+/[^/]+/bin/pxgo$`)
 )
 
 func managedPath(value string, caseInsensitive bool) string {
@@ -228,17 +229,45 @@ func detectManagedProviderHint(executable, goos string) (Provider, bool) {
 	full := managedPath(executable, strings.EqualFold(goos, goosWindows))
 	switch strings.ToLower(strings.TrimSpace(goos)) {
 	case goosWindows:
-		switch {
-		case strings.Contains(full, "/scoop/apps/"), strings.Contains(full, "/scoop/shims/"):
+		// A weak hint must identify PxGo or a recognized manager root; unrelated
+		// software under a directory named scoop/winget stays portable.
+		if i := strings.LastIndex(full, "/scoop/apps/"); i >= 0 {
+			root := full[:i+len("/scoop")]
+			item := full[i+len("/scoop/apps/"):]
+			if strings.HasPrefix(item, "pxgo/") || scoopDefaultRoot.MatchString(root) ||
+				root == managedEnvRoot("SCOOP", true) || root == managedEnvRoot("SCOOP_GLOBAL", true) {
+				return ProviderScoop, true
+			}
+		}
+		if strings.HasSuffix(full, "/scoop/shims/pxgo.exe") {
 			return ProviderScoop, true
-		case strings.Contains(full, "/winget/packages/"), strings.Contains(full, "/winget/links/"):
+		}
+		if i := strings.LastIndex(full, "/winget/packages/"); i >= 0 {
+			root := full[:i+len("/winget/packages")]
+			item := full[i+len("/winget/packages/"):]
+			packageDir := strings.SplitN(item, "/", 2)[0]
+			if strings.HasPrefix(packageDir, "khanhkit.pxgo") ||
+				wingetUserRoot.MatchString(root) || wingetMachineRoot.MatchString(root) {
+				return ProviderWinGet, true
+			}
+		}
+		if strings.HasSuffix(full, "/winget/links/pxgo.exe") {
 			return ProviderWinGet, true
 		}
 	case goosDarwin, goosLinux:
-		// A manager-shaped path is ambiguous even if case prevents it from
-		// matching the genuine case-sensitive Homebrew root.
-		if brewManagedExecutableHint.MatchString(full) {
+		// Preserve fail-closed behavior for fake PxGo Cellar layouts and invalid
+		// formulas below official roots, but not an unrelated formula in /tmp.
+		if brewManagedExecutableHint.MatchString(full) || brewDefaultRootHint.MatchString(full) {
 			return ProviderBrew, true
+		}
+		for _, root := range []string{
+			managedEnvRoot("HOMEBREW_PREFIX", false),
+			strings.TrimSuffix(managedEnvRoot("HOMEBREW_CELLAR", false), "/Cellar"),
+		} {
+			if root != "" && strings.HasPrefix(full, root+"/Cellar/") &&
+				strings.HasSuffix(full, "/bin/pxgo") {
+				return ProviderBrew, true
+			}
 		}
 	}
 	return "", false
