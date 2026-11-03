@@ -84,7 +84,7 @@ function Get-UniqueManifestScalar {
     $pattern = '(?m)^' + [regex]::Escape($Name) + ':[ \t]*([^\r\n# \t]+)[ \t]*$'
     $found = [regex]::Matches($Text, $pattern)
     if ($found.Count -ne 1) {
-        throw "missing or ambiguous WinGet $Name (matches=$($found.Count), length=$($Text.Length), firstCode=$([int]$Text[0]))"
+        throw "missing or ambiguous WinGet $Name (matches=$($found.Count), length=$($Text.Length), firstCode=$([int]$Text[0]), pattern=$pattern, prefix=$($Text.Substring(0, [Math]::Min(42, $Text.Length))))"
     }
     return $found[0].Groups[1].Value
 }
