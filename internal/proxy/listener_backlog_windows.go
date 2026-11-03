@@ -3,10 +3,12 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"strconv"
+	"syscall"
 
 	"golang.org/x/sys/windows"
 )
@@ -16,8 +18,36 @@ import (
 // machine-wide networking settings and remains independent of AUTO admission.
 func listenProxyTCP(addr string) (net.Listener, error) {
 	text := os.Getenv("PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG")
+	// Research-only pre-listen cap for both standard Go and explicit WinSock
+	// backlog listeners. Preserve original behavior when absent.
+	capText := os.Getenv("PXGO_R149_WINDOWS_PRELISTEN_BUFFER_BYTES")
+	capBytes := 0
+	if capText != "" {
+		value, e := strconv.Atoi(capText)
+		if e != nil || value < 4096 || value > 1<<20 {
+			return nil, fmt.Errorf("R149 Windows pre-listen socket buffer must be 4096..1048576 bytes")
+		}
+		capBytes = value
+	}
 	if text == "" {
-		return net.Listen("tcp", addr)
+		if capBytes == 0 {
+			return net.Listen("tcp", addr)
+		}
+		lc := net.ListenConfig{Control: func(network, address string, raw syscall.RawConn) error {
+			var controlErr error
+			err := raw.Control(func(fd uintptr) {
+				controlErr = windows.SetsockoptInt(windows.Handle(fd), windows.SOL_SOCKET, windows.SO_RCVBUF, capBytes)
+				if controlErr != nil {
+					return
+				}
+				controlErr = windows.SetsockoptInt(windows.Handle(fd), windows.SOL_SOCKET, windows.SO_SNDBUF, capBytes)
+			})
+			if err != nil {
+				return err
+			}
+			return controlErr
+		}}
+		return lc.Listen(context.Background(), "tcp", addr)
 	}
 	backlog, err := strconv.Atoi(text)
 	if err != nil || backlog < 200 || backlog > 65535 {
@@ -59,6 +89,16 @@ func listenProxyTCP(addr string) (net.Listener, error) {
 	// The raw Winsock handle is owned here only until os.NewFile adopts it.
 	// Closing the raw socket after file.Close would double-close a reused handle.
 	rawOwned := true
+	if capBytes > 0 {
+		if err := windows.SetsockoptInt(socket, windows.SOL_SOCKET, windows.SO_RCVBUF, capBytes); err != nil {
+			_ = windows.Closesocket(socket)
+			return nil, fmt.Errorf("R149 Windows backlog receive buffer setup: %w", err)
+		}
+		if err := windows.SetsockoptInt(socket, windows.SOL_SOCKET, windows.SO_SNDBUF, capBytes); err != nil {
+			_ = windows.Closesocket(socket)
+			return nil, fmt.Errorf("R149 Windows backlog send buffer setup: %w", err)
+		}
+	}
 	defer func() {
 		if rawOwned {
 			_ = windows.Closesocket(socket)

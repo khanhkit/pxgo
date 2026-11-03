@@ -131,7 +131,7 @@ jobs:
           go test ./internal/proxy -run '^TestR148NativeWinSockConfiguredBufferDeliversPayload$' -count=3 -v 2>&1 | Tee-Object -FilePath r148-winsock-buffer.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # R149: verify pre-bind/pre-connect options on native WinSock.
-          go test ./internal/proxy -run '^TestR149WindowsListenerAndDialerPreConnectBufferCaps$' -count=10 -v 2>&1 | Tee-Object -FilePath r148-winsock-buffer.log -Append
+          go test ./internal/proxy -run '^TestR149Windows' -count=10 -v 2>&1 | Tee-Object -FilePath r148-winsock-buffer.log -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Archive exact-sha Windows buffer experiment
         if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && inputs.linux_real_cgroup && always()

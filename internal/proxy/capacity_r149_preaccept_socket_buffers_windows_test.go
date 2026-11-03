@@ -108,3 +108,59 @@ func TestR149WindowsListenerAndDialerPreConnectBufferCaps(t *testing.T) {
 	}
 	t.Logf("R149_WINDOWS_PREACCEPT_BUFFERS_RESULT listener_raw_control=true dial_raw_control=true socket_inheritance=true payload_ok=true")
 }
+
+// Preserve BOTH the ordinary Windows net.Listen path and the separately
+// opted-in SOMAXCONN_HINT backlog. The listener may not silently lose its
+// pre-accept buffer cap when the backlog override is configured.
+func TestR149WindowsProxyListenerPreacceptCapWithAndWithoutCustomBacklog(t *testing.T) {
+	for _, mode := range []string{"ordinary", "backlog-2048"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("PXGO_R149_WINDOWS_PRELISTEN_BUFFER_BYTES", "65536")
+			if mode == "backlog-2048" {
+				t.Setenv("PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG", "2048")
+			} else {
+				t.Setenv("PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG", "")
+			}
+			ln, err := listenProxyTCP("127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+			c, err := net.DialTimeout("tcp", ln.Addr().String(), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			accepted, err := ln.Accept()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer accepted.Close()
+			tcp, ok := accepted.(*net.TCPConn)
+			if !ok {
+				t.Fatalf("expected TCPConn got %T", accepted)
+			}
+			read, write, err := r149WinSocketBufferValues(tcp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if read > 4*65536 || write > 4*65536 {
+				t.Fatalf("R149_WIN_BACKLOG_SOCKET_BUFFER_NOT_INHERITED: mode=%s read=%d write=%d", mode, read, write)
+			}
+			t.Logf("R149_WIN_LISTENER_BACKLOG_RESULT mode=%s requested=65536 accepted_read=%d accepted_write=%d inherited=true", mode, read, write)
+		})
+	}
+}
+
+func TestR149WindowsInvalidPrelistenBufferFailsClosed(t *testing.T) {
+	t.Setenv("PXGO_R149_WINDOWS_PRELISTEN_BUFFER_BYTES", "bad")
+	t.Setenv("PXGO_EXPERIMENTAL_WINDOWS_TCP_BACKLOG", "")
+	listener, err := listenProxyTCP("127.0.0.1:0")
+	if listener != nil {
+		_ = listener.Close()
+		t.Fatal("invalid buffer must not open a listener")
+	}
+	if err == nil {
+		t.Fatal("invalid buffer must fail closed")
+	}
+}
