@@ -1552,12 +1552,15 @@ jobs:
           grep -F 'oom_kill_delta=0 peer_cgroup_separate=true' benchmarks/r148-proxy-capped-cgroup.log
           # R148 true end-to-end delivery: upstream must receive every byte.
           # Same 8 tunnels x 4MiB and finite cgroups in both trials.
-          for profile in default cap64; do
+          for scenario in fast slow; do
+            slow=""
+            if [ "$scenario" = slow ]; then slow=10; fi
+            for profile in default cap64; do
             docker rm -f peer-r147 pxgo-r147-proxy >/dev/null 2>&1 || true
             docker run --detach --name peer-r147 --network "$network" --memory 128m --memory-swap 128m \
               --pids-limit 128 --cpus 2 --read-only --cap-drop ALL --security-opt no-new-privileges:true \
               --user 65532:65532 --tmpfs /tmp:rw,nosuid,nodev,size=16m \
-              -e PXGO_R147_ROLE=peer -e PXGO_R147_TUNNELS=8 -e PXGO_R148_PEER_WAIT_CAP=1 -e PXGO_R148_PEER_DRAIN=1 \
+              -e PXGO_R147_ROLE=peer -e PXGO_R147_TUNNELS=8 -e PXGO_R148_PEER_WAIT_CAP=1 -e PXGO_R148_PEER_DRAIN=1 -e PXGO_R148_SLOW_READ_MS="$slow" \
               -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
               --entrypoint /work/pxgo-cgroup.test "$image" \
               -test.run '^TestR147PeerClientAndUpstreamInDifferentMemcg$' -test.v -test.count=1 -test.timeout=55s
@@ -1570,13 +1573,17 @@ jobs:
               -v "$(pwd)/benchmarks/r128-cgroup.test:/work/pxgo-cgroup.test:ro" \
               --entrypoint /work/pxgo-cgroup.test "$image" \
               -test.run '^TestR147ProxyOnlyCgroupMemoryObservedWithIsolatedExternalPeers$' -test.v -test.count=1 -test.timeout=45s \
-              | tee "benchmarks/r148-$profile-drain-proxy.log"
+              | tee "benchmarks/r148-$scenario-$profile-drain-proxy.log"
             peer_exit="$(docker wait peer-r147)"
-            docker logs peer-r147 2>&1 | tee "benchmarks/r148-$profile-drain-peer.log"
+            docker logs peer-r147 2>&1 | tee "benchmarks/r148-$scenario-$profile-drain-peer.log"
             test "$peer_exit" = 0
-            grep -F 'R148_DRAIN_END_TO_END_RESULT tunnels=8 delivered_bytes=33554432' "benchmarks/r148-$profile-drain-peer.log"
-            grep -F 'all_payload_received=true' "benchmarks/r148-$profile-drain-peer.log"
-            grep -F 'oom_kill_delta=0 peer_cgroup_separate=true' "benchmarks/r148-$profile-drain-proxy.log"
+            grep -F 'R148_DRAIN_END_TO_END_RESULT tunnels=8 delivered_bytes=33554432' "benchmarks/r148-$scenario-$profile-drain-peer.log"
+            grep -F 'all_payload_received=true' "benchmarks/r148-$scenario-$profile-drain-peer.log"
+            grep -F 'oom_kill_delta=0 peer_cgroup_separate=true' "benchmarks/r148-$scenario-$profile-drain-proxy.log"
+              if [ "$scenario" = slow ]; then
+                grep -F 'R148_SLOW_CONSUMER_RESULT tunnels=8 bytes=33554432' "benchmarks/r148-$scenario-$profile-drain-peer.log"
+              fi
+            done
           done
       - name: Preserve exact-sha kernel-pressure evidence
         if: always()

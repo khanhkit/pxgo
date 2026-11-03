@@ -216,6 +216,14 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 	var wg sync.WaitGroup
 	var upstreamReceived atomic.Int64
 	drain := os.Getenv("PXGO_R148_PEER_DRAIN") == "1"
+	slowMS := 0
+	if raw := os.Getenv("PXGO_R148_SLOW_READ_MS"); raw != "" {
+		n, e := strconv.Atoi(raw)
+		if e != nil || n < 1 || n > 100 {
+			t.Fatalf("invalid slow reader delay %q", raw)
+		}
+		slowMS = n
+	}
 	hold := make(chan struct{})
 	go func() {
 		for i := 0; i < tunnels; i++ {
@@ -228,8 +236,20 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 				defer wg.Done()
 				defer c.Close()
 				if drain {
-					n, _ := io.Copy(io.Discard, c)
-					upstreamReceived.Add(n)
+					if slowMS > 0 {
+						buf := make([]byte, 16<<10)
+						for {
+							n, e := c.Read(buf)
+							upstreamReceived.Add(int64(n))
+							if e != nil {
+								break
+							}
+							time.Sleep(time.Duration(slowMS) * time.Millisecond)
+						}
+					} else {
+						n, _ := io.Copy(io.Discard, c)
+						upstreamReceived.Add(n)
+					}
 				} else {
 					<-hold
 				}
@@ -323,7 +343,10 @@ func TestR147PeerClientAndUpstreamInDifferentMemcg(t *testing.T) {
 		if received != want {
 			t.Fatalf("upstream confirmed %d of %d required delivered bytes", received, want)
 		}
-		t.Logf("R148_DRAIN_END_TO_END_RESULT tunnels=%d delivered_bytes=%d send_elapsed_ms=%d all_payload_received=true", tunnels, received, sendElapsed.Milliseconds())
+		t.Logf("R148_DRAIN_END_TO_END_RESULT tunnels=%d delivered_bytes=%d send_elapsed_ms=%d all_payload_received=true slow_read_ms=%d", tunnels, received, sendElapsed.Milliseconds(), slowMS)
+		if slowMS > 0 {
+			t.Logf("R148_SLOW_CONSUMER_RESULT tunnels=%d bytes=%d send_elapsed_ms=%d slow_read_ms=%d complete_delivery=true", tunnels, received, sendElapsed.Milliseconds(), slowMS)
+		}
 	}
 	t.Logf("R147_SIDE_CAR_CONNECT_RESULT tunneled=%d sent_bytes=%v total_sent_bytes=%d peer_memcg_separate=true", tunnels, sent, func() int {
 		n := 0
