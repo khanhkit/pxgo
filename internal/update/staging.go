@@ -196,7 +196,7 @@ func (s Stager) StageCheck(ctx context.Context, check CheckResult) (StagedCandid
 
 	binaryName := productName
 	if goos == goosWindows {
-		binaryName = "pxgo.exe"
+		binaryName = windowsExecutableName
 	}
 	binaryPath := filepath.Join(dir, binaryName)
 	if err := extractCandidate(archivePath, assetName, binaryName, binaryPath); err != nil {
