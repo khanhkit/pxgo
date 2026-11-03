@@ -38,6 +38,7 @@ func TestEnsureCanonicalINIFreshDocumentsOptionalFeatures(t *testing.T) {
 	for _, want := range []string{
 		"# pxgo-config-schema: 1",
 		"listen = 0.0.0.0",
+		"allow = 127.0.0.0/8,::1",
 		"auto_update = install",
 		"update_interval = 24h",
 		"update_channel = stable",
@@ -338,5 +339,24 @@ func TestSchemaUpgradeBackupFailureLeavesOriginalUntouched(t *testing.T) {
 	}
 	if string(got) != string(original) {
 		t.Fatalf("failed upgrade mutated config:\n%s", got)
+	}
+}
+
+func TestBootstrapLoopbackOnlyByDefault(t *testing.T) {
+	if got := Default().Allow; got != "127.0.0.0/8,::1" {
+		t.Fatalf("default allow=%q want loopback-only", got)
+	}
+	dir := t.TempDir()
+	setBootstrapConfigDir(t, dir)
+	path, _, err := EnsureCanonicalINI("", SystemProxyImport{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "allow = 127.0.0.0/8,::1") {
+		t.Fatalf("new config is open to remote clients: %s", raw)
 	}
 }

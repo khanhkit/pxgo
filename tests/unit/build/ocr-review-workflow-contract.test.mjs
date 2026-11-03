@@ -30,6 +30,8 @@ test("trusted-base OCR dispatcher only handles same-repo non-draft PRs to main",
   assert.ok(y.includes("--wait-completion"));
   assert.ok(y.includes("--worker-input \"pr_number="));
   assert.ok(y.includes("--worker-input \"base_ref="));
+  assert.ok(y.includes("--worker-input \"base_sha="));
+  assert.ok(y.includes("if grep -Fq '      base_sha:' .github/workflows/ocr-review-worker.yml"));
   assert.doesNotMatch(y, /OCR_LLM_AUTH_TOKEN|alibaba\/open-code-review@/);
 });
 
@@ -50,6 +52,8 @@ test("worker validates PR SHA and repo before using OCR secrets", async () => {
     "pullRequest.head.repo?.full_name !== process.env.GITHUB_REPOSITORY",
     "pullRequest.head.sha !== process.env.SOURCE_SHA",
     "pullRequest.base.ref !== process.env.BASE_REF",
+    "pullRequest.base.sha !== process.env.BASE_SHA",
+    "context.sha !== process.env.BASE_SHA",
     "Wait for scheduler claim before secret-bearing review",
     "Revalidate requested PR context after scheduler claim",
     "RUNNER_READY_CONTEXT",
@@ -108,4 +112,9 @@ test("PxGo OCR project rule merges default language rules and covers proxy secur
   for (const focus of ["NTLM", "Kerberos", "PAC", "DNS", "DoH", "SSRF", "data races"]) {
     assert.match(rule, new RegExp(focus, "i"));
   }
+});
+
+test("persistent Windows real-AD runner removes stale extracted files", async () => {
+  const y = await read(".github/workflows/real-ad-verification.yml");
+  assert.match(y, /Remove-Item -LiteralPath source -Recurse -Force/);
 });

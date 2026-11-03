@@ -18,6 +18,7 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: write
@@ -60,14 +61,24 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          # The trusted-base worker may predate the optional base SHA input
+          # while this PR upgrades the dispatcher. Check the checked-out main
+          # version before advertising new workflow_dispatch inputs.
+          worker_inputs=(
+            --worker-input "pr_number=${PR_NUMBER}"
+            --worker-input "base_ref=${BASE_REF}"
+          )
+          if grep -Fq '      base_sha:' .github/workflows/ocr-review-worker.yml; then
+            worker_inputs+=(--worker-input "base_sha=${BASE_SHA}")
+          fi
           node scripts/ci/github-runner-fallback.mjs \
             --logical-task ocr-review \
             --source-sha "${HEAD_SHA}" \
             --workflow-ref "${BASE_REF}" \
             --manifest .github/ci/ocr-review-job.json \
             --worker-workflow ocr-review-worker.yml \
-            --worker-input "pr_number=${PR_NUMBER}" \
-            --worker-input "base_ref=${BASE_REF}" \
+            "${worker_inputs[@]}" \
             --wait-completion

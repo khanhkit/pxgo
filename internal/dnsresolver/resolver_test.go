@@ -525,3 +525,25 @@ func TestDoHDialerPreservesValidatedTLSAndDNSPayload(t *testing.T) {
 		t.Fatal("DoH bypassed custom bootstrap dialer")
 	}
 }
+
+func TestDoHDoesNotFollowRedirectsEvenWithCustomClient(t *testing.T) {
+	var redirected atomic.Int32
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirected.Add(1)
+	}))
+	defer redirectTarget.Close()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, redirectTarget.URL+"/dns-query", http.StatusFound)
+	}))
+	defer server.Close()
+	p, err := newPolicy(server.URL+"/dns-query", time.Second, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.LookupIP(context.Background(), "redirect.example.test"); err == nil {
+		t.Fatal("expected DoH redirect to fail without following")
+	}
+	if got := redirected.Load(); got != 0 {
+		t.Fatalf("DoH followed redirect to another service: %d requests", got)
+	}
+}

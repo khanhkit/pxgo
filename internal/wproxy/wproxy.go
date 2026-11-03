@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/khanhkit/pxgo/internal/dnscache"
 	"github.com/khanhkit/pxgo/internal/pac"
@@ -809,7 +810,10 @@ func (w *Wproxy) isNoProxy(netloc Server) bool {
 	if cache == nil {
 		cache = dnscache.Default()
 	}
-	ips, _ := cache.LookupContext(context.Background(), host)
+	// A stalled DNS/PAC resolver must not block proxy selection forever.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ips, _ := cache.LookupContext(ctx, host)
 	for _, ip := range ips {
 		if w.NoProxy.Contains(ip) {
 			return true

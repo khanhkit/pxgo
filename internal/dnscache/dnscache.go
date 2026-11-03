@@ -4,6 +4,7 @@ package dnscache
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"time"
@@ -82,6 +83,9 @@ func Lookup(host string) []net.IP {
 // remain context-cancellable, returned IP values are defensive copies, and a
 // stale network generation cannot repopulate the active cache.
 func (c *Cache) LookupContext(ctx context.Context, host string) ([]net.IP, error) {
+	if ctx == nil {
+		return nil, errors.New("dns cache: nil context")
+	}
 	if c == nil {
 		return nil, nil
 	}
