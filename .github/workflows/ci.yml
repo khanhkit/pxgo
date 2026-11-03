@@ -132,6 +132,11 @@ jobs:
             throw 'WinGet publisher PowerShell has parser errors'
           }
 
+      - name: Verify WinGet retry-only failure recovery
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-winget-retry.ps1
+
       - name: Native WinHTTP resolver fixtures
         if: runner.os == 'Windows'
         shell: pwsh
