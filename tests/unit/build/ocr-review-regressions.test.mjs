@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 import test from "node:test";
 import { buildClaimStatus, isRetryableGhRead, parseWorkerInputs } from "../../../scripts/ci/github-runner-fallback.mjs";
 import { summarizeRunnerSamples } from "../../../scripts/ci/summarize-runner-fallback.mjs";
@@ -123,4 +125,57 @@ test("queue timeout is neutral-looking but cannot authorize OCR, and fallback wa
   assert.equal(failed.conclusion, "failure");
   assert.equal(failure.events.filter(([kind]) => kind === "dispatch").length, 1,
     "a failed cancellation must never dispatch a second worker");
+});
+
+
+test("actual trusted-base OCR claim script rejects denied and forged success statuses", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/ocr-review-worker.yml", import.meta.url),
+    "utf8"
+  );
+  const stepName = "      - name: Wait for scheduler claim before secret-bearing review";
+  const begin = workflow.indexOf(stepName);
+  assert.ok(begin >= 0, "trusted-base claim gate not present");
+  const next = workflow.indexOf("\n      - name: ", begin + stepName.length);
+  assert.ok(next > begin, "claim gate step boundary missing");
+  const step = workflow.slice(begin, next);
+  const marker = "          script: |\n";
+  const start = step.indexOf(marker);
+  assert.ok(start >= 0, "claim gate action script missing");
+  const script = step.slice(start + marker.length)
+    .split("\n")
+    .map((line) => line.startsWith("            ") ? line.slice(12) : line)
+    .join("\n");
+
+  const claimContext = "pxgo/runner-claim/ocr-review/fictional-1/2";
+  async function evaluateClaim(state, description) {
+    const events = [];
+    const github = {
+      rest: { repos: { listCommitStatusesForRef: async (args) => {
+        assert.equal(args.ref, "0123456789abcdef");
+        assert.equal(args.per_page, 100);
+        return { data: [{ context: claimContext, state, description }] };
+      } } },
+    };
+    await vm.runInNewContext("(async () => {\n" + script + "\n})()", {
+      context: { repo: { owner: "khanhkit", repo: "pxgo" } },
+      process: { env: {
+        SOURCE_SHA: "0123456789abcdef",
+        CLAIM_CONTEXT: claimContext,
+        EXPECTED_RUNNER_LABEL: "ubuntu-latest",
+      } },
+      github,
+      core: {
+        info: (message) => events.push(["grant", message]),
+        setFailed: (message) => events.push(["denied", message]),
+      },
+      Date, Promise,
+    }, { timeout: 1000 });
+    return events.map(([kind]) => kind);
+  }
+  assert.deepEqual(await evaluateClaim("success", "runner claim denied: ubuntu-latest"), ["denied"]);
+  assert.deepEqual(await evaluateClaim("success", "runner claim granted: ubuntu-24.04-arm"), ["denied"]);
+  assert.deepEqual(await evaluateClaim("failure", "runner claim granted: ubuntu-latest"), ["denied"]);
+  assert.deepEqual(await evaluateClaim("success", "runner claim granted: ubuntu-latest "), ["denied"]);
+  assert.deepEqual(await evaluateClaim("success", "runner claim granted: ubuntu-latest"), ["grant"]);
 });
