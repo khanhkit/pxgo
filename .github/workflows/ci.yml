@@ -67,9 +67,11 @@ jobs:
         with:
           version: v2.12.2
 
-      - name: Verify OpenCodeReview workflow contracts
+      - name: Verify OpenCodeReview workflow and claim-fallback regressions
         if: runner.os == 'Linux'
-        run: node --test tests/unit/build/ocr-review-workflow-contract.test.mjs
+        run: |
+          node --test tests/unit/build/ocr-review-workflow-contract.test.mjs \
+            tests/unit/build/ocr-review-regressions.test.mjs
 
       - name: Verify release contracts
         if: runner.os == 'Linux'
