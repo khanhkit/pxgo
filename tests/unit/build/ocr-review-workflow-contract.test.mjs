@@ -123,3 +123,11 @@ test("persistent Windows real-AD runner removes stale extracted files", async ()
   const y = await read(".github/workflows/real-ad-verification.yml");
   assert.match(y, /Remove-Item -LiteralPath source -Recurse -Force/);
 });
+
+
+test("main CI executes deterministic OCR fallback regression, not only static contract", async () => {
+  const y = await read(".github/workflows/ci.yml");
+  assert.match(y, /Verify OpenCodeReview workflow and claim-fallback regressions/);
+  assert.match(y, /node --test tests\/unit\/build\/ocr-review-workflow-contract\.test\.mjs/);
+  assert.match(y, /tests\/unit\/build\/ocr-review-regressions\.test\.mjs/);
+});
