@@ -267,6 +267,8 @@ grep -Fq 'WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}'
 grep -Fq 'actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68' .github/workflows/release.yml || bad "WinGet runtime setup is not immutable-SHA pinned"
 [[ -f .github/workflows/winget-sync.yml ]] || bad "manual WinGet synchronization workflow missing"
 grep -Fq 'gh workflow run winget-sync.yml -R khanhkit/pxgo --ref main -f tag=' docs/distribution-identity.md || bad "WinGet post-promotion retry instructions are missing"
+[[ -f scripts/test-winget-retry.ps1 ]] || bad "WinGet retry-only fault injection regression is missing"
+grep -Fq 'Verify WinGet retry-only failure recovery' .github/workflows/ci.yml || bad "WinGet fault injection test must run on native Windows CI"
 if [[ -f .github/workflows/winget-sync.yml ]]; then
   grep -Fq 'Sync WinGet exact version' .github/workflows/winget-sync.yml || bad "manual WinGet synchronization job missing"
   grep -Fq 'git merge-base --is-ancestor $tagSha origin/main' .github/workflows/winget-sync.yml || bad "manual WinGet sync does not constrain target tag to main history"
