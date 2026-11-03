@@ -31,6 +31,7 @@ test("trusted-base OCR dispatcher only handles same-repo non-draft PRs to main",
   assert.ok(y.includes("--worker-input \"pr_number="));
   assert.ok(y.includes("--worker-input \"base_ref="));
   assert.ok(y.includes("--worker-input \"base_sha="));
+  assert.ok(y.includes("if grep -Fq '      base_sha:' .github/workflows/ocr-review-worker.yml"));
   assert.doesNotMatch(y, /OCR_LLM_AUTH_TOKEN|alibaba\/open-code-review@/);
 });
 
