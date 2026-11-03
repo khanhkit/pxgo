@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isRetryableGhRead, parseWorkerInputs } from "../../../scripts/ci/github-runner-fallback.mjs";
+import { buildClaimStatus, isRetryableGhRead, parseWorkerInputs } from "../../../scripts/ci/github-runner-fallback.mjs";
 import { summarizeRunnerSamples } from "../../../scripts/ci/summarize-runner-fallback.mjs";
 import { waitForAttemptCompletion } from "../../../scripts/ci/runner-fallback.mjs";
 
@@ -38,4 +38,21 @@ test("worker completion polling is bounded", async () => {
 test("invalid worker dispatch inputs fail closed", () => {
   assert.throws(() => parseWorkerInputs(["BAD"]), /invalid worker input/);
   assert.deepEqual(parseWorkerInputs(["pr_number=10"]), { pr_number: "10" });
+});
+
+
+test("denied runner claim is a non-failing scheduling decision, never a grant", () => {
+  assert.deepEqual(buildClaimStatus("pending", "ubuntu-24.04-arm"), {
+    state: "pending",
+    description: "runner claim pending: ubuntu-24.04-arm",
+  });
+  assert.deepEqual(buildClaimStatus("denied", "ubuntu-24.04-arm"), {
+    state: "success",
+    description: "runner claim denied: ubuntu-24.04-arm",
+  });
+  assert.deepEqual(buildClaimStatus("granted", "ubuntu-latest"), {
+    state: "success",
+    description: "runner claim granted: ubuntu-latest",
+  });
+  assert.throws(() => buildClaimStatus("unexpected", "ubuntu-latest"), /invalid runner claim/);
 });
