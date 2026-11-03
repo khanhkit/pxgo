@@ -192,7 +192,13 @@ func newPolicy(raw string, timeout time.Duration, client *http.Client) (*Policy,
 		transport.Proxy = nil
 		client = &http.Client{Transport: transport}
 	}
-	return &Policy{endpoints: endpoints, timeout: normalizedTimeout(timeout), http: client}, nil
+	// DNS queries must not follow a redirect off the explicitly configured
+	// HTTPS endpoint (including HTTPS -> HTTP downgrades).
+	secured := *client
+	secured.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &Policy{endpoints: endpoints, timeout: normalizedTimeout(timeout), http: &secured}, nil
 }
 
 // SetDoHRootCAs installs explicit trusted roots for private DoH servers.
@@ -218,7 +224,9 @@ func (p *Policy) SetDoHRootCAs(roots *x509.CertPool) {
 		cloned.TLSClientConfig = cloned.TLSClientConfig.Clone()
 	}
 	cloned.TLSClientConfig.RootCAs = roots
-	p.http = &http.Client{Transport: cloned}
+	secured := *p.http
+	secured.Transport = cloned
+	p.http = &secured
 }
 
 // SetDoHDialContext installs a bootstrap-safe HTTPS dialer before DNS lookups.
@@ -240,7 +248,9 @@ func (p *Policy) SetDoHDialContext(dial func(context.Context, string, string) (n
 	transport := base.Clone()
 	transport.Proxy = nil // never use OS proxy settings (may point back to PxGo)
 	transport.DialContext = dial
-	p.http = &http.Client{Transport: transport}
+	secured := *p.http
+	secured.Transport = transport
+	p.http = &secured
 }
 
 func normalizedTimeout(timeout time.Duration) time.Duration {

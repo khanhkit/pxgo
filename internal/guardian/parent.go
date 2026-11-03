@@ -490,10 +490,9 @@ func normalizeParentStopError(err error) error {
 		return nil
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		// Explicit parent cancellation may race with a hung child reaping timeout
-		// on slower Windows runners. The shutdown request still owns the lifecycle,
-		// so timeout during that stop path is not a restartable runtime failure.
-		return nil
+		// A child that cannot be reaped even after Kill must not be reported as
+		// a clean shutdown: an old worker may still own the runtime.
+		return err
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {

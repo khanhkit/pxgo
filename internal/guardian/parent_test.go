@@ -174,6 +174,15 @@ func fastParentOptions() ParentOptions {
 	}
 }
 
+// Shutdown/reaping on busy Windows CI hosts can take longer than the 50ms
+// watchdog test budget. Do not confuse a scheduler delay with an unreaped
+// orphan; keep the production StopTimeout untouched and assert bounded stop.
+func stopLifecycleParentOptions() ParentOptions {
+	options := fastParentOptions()
+	options.StopTimeout = 300 * time.Millisecond
+	return options
+}
+
 func generationCount(path string) int {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -256,7 +265,7 @@ func TestTCGUARDPARENT030ContextStopIsNormalAndDoesNotRestart(t *testing.T) {
 	spec, countPath := helperSpec(t, "ready-stop")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- RunParent(ctx, spec, fastParentOptions()) }()
+	go func() { done <- RunParent(ctx, spec, stopLifecycleParentOptions()) }()
 
 	waitForGenerations(t, countPath, 1)
 	time.Sleep(80 * time.Millisecond)
@@ -278,7 +287,7 @@ func TestTCGUARDPARENT030StopIgnoredIsForceKilledAndReaped(t *testing.T) {
 	spec, countPath := helperSpec(t, "ready-ignore-stop")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- RunParent(ctx, spec, fastParentOptions()) }()
+	go func() { done <- RunParent(ctx, spec, stopLifecycleParentOptions()) }()
 	waitForGenerations(t, countPath, 1)
 	time.Sleep(30 * time.Millisecond)
 	started := time.Now()
@@ -412,5 +421,11 @@ func TestTCGUARDSOAKRepeatedReadyCrashRecycle(t *testing.T) {
 	got := generationCount(countPath)
 	if got < want || got > want+1 {
 		t.Fatalf("recycle soak generations=%d want %d..%d", got, want, want+1)
+	}
+}
+
+func TestGuardianStopReapDeadlineIsNotSilenced(t *testing.T) {
+	if err := normalizeParentStopError(context.DeadlineExceeded); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lost unreaped child timeout: %v", err)
 	}
 }

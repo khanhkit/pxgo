@@ -23,16 +23,8 @@ if ([string]::IsNullOrWhiteSpace($env:WINGET_CREATE_GITHUB_TOKEN)) {
     throw 'WINGET_CREATE_GITHUB_TOKEN is required for WinGet submission'
 }
 
-$wingetCreateVersion = '1.12.13.0'
-$wingetCreateSha256 = '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'
-$wingetCreateUrl = "https://github.com/microsoft/winget-create/releases/download/v$wingetCreateVersion/wingetcreate.exe"
-$wingetCreatePath = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
-
-Invoke-WebRequest -Uri $wingetCreateUrl -OutFile $wingetCreatePath -UseBasicParsing
-$actualHash = (Get-FileHash -Path $wingetCreatePath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actualHash -ne $wingetCreateSha256) {
-    throw "WingetCreate checksum mismatch: expected=$wingetCreateSha256 actual=$actualHash"
-}
+# This policy helper has no network or publication side effects.
+. (Join-Path $PSScriptRoot 'winget-manifest-integrity.ps1')
 
 $apiHeaders = @{
     'Authorization' = "Bearer $($env:WINGET_CREATE_GITHUB_TOKEN)"
@@ -40,9 +32,9 @@ $apiHeaders = @{
     'Accept' = 'application/vnd.github+json'
 }
 $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository/releases/tags/$Tag" -Headers $apiHeaders
-if ($release.draft -or $release.prerelease) {
-    throw "WinGet publication requires a stable GitHub Release: $Tag"
-}
+# The GitHub release artifact digest is authoritative for ZIP SHA256.
+# Manifest existence alone cannot establish idempotent convergence.
+$expectedInstallers = Get-ExpectedWingetInstallers -Release $release -Tag $Tag -Repository $Repository
 $releaseDate = ([DateTimeOffset]$release.published_at).UtcDateTime.ToString('yyyy-MM-dd')
 
 $baseUrl = "https://github.com/$Repository/releases/download/$Tag"
@@ -57,21 +49,23 @@ foreach ($url in @($x64Url, $arm64Url)) {
     }
 }
 
-# Idempotency: once the exact version is merged upstream, a workflow rerun must
-# not create another submission.
-$manifestPath = "manifests/k/KhanhKit/PxGo/$Version/KhanhKit.PxGo.yaml"
-$encodedPath = [System.Uri]::EscapeDataString($manifestPath).Replace('%2F', '/')
-$manifestApi = "https://api.github.com/repos/microsoft/winget-pkgs/contents/$encodedPath"
-try {
-    Invoke-RestMethod -Uri $manifestApi -Headers $apiHeaders | Out-Null
-    Write-Host "WinGet $PackageIdentifier $Version already exists upstream; submission is converged."
+# Verify both manifest identities and architecture-specific ZIP hashes.
+# Missing/unparseable installer metadata is never successful convergence.
+$manifestRoot = "manifests/k/KhanhKit/PxGo/$Version"
+$manifestApiRoot = "https://api.github.com/repos/microsoft/winget-pkgs/contents/$manifestRoot"
+$versionContent = Get-OptionalGitHubManifest -Uri "$manifestApiRoot/KhanhKit.PxGo.yaml" -Headers $apiHeaders
+if ($null -ne $versionContent) {
+    $installerContent = Get-OptionalGitHubManifest -Uri "$manifestApiRoot/KhanhKit.PxGo.installer.yaml" -Headers $apiHeaders
+    if ($null -eq $installerContent) {
+        throw "WinGet $PackageIdentifier $Version has a version manifest but lacks installer metadata"
+    }
+    Assert-WingetInstallerManifest -VersionContent $versionContent -InstallerContent $installerContent -PackageIdentifier $PackageIdentifier -Version $Version -ExpectedInstallers $expectedInstallers | Out-Null
+    Write-Host "WinGet $PackageIdentifier $Version has exact release URLs and SHA256 in upstream installer manifest."
     exit 0
 }
-catch {
-    $statusCode = [int]$_.Exception.Response.StatusCode
-    if ($statusCode -ne 404) {
-        throw
-    }
+$orphanInstaller = Get-OptionalGitHubManifest -Uri "$manifestApiRoot/KhanhKit.PxGo.installer.yaml" -Headers $apiHeaders
+if ($null -ne $orphanInstaller) {
+    throw "WinGet $PackageIdentifier $Version has installer metadata but lacks its version manifest"
 }
 
 # Avoid duplicate PRs on workflow re-runs while Microsoft moderation is pending.
@@ -79,8 +73,21 @@ $searchQuery = [System.Uri]::EscapeDataString("repo:microsoft/winget-pkgs is:pr 
 $pending = Invoke-RestMethod -Uri "https://api.github.com/search/issues?q=$searchQuery" -Headers $apiHeaders
 if ($pending.total_count -gt 0) {
     $urls = @($pending.items | ForEach-Object { $_.html_url }) -join ', '
-    Write-Host "WinGet submission already pending for $PackageIdentifier ${Version}: $urls"
-    exit 0
+    # A PR title does not establish the installer digests. Do not submit a
+    # duplicate or report unverified convergence.
+    throw "WinGet submission pending manual SHA verification for $PackageIdentifier $($Version): $urls"
+}
+
+$wingetCreateVersion = '1.12.13.0'
+$wingetCreateSha256 = '24042bd37915805615e6cf969ac57c6439124c3fe85823327f5f3fb24bd9ffea'
+$wingetCreateUrl = "https://github.com/microsoft/winget-create/releases/download/v$wingetCreateVersion/wingetcreate.exe"
+$wingetCreatePath = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
+
+# Download the pinned publisher only if a new submission is necessary.
+Invoke-WebRequest -Uri $wingetCreateUrl -OutFile $wingetCreatePath -UseBasicParsing
+$actualHash = (Get-FileHash -Path $wingetCreatePath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualHash -ne $wingetCreateSha256) {
+    throw "WingetCreate checksum mismatch: expected=$wingetCreateSha256 actual=$actualHash"
 }
 
 $prTitle = "New version: $PackageIdentifier version $Version"

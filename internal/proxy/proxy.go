@@ -239,6 +239,8 @@ func validateDownstreamCredentials(cfg config.Config) error {
 	return nil
 }
 
+const allowAllIPv4 = "*.*.*.*"
+
 func validateGatewaySecurity(cfg config.Config) error {
 	methods := clientAuthMethods(cfg.ClientAuth)
 	if isRemotePlaintextExposure(cfg) && containsClientAuthMethod(methods, authBasic) {
@@ -270,7 +272,7 @@ func hasRestrictiveAllow(allow string) bool {
 	for _, raw := range strings.Split(allow, ",") {
 		token := strings.ToLower(strings.TrimSpace(raw))
 		switch token {
-		case "", "*", "*.*.*.*", "0.0.0.0/0", "::/0":
+		case "", "*", allowAllIPv4, "0.0.0.0/0", "::/0":
 			return false
 		}
 	}
@@ -674,7 +676,7 @@ func (s *Server) isClientAllowed(remoteAddr string) bool {
 	if ip == nil {
 		return false
 	}
-	if s.cfg.Allow != "" && s.cfg.Allow != "*.*.*.*" && s.cfg.Allow != "0.0.0.0/0" {
+	if s.cfg.Allow != "" && s.cfg.Allow != allowAllIPv4 && s.cfg.Allow != "0.0.0.0/0" {
 		if s.allowSet.Contains(ip) {
 			return true
 		}

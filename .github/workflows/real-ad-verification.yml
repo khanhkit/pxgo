@@ -55,7 +55,7 @@ jobs:
         run: git archive --format=tar --output=real-ad-source.tar "$VERIFIED_SHA"
 
       - name: Upload canonical source snapshot
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: real-ad-source-${{ steps.ref.outputs.sha }}
           path: real-ad-source.tar
@@ -79,6 +79,11 @@ jobs:
       - name: Extract canonical source snapshot
         shell: pwsh
         run: |
+          # A persistent self-hosted runner can retain files absent from the
+          # current SHA. Remove the previous extraction before unpacking.
+          if (Test-Path -LiteralPath source) {
+            Remove-Item -LiteralPath source -Recurse -Force
+          }
           New-Item -ItemType Directory -Force -Path source | Out-Null
           tar -xf staged-source/real-ad-source.tar -C source
           if (-not (Test-Path source/go.mod)) {

@@ -273,11 +273,11 @@ func clientWithRedirectValidation(base *http.Client, validator URLValidator) *ht
 		if err := validator(req.URL.String(), true); err != nil {
 			return err
 		}
-		if prior != nil {
-			return prior(req, via)
-		}
 		if len(via) >= 10 {
 			return errors.New("too many redirects")
+		}
+		if prior != nil {
+			return prior(req, via)
 		}
 		return nil
 	}

@@ -1,0 +1,223 @@
+name: OpenCodeReview Worker
+run-name: portable/${{ inputs.logical_task }}/${{ inputs.attempt_id }}/${{ inputs.runner }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      logical_task:
+        required: true
+        type: choice
+        options: [ocr-review]
+      runner:
+        required: true
+        type: choice
+        options: [ubuntu-24.04-arm, ubuntu-latest, macos-15-intel]
+      source_sha:
+        required: true
+        type: string
+      attempt_id:
+        required: true
+        type: string
+      claim_context:
+        required: true
+        type: string
+      ready_context:
+        required: true
+        type: string
+      pr_number:
+        required: true
+        type: string
+      base_ref:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ocr-review-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  execute:
+    name: Portable ${{ inputs.logical_task }} (${{ inputs.runner }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: write
+    steps:
+      - name: Validate requested PR context before secret-bearing review
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v8.0.0
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_REF: ${{ inputs.base_ref }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pullNumber = Number(process.env.PR_NUMBER);
+            if (!Number.isSafeInteger(pullNumber) || pullNumber < 1) {
+              throw new Error('Invalid PR number');
+            }
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pullNumber,
+            });
+            if (pullRequest.state !== 'open' || pullRequest.draft) {
+              throw new Error('OCR review requires an open, non-draft PR');
+            }
+            if (pullRequest.head.repo?.full_name !== process.env.GITHUB_REPOSITORY) {
+              throw new Error('OCR review refuses fork PRs');
+            }
+            if (pullRequest.head.sha !== process.env.SOURCE_SHA) {
+              throw new Error('OCR review source SHA does not match current PR head');
+            }
+            if (pullRequest.base.ref !== process.env.BASE_REF) {
+              throw new Error('OCR review base ref does not match current PR base');
+            }
+            // GitHub workflow_dispatch resolves a mutable branch. Refuse to
+            // run a newer control plane than the base SHA checked by dispatcher.
+            if (pullRequest.base.sha !== process.env.BASE_SHA || context.sha !== process.env.BASE_SHA) {
+              throw new Error('OCR worker trusted base SHA changed during dispatch');
+            }
+
+      - name: Signal allocated runner readiness
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v8.0.0
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RUNNER_READY_CONTEXT: ${{ inputs.ready_context }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              sha: process.env.SOURCE_SHA,
+              state: 'success',
+              context: process.env.RUNNER_READY_CONTEXT,
+              description: 'runner allocated; waiting for scheduler claim',
+              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            });
+
+      - name: Wait for scheduler claim before secret-bearing review
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v8.0.0
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CLAIM_CONTEXT: ${{ inputs.claim_context }}
+          EXPECTED_RUNNER_LABEL: ${{ inputs.runner }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const sourceSha = process.env.SOURCE_SHA;
+            const claimContext = process.env.CLAIM_CONTEXT;
+            const deadline = Date.now() + 120_000;
+            while (Date.now() < deadline) {
+              const { data: statuses } = await github.rest.repos.listCommitStatusesForRef({
+                owner,
+                repo,
+                ref: sourceSha,
+                per_page: 100,
+              });
+              const claim = statuses.find((status) => status.context === claimContext);
+              const expectedGrant = 'runner claim granted: ' + process.env.EXPECTED_RUNNER_LABEL;
+              if (claim?.state === 'success' && claim.description === expectedGrant) {
+                core.info(`Scheduler claim granted: ${claimContext}`);
+                return;
+              }
+              // GitHub has no neutral commit-status state: a denied/expired
+              // queue attempt may have state=success with a DENIED verdict.
+              // Never allow that status to pass the secret-bearing gate.
+              if (claim?.state === 'success' || claim?.state === 'failure' || claim?.state === 'error') {
+                core.setFailed(`Scheduler claim not granted: ${claimContext}`);
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+            core.setFailed(`Timed out waiting for scheduler claim: ${claimContext}`);
+
+      - name: Revalidate requested PR context after scheduler claim
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v8.0.0
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          BASE_REF: ${{ inputs.base_ref }}
+          BASE_SHA: ${{ inputs.base_sha }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pullNumber = Number(process.env.PR_NUMBER);
+            if (!Number.isSafeInteger(pullNumber) || pullNumber < 1) {
+              throw new Error('Invalid PR number');
+            }
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pullNumber,
+            });
+            if (pullRequest.state !== 'open' || pullRequest.draft) {
+              throw new Error('OCR review requires an open, non-draft PR after scheduler claim');
+            }
+            if (pullRequest.head.repo?.full_name !== process.env.GITHUB_REPOSITORY) {
+              throw new Error('OCR review refuses fork PRs after scheduler claim');
+            }
+            if (pullRequest.head.sha !== process.env.SOURCE_SHA) {
+              throw new Error('OCR review source SHA changed while waiting for scheduler claim');
+            }
+            if (pullRequest.base.ref !== process.env.BASE_REF) {
+              throw new Error('OCR review base ref changed while waiting for scheduler claim');
+            }
+            // GitHub workflow_dispatch resolves a mutable branch. Refuse to
+            // run a newer control plane than the base SHA checked by dispatcher.
+            if (pullRequest.base.sha !== process.env.BASE_SHA || context.sha !== process.env.BASE_SHA) {
+              throw new Error('OCR worker trusted base SHA changed during dispatch');
+            }
+
+      - name: Detect OCR configuration
+        id: ocr-config
+        shell: bash
+        env:
+          OCR_LLM_URL: ${{ secrets.OCR_LLM_URL }}
+          OCR_LLM_AUTH_TOKEN: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+          OCR_LLM_MODEL: ${{ vars.OCR_LLM_MODEL }}
+          OCR_LLM_USE_ANTHROPIC: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+        run: |
+          missing=()
+          [[ -n "${OCR_LLM_URL}" ]] || missing+=("OCR_LLM_URL")
+          [[ -n "${OCR_LLM_AUTH_TOKEN}" ]] || missing+=("OCR_LLM_AUTH_TOKEN")
+          [[ -n "${OCR_LLM_MODEL}" ]] || missing+=("OCR_LLM_MODEL")
+          [[ -n "${OCR_LLM_USE_ANTHROPIC}" ]] || missing+=("OCR_LLM_USE_ANTHROPIC")
+          if (( ${#missing[@]} > 0 )); then
+            echo "ready=false" >> "${GITHUB_OUTPUT}"
+            printf '::notice::OpenCodeReview configuration unavailable; missing required names: %s\n' "$(IFS=', '; echo "${missing[*]}")"
+            exit 0
+          fi
+          echo "ready=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Run OpenCodeReview
+        if: steps.ocr-config.outputs.ready == 'true'
+        uses: alibaba/open-code-review@fabbdb296b0d97e2140ada8d54ca7d6d6d1d7ad4 # v1.12.13
+        with:
+          ocr_version: "1.12.13"
+          llm_url: ${{ secrets.OCR_LLM_URL }}
+          llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+          llm_model: ${{ vars.OCR_LLM_MODEL }}
+          llm_use_anthropic: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+          github_token: ${{ github.token }}
+          pr_number: ${{ inputs.pr_number }}
+          base_ref: ${{ inputs.base_ref }}
+          head_sha: ${{ inputs.source_sha }}
+          effort: "medium"
+          sticky_summary: "true"
+          incremental: "true"
+          checkpoint_range: "true"
+          resolve_outdated: "report"
+          stream_progress: "true"
+          upload_artifacts: "true"
+          max_tokens_budget: "0"
+          rule: .opencodereview/rule.json

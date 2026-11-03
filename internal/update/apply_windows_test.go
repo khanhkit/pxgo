@@ -131,3 +131,29 @@ func fileSHA256(t *testing.T, path string) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+func TestWindowsFailedHelperDoesNotRestartMissingTarget(t *testing.T) {
+	oldStart := startUpdatedProcessFunc
+	defer func() { startUpdatedProcessFunc = oldStart }()
+	starts := 0
+	startUpdatedProcessFunc = func(string, []string) error {
+		starts++
+		return nil
+	}
+	payload := applyHelperPayload{
+		Target:          filepath.Join(t.TempDir(), "pxgo.exe"),
+		ExpectedVersion: "1.1.0", ParentPID: 123,
+		Restart: true,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled, exitCode := RunApplyHelper([]string{applyHelperPrefix + base64.RawURLEncoding.EncodeToString(data)})
+	if !handled || exitCode != 7 {
+		t.Fatalf("handled=%t exit=%d", handled, exitCode)
+	}
+	if starts != 0 {
+		t.Fatalf("restarted a missing executable %d time(s)", starts)
+	}
+}
