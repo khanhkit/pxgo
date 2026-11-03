@@ -77,8 +77,11 @@ func ResolveProvider(configured Provider, executable, goos string) (Provider, er
 
 	detected, owned := detectManagedProvider(executable, goos)
 	if configured != ProviderAuto {
-		if owned && configured != detected {
-			return "", fmt.Errorf("configured update provider %q conflicts with executable ownership %q", configured, detected)
+		if owned {
+			if configured != detected {
+				return "", fmt.Errorf("configured update provider %q conflicts with executable ownership %q", configured, detected)
+			}
+			return configured, nil
 		}
 		if hinted, ambiguous := detectManagedProviderHint(executable, goos); ambiguous && configured != hinted {
 			return "", fmt.Errorf("configured update provider %q conflicts with manager-like executable path for %q", configured, hinted)
@@ -103,18 +106,22 @@ var (
 	wingetMachineRoot = regexp.MustCompile(`^[a-z]:/program files(?: \(x86\))?/winget/packages$`)
 )
 
-func managedPath(value string) string {
-	return strings.ToLower(path.Clean(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")))
+func managedPath(value string, caseInsensitive bool) string {
+	cleaned := path.Clean(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/"))
+	if caseInsensitive {
+		return strings.ToLower(cleaned)
+	}
+	return cleaned
 }
 
-func managedEnvRoot(key string) string {
+func managedEnvRoot(key string, caseInsensitive bool) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		// macOS maps /var to /private/var. Compare canonical roots with
 		// Service.Check's already-resolved executable path.
 		if real, err := filepath.EvalSymlinks(value); err == nil && real != "" {
 			value = real
 		}
-		return managedPath(value)
+		return managedPath(value, caseInsensitive)
 	}
 	return ""
 }
@@ -134,7 +141,7 @@ func isScoopOwned(full string) bool {
 	}
 	root := full[:i]
 	if !scoopDefaultRoot.MatchString(root) &&
-		root != managedEnvRoot("SCOOP") && root != managedEnvRoot("SCOOP_GLOBAL") {
+		root != managedEnvRoot("SCOOP", true) && root != managedEnvRoot("SCOOP_GLOBAL", true) {
 		return false
 	}
 	parts := strings.Split(full[i+len(marker):], "/")
@@ -153,9 +160,9 @@ func validWingetPackagePath(relative string) bool {
 
 func isWingetOwned(full string) bool {
 	for _, root := range []string{
-		managedEnvRoot("LOCALAPPDATA") + "/microsoft/winget/packages",
-		managedEnvRoot("PROGRAMFILES") + "/winget/packages",
-		managedEnvRoot("PROGRAMFILES(X86)") + "/winget/packages",
+		managedEnvRoot("LOCALAPPDATA", true) + "/microsoft/winget/packages",
+		managedEnvRoot("PROGRAMFILES", true) + "/winget/packages",
+		managedEnvRoot("PROGRAMFILES(X86)", true) + "/winget/packages",
 	} {
 		if root == "/microsoft/winget/packages" || root == "/winget/packages" {
 			continue
@@ -177,14 +184,14 @@ func isWingetOwned(full string) bool {
 
 func isBrewOwned(full string) bool {
 	roots := []string{"/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"}
-	if root := managedEnvRoot("HOMEBREW_PREFIX"); root != "" {
+	if root := managedEnvRoot("HOMEBREW_PREFIX", false); root != "" {
 		roots = append(roots, root)
 	}
-	if root := managedEnvRoot("HOMEBREW_CELLAR"); root != "" && strings.HasSuffix(root, "/cellar") {
-		roots = append(roots, strings.TrimSuffix(root, "/cellar"))
+	if root := managedEnvRoot("HOMEBREW_CELLAR", false); root != "" && strings.HasSuffix(root, "/Cellar") {
+		roots = append(roots, strings.TrimSuffix(root, "/Cellar"))
 	}
 	for _, root := range roots {
-		relative, ok := underManagedRoot(full, root+"/cellar/pxgo")
+		relative, ok := underManagedRoot(full, root+"/Cellar/pxgo")
 		if !ok {
 			continue
 		}
@@ -197,7 +204,7 @@ func isBrewOwned(full string) bool {
 }
 
 func detectManagedProvider(executable, goos string) (Provider, bool) {
-	full := managedPath(executable)
+	full := managedPath(executable, strings.EqualFold(goos, goosWindows))
 	switch strings.ToLower(strings.TrimSpace(goos)) {
 	case goosWindows:
 		if isScoopOwned(full) {
@@ -215,7 +222,7 @@ func detectManagedProvider(executable, goos string) (Provider, bool) {
 }
 
 func detectManagedProviderHint(executable, goos string) (Provider, bool) {
-	full := managedPath(executable)
+	full := managedPath(executable, strings.EqualFold(goos, goosWindows))
 	switch strings.ToLower(strings.TrimSpace(goos)) {
 	case goosWindows:
 		switch {
@@ -225,7 +232,9 @@ func detectManagedProviderHint(executable, goos string) (Provider, bool) {
 			return ProviderWinGet, true
 		}
 	case goosDarwin, goosLinux:
-		if strings.Contains(full, "/cellar/") {
+		// A manager-shaped path is ambiguous even if case prevents it from
+		// matching the genuine case-sensitive Homebrew root.
+		if strings.Contains(strings.ToLower(full), "/cellar/") {
 			return ProviderBrew, true
 		}
 	}

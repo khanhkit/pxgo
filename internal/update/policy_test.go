@@ -159,3 +159,20 @@ func TestKnownAndExplicitCustomPackageManagerRoots(t *testing.T) {
 		t.Fatalf("explicit Homebrew prefix not recognized: %q %v", got, err)
 	}
 }
+
+func TestResolveProviderExplicitWingetInsideScoopNamedProfile(t *testing.T) {
+	file := `C:\Users\scoop\AppData\Local\Microsoft\WinGet\Packages\KhanhKit.PxGo_test\pxgo.exe`
+	if detected, err := ResolveProvider(ProviderAuto, file, "windows"); err != nil || detected != ProviderWinGet {
+		t.Fatalf("auto should recognize WinGet: %q %v", detected, err)
+	}
+	if explicit, err := ResolveProvider(ProviderWinGet, file, "windows"); err != nil || explicit != ProviderWinGet {
+		t.Fatalf("explicit WinGet must preserve recognized ownership: %q %v", explicit, err)
+	}
+}
+
+func TestResolveProviderUnixCaseSensitiveBrewRoot(t *testing.T) {
+	file := `/OPT/HOMEBREW/Cellar/pxgo/0.9.0/bin/pxgo`
+	if detected, err := ResolveProvider(ProviderAuto, file, "linux"); err == nil && detected == ProviderBrew {
+		t.Fatalf("case-sensitive Linux root is not the official /opt/homebrew: %q", detected)
+	}
+}
