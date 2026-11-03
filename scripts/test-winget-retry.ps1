@@ -1,5 +1,4 @@
-# Test WinGet-only retry behavior without network access or a real package
-# publication. This script mocks transport commands; never supply real tokens.
+# Fully mocked Windows CI tests: no live credentials, network, or submissions.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -10,6 +9,108 @@ if ($syncWorkflow -notmatch 'workflow_dispatch:' -or
     $syncWorkflow -notmatch 'submit-winget-release.ps1') {
     throw 'WinGet retry-only workflow contract is missing or contains release promotion'
 }
+. (Join-Path $PSScriptRoot 'winget-manifest-integrity.ps1')
+
+$global:MockVersionContent = @'
+PackageIdentifier: KhanhKit.PxGo
+PackageVersion: 0.9.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.12.0
+'@
+$global:MockInstallerContent = @'
+PackageIdentifier: KhanhKit.PxGo
+PackageVersion: 0.9.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: pxgo.exe
+  PortableCommandAlias: pxgo
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/khanhkit/pxgo/releases/download/v0.9.0/pxgo_windows_amd64.zip
+  InstallerSha256: E4001F1FC62E26472AC96FAE5D5C3DCEE5BD23789E671D2DF0884B6070C8261F
+- Architecture: arm64
+  InstallerUrl: https://github.com/khanhkit/pxgo/releases/download/v0.9.0/pxgo_windows_arm64.zip
+  InstallerSha256: 480E692EC7868DF13CD159632B726D80A4D4E212056C6864D61A56617F55E38B
+ManifestType: installer
+ManifestVersion: 1.12.0
+ReleaseDate: 2026-10-07
+'@
+$global:MockRelease = [pscustomobject]@{
+    tag_name = 'v0.9.0'
+    draft = $false
+    prerelease = $false
+    published_at = '2026-10-07T01:03:00Z'
+    assets = @(
+        [pscustomobject]@{
+            name = 'pxgo_windows_amd64.zip'
+            digest = 'sha256:e4001f1fc62e26472ac96fae5d5c3dcee5bd23789e671d2df0884b6070c8261f'
+            browser_download_url = 'https://github.com/khanhkit/pxgo/releases/download/v0.9.0/pxgo_windows_amd64.zip'
+            size = 7888477
+            state = 'uploaded'
+        },
+        [pscustomobject]@{
+            name = 'pxgo_windows_arm64.zip'
+            digest = 'sha256:480e692ec7868df13cd159632b726d80a4d4e212056c6864d61a56617f55e38b'
+            browser_download_url = 'https://github.com/khanhkit/pxgo/releases/download/v0.9.0/pxgo_windows_arm64.zip'
+            size = 7115281
+            state = 'uploaded'
+        }
+    )
+}
+
+function Assert-ThrowsLike {
+    param([scriptblock]$Test, [string]$Pattern)
+    $caught = $false
+    try {
+        & $Test | Out-Null
+    }
+    catch {
+        if ($_.Exception.Message -notlike "*$Pattern*") {
+            throw "Expected error containing $Pattern but got $($_.Exception.Message)"
+        }
+        $caught = $true
+    }
+    if (-not $caught) {
+        throw "Expected failure containing $Pattern, but command succeeded"
+    }
+}
+
+$expected = Get-ExpectedWingetInstallers -Release $global:MockRelease -Tag 'v0.9.0'
+if (-not (Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent $global:MockInstallerContent -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected)) {
+    throw 'verified WinGet source manifest did not match the published release'
+}
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('E4001F1F', 'A4001F1F')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'conflicts'
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('github.com/khanhkit/pxgo/releases', 'github.com/attacker/pxgo/releases')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'conflicts'
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('PackageVersion: 0.9.0', 'PackageVersion: 0.9.1')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'identity'
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('- Architecture: arm64', '- Architecture: x64')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'duplicate'
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent + [char]10 + 'PackageVersion: 0.9.0') -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'duplicate'
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('NestedInstallerType: portable', 'NestedInstallerType: exe')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'packaging semantics'
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('RelativeFilePath: pxgo.exe', 'RelativeFilePath: evil.exe')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'nested executable'
+Assert-ThrowsLike {
+    Assert-WingetInstallerManifest -VersionContent $global:MockVersionContent -InstallerContent ($global:MockInstallerContent.Replace('NestedInstallerFiles:', 'NestedInstallerFiles:' + [char]10 + '- RelativeFilePath: evil.exe')) -PackageIdentifier 'KhanhKit.PxGo' -Version '0.9.0' -ExpectedInstallers $expected
+} 'nested executable'
+$alteredRelease = $global:MockRelease | Select-Object -Property *
+$alteredRelease.assets = @($global:MockRelease.assets[0])
+Assert-ThrowsLike {
+    Get-ExpectedWingetInstallers -Release $alteredRelease -Tag 'v0.9.0'
+} 'exactly one'
+Write-Host 'PASS: valid x64/arm64 manifests and injected SHA, URL, identity, duplicate-arch, duplicate-field, packaging, nested executable, and release-asset conflicts'
 
 $originalToken = [Environment]::GetEnvironmentVariable('WINGET_CREATE_GITHUB_TOKEN')
 $originalRunnerTemp = [Environment]::GetEnvironmentVariable('RUNNER_TEMP')
@@ -23,7 +124,7 @@ $global:WingetMockCalls = [System.Collections.Generic.List[string]]::new()
 function Invoke-WebRequest {
     param($Uri, $OutFile, $Method, $MaximumRedirection, [switch]$UseBasicParsing)
     $global:WingetMockCalls.Add("web:" + [string]$Uri)
-    if ($global:WingetMockMode -eq 'download-failure') {
+    if ($global:WingetMockMode -eq 'download-failure' -and $OutFile) {
         throw 'INJECTED_WIN_GET_CREATE_DOWNLOAD_FAILURE'
     }
     if ($OutFile) {
@@ -42,51 +143,80 @@ function Invoke-RestMethod {
     param($Uri, $Headers)
     $global:WingetMockCalls.Add("api:" + [string]$Uri)
     if ($Uri -like '*releases/tags/v0.9.0') {
-        return [pscustomobject]@{
-            draft = $false
-            prerelease = $false
-            published_at = '2026-10-07T01:03:00Z'
-        }
+        return $global:MockRelease
     }
     if ($Uri -like '*winget-pkgs/contents/*') {
-        # Simulate that another attempt has converged upstream.
-        return [pscustomobject]@{ content = 'already-submitted' }
+        if ($global:WingetMockMode -in @('download-failure', 'pending-unverified')) {
+            throw [System.Net.Http.HttpRequestException]::new('mock 404', $null, [System.Net.HttpStatusCode]::NotFound)
+        }
+        if ($Uri -like '*/KhanhKit.PxGo.yaml') {
+            $content = $global:MockVersionContent
+        }
+        elseif ($Uri -like '*/KhanhKit.PxGo.installer.yaml') {
+            if ($global:WingetMockMode -eq 'missing-installer') {
+                throw [System.Net.Http.HttpRequestException]::new('mock 404', $null, [System.Net.HttpStatusCode]::NotFound)
+            }
+            $content = $global:MockInstallerContent
+            if ($global:WingetMockMode -eq 'conflicting-installer') {
+                $content = $content.Replace('E4001F1F', 'A4001F1F')
+            }
+        }
+        else {
+            throw "unexpected manifest API path: $Uri"
+        }
+        return [pscustomobject]@{
+            encoding = 'base64'
+            content = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($content))
+        }
+    }
+    if ($Uri -like 'https://api.github.com/search/issues*') {
+        if ($global:WingetMockMode -eq 'pending-unverified') {
+            return [pscustomobject]@{
+                total_count = 1
+                items = @([pscustomobject]@{ html_url = 'https://github.com/microsoft/winget-pkgs/pull/1' })
+            }
+        }
+        return [pscustomobject]@{ total_count = 0; items = @() }
     }
     throw "Unexpected mocked API URL: $Uri"
 }
 
 try {
-    $failedAsExpected = $false
-    try {
+    Assert-ThrowsLike {
         & ./scripts/submit-winget-release.ps1 -Version '0.9.0' -Tag 'v0.9.0'
-    }
-    catch {
-        if ($_.Exception.Message -like '*INJECTED_WIN_GET_CREATE_DOWNLOAD_FAILURE*') {
-            $failedAsExpected = $true
-        } else {
-            throw
-        }
-    }
-    if (-not $failedAsExpected) {
-        throw 'Injected network failure did not fail the independent WinGet publisher'
+    } 'INJECTED_WIN_GET_CREATE_DOWNLOAD_FAILURE'
+    if (-not ($global:WingetMockCalls -match 'wingetcreate.exe')) {
+        throw 'Expected pinned publisher download on missing upstream version'
     }
 
-    # Retry with the *same* release identity. The already-published manifest
-    # must be treated as converged without executing wingetcreate or any
-    # release-promotion command.
+    # Retry the SAME exact release tag and verify both upstream installers.
+    $global:WingetMockCalls.Clear()
     $global:WingetMockMode = 'already-published'
     & ./scripts/submit-winget-release.ps1 -Version '0.9.0' -Tag 'v0.9.0'
-    if (-not ($global:WingetMockCalls -match 'winget-pkgs/contents/')) {
-        throw 'Expected an upstream idempotency check on the retry'
+    if (-not ($global:WingetMockCalls -match 'KhanhKit.PxGo.installer.yaml')) {
+        throw 'Expected upstream installer verification on retry'
     }
-    if (-not (Test-Path (Join-Path $tempDir 'wingetcreate.exe'))) {
-        throw 'Expected the pinned WingetCreate download path to be exercised'
+    if ($global:WingetMockCalls -match 'wingetcreate.exe') {
+        throw 'Converged retry unexpectedly downloaded or executed publisher'
     }
-    Write-Host 'PASS: injected WinGet transient failure then retry-only convergence without release promotion'
+
+    $global:WingetMockMode = 'conflicting-installer'
+    Assert-ThrowsLike {
+        & ./scripts/submit-winget-release.ps1 -Version '0.9.0' -Tag 'v0.9.0'
+    } 'conflicts'
+    $global:WingetMockMode = 'missing-installer'
+    Assert-ThrowsLike {
+        & ./scripts/submit-winget-release.ps1 -Version '0.9.0' -Tag 'v0.9.0'
+    } 'lacks installer'
+    $global:WingetMockMode = 'pending-unverified'
+    Assert-ThrowsLike {
+        & ./scripts/submit-winget-release.ps1 -Version '0.9.0' -Tag 'v0.9.0'
+    } 'pending manual SHA verification'
+    Write-Host 'PASS: transient failure, verified retry-only convergence, tampered/missing installer, and unverified pending PR fail-closed'
 }
 finally {
     [Environment]::SetEnvironmentVariable('WINGET_CREATE_GITHUB_TOKEN', $originalToken)
     [Environment]::SetEnvironmentVariable('RUNNER_TEMP', $originalRunnerTemp)
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Variable -Scope Global -Name WingetMockMode, WingetMockCalls -ErrorAction SilentlyContinue
+    Remove-Variable -Scope Global -Name WingetMockMode, WingetMockCalls, MockRelease, MockVersionContent, MockInstallerContent -ErrorAction SilentlyContinue
 }

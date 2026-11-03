@@ -268,6 +268,10 @@ grep -Fq 'actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68' .github
 [[ -f .github/workflows/winget-sync.yml ]] || bad "manual WinGet synchronization workflow missing"
 grep -Fq 'gh workflow run winget-sync.yml -R khanhkit/pxgo --ref main -f tag=' docs/distribution-identity.md || bad "WinGet post-promotion retry instructions are missing"
 [[ -f scripts/test-winget-retry.ps1 ]] || bad "WinGet retry-only fault injection regression is missing"
+[[ -f scripts/winget-manifest-integrity.ps1 ]] || bad "WinGet manifest integrity validator is missing"
+grep -Fq 'Get-ExpectedWingetInstallers -Release $release' scripts/submit-winget-release.ps1 || bad "WinGet publisher does not use published release ZIP SHA256s"
+grep -Fq 'Assert-WingetInstallerManifest -VersionContent $versionContent' scripts/submit-winget-release.ps1 || bad "WinGet publisher trusts unverified upstream manifest"
+grep -Fq 'pending manual SHA verification' scripts/submit-winget-release.ps1 || bad "WinGet publisher accepts unverified pending PRs as success"
 grep -Fq 'Verify WinGet retry-only failure recovery' .github/workflows/ci.yml || bad "WinGet fault injection test must run on native Windows CI"
 if [[ -f .github/workflows/winget-sync.yml ]]; then
   grep -Fq 'Sync WinGet exact version' .github/workflows/winget-sync.yml || bad "manual WinGet synchronization job missing"
