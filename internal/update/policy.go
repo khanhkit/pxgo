@@ -3,7 +3,9 @@ package update
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
+	"os"
+	"path"
+	"regexp"
 	"strings"
 )
 
@@ -91,19 +93,115 @@ func ResolveProvider(configured Provider, executable, goos string) (Provider, er
 	return ProviderDirect, nil
 }
 
+// Auto-detection requires both an expected package layout and its known root.
+// Custom manager roots require an explicit install_provider or the relevant
+// package-manager root environment variable.
+var (
+	scoopDefaultRoot  = regexp.MustCompile(`^[a-z]:/(?:users/[^/]+|programdata)/scoop$`)
+	wingetUserRoot    = regexp.MustCompile(`^[a-z]:/users/[^/]+/appdata/local/microsoft/winget/packages$`)
+	wingetMachineRoot = regexp.MustCompile(`^[a-z]:/program files(?: \(x86\))?/winget/packages$`)
+)
+
+func managedPath(value string) string {
+	return strings.ToLower(path.Clean(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")))
+}
+
+func managedEnvRoot(key string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return managedPath(value)
+	}
+	return ""
+}
+
+func underManagedRoot(full, root string) (string, bool) {
+	if root == "" || !strings.HasPrefix(full, root+"/") {
+		return "", false
+	}
+	return strings.TrimPrefix(full, root+"/"), true
+}
+
+func isScoopOwned(full string) bool {
+	const marker = "/apps/pxgo/"
+	i := strings.LastIndex(full, marker)
+	if i < 0 {
+		return false
+	}
+	root := full[:i]
+	if !scoopDefaultRoot.MatchString(root) &&
+		root != managedEnvRoot("SCOOP") && root != managedEnvRoot("SCOOP_GLOBAL") {
+		return false
+	}
+	parts := strings.Split(full[i+len(marker):], "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] == "pxgo.exe"
+}
+
+func validWingetPackagePath(relative string) bool {
+	parts := strings.Split(relative, "/")
+	if len(parts) < 2 || len(parts) > 3 || parts[len(parts)-1] != "pxgo.exe" {
+		return false
+	}
+	packageDir := parts[0]
+	return packageDir == "khanhkit.pxgo" ||
+		(strings.HasPrefix(packageDir, "khanhkit.pxgo_") && len(packageDir) > len("khanhkit.pxgo_"))
+}
+
+func isWingetOwned(full string) bool {
+	for _, root := range []string{
+		managedEnvRoot("LOCALAPPDATA") + "/microsoft/winget/packages",
+		managedEnvRoot("PROGRAMFILES") + "/winget/packages",
+		managedEnvRoot("PROGRAMFILES(X86)") + "/winget/packages",
+	} {
+		if root == "/microsoft/winget/packages" || root == "/winget/packages" {
+			continue
+		}
+		if remainder, ok := underManagedRoot(full, root); ok && validWingetPackagePath(remainder) {
+			return true
+		}
+	}
+	i := strings.LastIndex(full, "/packages/")
+	if i < 0 {
+		return false
+	}
+	root := full[:i+len("/packages")]
+	if !wingetUserRoot.MatchString(root) && !wingetMachineRoot.MatchString(root) {
+		return false
+	}
+	return validWingetPackagePath(full[i+len("/packages/"):])
+}
+
+func isBrewOwned(full string) bool {
+	roots := []string{"/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"}
+	if root := managedEnvRoot("HOMEBREW_PREFIX"); root != "" {
+		roots = append(roots, root)
+	}
+	if root := managedEnvRoot("HOMEBREW_CELLAR"); root != "" && strings.HasSuffix(root, "/cellar") {
+		roots = append(roots, strings.TrimSuffix(root, "/cellar"))
+	}
+	for _, root := range roots {
+		relative, ok := underManagedRoot(full, root+"/cellar/pxgo")
+		if !ok {
+			continue
+		}
+		parts := strings.Split(relative, "/")
+		if len(parts) == 3 && parts[0] != "" && parts[1] == "bin" && parts[2] == "pxgo" {
+			return true
+		}
+	}
+	return false
+}
+
 func detectManagedProvider(executable, goos string) (Provider, bool) {
-	normalizedExecutable := strings.ReplaceAll(executable, "\\", "/")
-	path := strings.ToLower(filepath.ToSlash(filepath.Clean(normalizedExecutable)))
+	full := managedPath(executable)
 	switch strings.ToLower(strings.TrimSpace(goos)) {
 	case goosWindows:
-		switch {
-		case strings.Contains(path, "/scoop/apps/pxgo/"):
+		if isScoopOwned(full) {
 			return ProviderScoop, true
-		case strings.Contains(path, "/microsoft/winget/packages/"), strings.Contains(path, "/winget/packages/"):
+		}
+		if isWingetOwned(full) {
 			return ProviderWinGet, true
 		}
 	case goosDarwin, goosLinux:
-		if strings.Contains(path, "/cellar/pxgo/") {
+		if isBrewOwned(full) {
 			return ProviderBrew, true
 		}
 	}
@@ -111,18 +209,17 @@ func detectManagedProvider(executable, goos string) (Provider, bool) {
 }
 
 func detectManagedProviderHint(executable, goos string) (Provider, bool) {
-	normalizedExecutable := strings.ReplaceAll(executable, "\\", "/")
-	path := strings.ToLower(filepath.ToSlash(filepath.Clean(normalizedExecutable)))
+	full := managedPath(executable)
 	switch strings.ToLower(strings.TrimSpace(goos)) {
 	case goosWindows:
 		switch {
-		case strings.Contains(path, "/scoop/"):
+		case strings.Contains(full, "/scoop/"):
 			return ProviderScoop, true
-		case strings.Contains(path, "/winget/"):
+		case strings.Contains(full, "/winget/"):
 			return ProviderWinGet, true
 		}
 	case goosDarwin, goosLinux:
-		if strings.Contains(path, "/cellar/") {
+		if strings.Contains(full, "/cellar/") {
 			return ProviderBrew, true
 		}
 	}

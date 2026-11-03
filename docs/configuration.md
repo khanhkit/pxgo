@@ -197,7 +197,7 @@ cannot multiply dial/auth fallback work without bound.
 
 `--check-update` is read-only and reports the current version, latest accepted version, resolved provider, channel, and whether an update is available. `--update` performs one update using the resolved installation owner.
 
-Package-manager ownership is authoritative. Auto-detection recognizes official WinGet, Scoop, and Homebrew installation paths; a conflicting explicit provider is rejected instead of letting direct self-replacement mutate manager-owned bytes. Portable paths resolve to `direct` unless deployment configuration provides an explicit manager marker.
+Package-manager ownership is authoritative. Auto-detection recognizes official WinGet, Scoop, and Homebrew installation paths; a conflicting explicit provider is rejected instead of letting direct self-replacement mutate manager-owned bytes. Portable paths resolve to `direct` unless deployment configuration provides an explicit manager marker. For safety, official install roots and the exact PxGo package/directory layout are required for auto inference. Custom Scoop/Homebrew roots must be declared through their manager environment or an explicit install_provider. Unrecognized manager-like paths fail closed instead of silently selecting direct self-replacement.
 
 Direct updates use the pinned `khanhkit/pxgo` GitHub release identity. PxGo selects only the exact `pxgo_<os>_<arch>.zip|tar.gz` archive, requires the exact filename in `checksums.txt`, cross-checks GitHub's SHA-256 asset digest when present, bounds download/extraction sizes, validates redirect origins, and executes the staged binary with `--version` before activation. Published archives are never rebuilt or patched locally.
 
