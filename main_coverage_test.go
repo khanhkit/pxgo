@@ -259,11 +259,14 @@ func TestQuitSucceedsWhenListenerCloses(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		go server.Close()
+		w.(http.Flusher).Flush() // deliver the reply before stopping new accepts
+		// Closing httptest.Server terminates the active response too; this
+		// test is only about a stopped listener, not an aborted response.
+		_ = server.Listener.Close()
 	}))
+	defer server.Close()
 	cfg := configForHTTPTestServer(t, server.URL)
 	if err := quit(cfg); err != nil {
-		server.Close()
 		t.Fatal(err)
 	}
 }
