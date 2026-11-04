@@ -144,3 +144,12 @@ test("main CI executes deterministic OCR fallback regression, not only static co
   assert.match(y, /node --test tests\/unit\/build\/ocr-review-workflow-contract\.test\.mjs/);
   assert.match(y, /tests\/unit\/build\/ocr-review-regressions\.test\.mjs/);
 });
+
+// The currently pinned upstream composite action v1.13.3 predates the upstream
+// OCR_NO_UPDATE fix. Keep the legacy CLI's detached npm self-updater disabled
+// across install/config/review steps, not merely one composite substep.
+test("trusted OCR worker suppresses asynchronous CLI self-update at job scope", async () => {
+  const y = await read(".github/workflows/ocr-review-worker.yml");
+  assert.match(y, /^    env:\n      OCR_NO_UPDATE: "1"$/m);
+  assert.match(y, /alibaba\/open-code-review@375f64cd6f67a48a135da83cfcf59c52669a09cb/);
+});
