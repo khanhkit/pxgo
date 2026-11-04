@@ -201,14 +201,16 @@ jobs:
           fi
           echo "ready=true" >> "${GITHUB_OUTPUT}"
 
-      # Each run on a shared persistent runner needs its own npm global bin.
-      # A concurrent npm -g reinstall can unlink the `ocr` executable
-      # between the composite action's install/configure/review steps.
+      # RUNNER_TEMP is emptied when *any* job begins/ends on the runner.
+      # A unique child of shared _temp can disappear mid-review even with
+      # per-run naming. Use HOME for the job-scoped npm prefix and clean
+      # only this worker's own path after review, including failure paths.
       - name: Isolate OCR CLI npm prefix for this worker run
         if: steps.ocr-config.outputs.ready == 'true'
         shell: bash
         run: |
-          prefix="${RUNNER_TEMP}/pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] && [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          prefix="${HOME}/.cache/pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "${prefix}/bin"
           echo "NPM_CONFIG_PREFIX=${prefix}" >> "$GITHUB_ENV"
           echo "${prefix}/bin" >> "$GITHUB_PATH"
@@ -235,3 +237,13 @@ jobs:
           upload_artifacts: "true"
           max_tokens_budget: "0"
           rule: .opencodereview/rule.json
+
+      - name: Clean isolated OCR CLI npm prefix
+        if: always() && steps.ocr-config.outputs.ready == 'true'
+        shell: bash
+        run: |
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] && [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          prefix="${HOME}/.cache/pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ -d "$prefix" && ! -L "$prefix" ]]; then
+            rm -rf -- "$prefix"
+          fi

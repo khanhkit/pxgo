@@ -72,7 +72,11 @@ test("worker validates PR SHA and repo before using OCR secrets", async () => {
   assert.ok(a >= 0 && b > a && c > b && isolate > c && d > isolate);
   assert.ok(y.includes('NPM_CONFIG_PREFIX=${prefix}'));
   assert.ok(y.includes('echo "${prefix}/bin" >> "$GITHUB_PATH"'));
-  assert.match(y, /prefix="\$\{RUNNER_TEMP\}\/pxgo-ocr-npm-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"/);
+  assert.doesNotMatch(y, /prefix="\$\{RUNNER_TEMP\}/);
+  assert.match(y, /prefix="\$\{HOME\}\/\.cache\/pxgo-ocr-npm-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"/);
+  assert.ok(y.includes('Clean isolated OCR CLI npm prefix'));
+  assert.ok(y.includes("if: always() && steps.ocr-config.outputs.ready == 'true'"));
+  assert.ok(y.includes('rm -rf -- "$prefix"'));
   for (const input of ["OCR_LLM_URL", "OCR_LLM_AUTH_TOKEN", "OCR_LLM_MODEL", "OCR_LLM_USE_ANTHROPIC"]) {
     assert.ok(y.includes(input), input);
   }
