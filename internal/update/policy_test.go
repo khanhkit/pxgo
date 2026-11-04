@@ -221,3 +221,37 @@ func TestResolveProviderNonPxGoManagerShapedPathsStayDirect(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveProviderPortableFalsePositiveManagerHints(t *testing.T) {
+	cases := []struct{ goos, exe string }{
+		{"windows", `C:\tmp\scoop\shims\pxgo.exe`},
+		{"windows", `C:\tmp\winget\links\pxgo.exe`},
+		{"windows", `C:\tmp\winget\packages\khanhkit.pxgoevil\pxgo.exe`},
+		{"windows", `C:\tmp\winget\packages\khanhkit.pxgo_\pxgo.exe`},
+	}
+	for _, tc := range cases {
+		for _, configured := range []Provider{ProviderAuto, ProviderDirect} {
+			got, err := ResolveProvider(configured, tc.exe, tc.goos)
+			if err != nil || got != ProviderDirect {
+				t.Errorf("false manager hint: %q %s got=%q err=%v", tc.exe, configured, got, err)
+			}
+		}
+	}
+}
+
+func TestResolveProviderCanonicalManagerShimsRemainAmbiguous(t *testing.T) {
+	for _, tc := range []struct {
+		goos, executable string
+		provider         Provider
+	}{
+		{"windows", "C:/Users/me/scoop/shims/pxgo.exe", ProviderScoop},
+		{"windows", "C:/Users/me/AppData/Local/Microsoft/WinGet/Links/pxgo.exe", ProviderWinGet},
+	} {
+		if _, err := ResolveProvider(ProviderAuto, tc.executable, tc.goos); err == nil {
+			t.Errorf("canonical manager shim must remain ambiguous: %q", tc.executable)
+		}
+		if got, err := ResolveProvider(tc.provider, tc.executable, tc.goos); err != nil || got != tc.provider {
+			t.Errorf("explicit canonical manager owner: %q got=%q err=%v", tc.executable, got, err)
+		}
+	}
+}

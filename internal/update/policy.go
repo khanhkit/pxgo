@@ -101,9 +101,11 @@ func ResolveProvider(configured Provider, executable, goos string) (Provider, er
 // Custom manager roots require an explicit install_provider or the relevant
 // package-manager root environment variable.
 var (
-	scoopDefaultRoot  = regexp.MustCompile(`^[a-z]:/(?:users/[^/]+|programdata)/scoop$`)
-	wingetUserRoot    = regexp.MustCompile(`^[a-z]:/users/[^/]+/appdata/local/microsoft/winget/packages$`)
-	wingetMachineRoot = regexp.MustCompile(`^[a-z]:/program files(?: \(x86\))?/winget/packages$`)
+	scoopDefaultRoot       = regexp.MustCompile(`^[a-z]:/(?:users/[^/]+|programdata)/scoop$`)
+	wingetUserRoot         = regexp.MustCompile(`^[a-z]:/users/[^/]+/appdata/local/microsoft/winget/packages$`)
+	wingetMachineRoot      = regexp.MustCompile(`^[a-z]:/program files(?: \(x86\))?/winget/packages$`)
+	wingetUserLinksRoot    = regexp.MustCompile(`^[a-z]:/users/[^/]+/appdata/local/microsoft/winget/links$`)
+	wingetMachineLinksRoot = regexp.MustCompile(`^[a-z]:/program files(?: \(x86\))?/winget/links$`)
 	// Hint only when the path has a package-manager install structure, not
 	// merely a Windows username or a directory named like a manager.
 	brewManagedExecutableHint = regexp.MustCompile(`(?i)/cellar/pxgo/[^/]+/bin/pxgo$`)
@@ -137,6 +139,11 @@ func underManagedRoot(full, root string) (string, bool) {
 	return strings.TrimPrefix(full, root+"/"), true
 }
 
+func isKnownScoopRoot(root string) bool {
+	return scoopDefaultRoot.MatchString(root) ||
+		(root != "" && (root == managedEnvRoot("SCOOP", true) || root == managedEnvRoot("SCOOP_GLOBAL", true)))
+}
+
 func isScoopOwned(full string) bool {
 	const marker = "/apps/pxgo/"
 	i := strings.LastIndex(full, marker)
@@ -144,8 +151,7 @@ func isScoopOwned(full string) bool {
 		return false
 	}
 	root := full[:i]
-	if !scoopDefaultRoot.MatchString(root) &&
-		root != managedEnvRoot("SCOOP", true) && root != managedEnvRoot("SCOOP_GLOBAL", true) {
+	if !isKnownScoopRoot(root) {
 		return false
 	}
 	parts := strings.Split(full[i+len(marker):], "/")
@@ -234,25 +240,32 @@ func detectManagedProviderHint(executable, goos string) (Provider, bool) {
 		if i := strings.LastIndex(full, "/scoop/apps/"); i >= 0 {
 			root := full[:i+len("/scoop")]
 			item := full[i+len("/scoop/apps/"):]
-			if strings.HasPrefix(item, "pxgo/") || scoopDefaultRoot.MatchString(root) ||
-				root == managedEnvRoot("SCOOP", true) || root == managedEnvRoot("SCOOP_GLOBAL", true) {
+			if strings.HasPrefix(item, "pxgo/") || isKnownScoopRoot(root) {
 				return ProviderScoop, true
 			}
 		}
-		if strings.HasSuffix(full, "/scoop/shims/pxgo.exe") {
+		if strings.HasSuffix(full, "/shims/pxgo.exe") &&
+			isKnownScoopRoot(strings.TrimSuffix(full, "/shims/pxgo.exe")) {
 			return ProviderScoop, true
 		}
 		if i := strings.LastIndex(full, "/winget/packages/"); i >= 0 {
 			root := full[:i+len("/winget/packages")]
 			item := full[i+len("/winget/packages/"):]
 			packageDir := strings.SplitN(item, "/", 2)[0]
-			if strings.HasPrefix(packageDir, "khanhkit.pxgo") ||
+			if packageDir == "khanhkit.pxgo" ||
+				(strings.HasPrefix(packageDir, "khanhkit.pxgo_") && len(packageDir) > len("khanhkit.pxgo_")) ||
 				wingetUserRoot.MatchString(root) || wingetMachineRoot.MatchString(root) {
 				return ProviderWinGet, true
 			}
 		}
-		if strings.HasSuffix(full, "/winget/links/pxgo.exe") {
-			return ProviderWinGet, true
+		if strings.HasSuffix(full, "/links/pxgo.exe") {
+			root := strings.TrimSuffix(full, "/pxgo.exe")
+			if wingetUserLinksRoot.MatchString(root) || wingetMachineLinksRoot.MatchString(root) ||
+				root == managedEnvRoot("LOCALAPPDATA", true)+"/microsoft/winget/links" ||
+				root == managedEnvRoot("PROGRAMFILES", true)+"/winget/links" ||
+				root == managedEnvRoot("PROGRAMFILES(X86)", true)+"/winget/links" {
+				return ProviderWinGet, true
+			}
 		}
 	case goosDarwin, goosLinux:
 		// Preserve fail-closed behavior for fake PxGo Cellar layouts and invalid
