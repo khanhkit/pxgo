@@ -272,7 +272,7 @@ test("actual OCR npm prefix and cleanup survive shared temp erasure and symlink 
     await writeFile(ghPath, "");
     await symlink(outsider, join(home, ".cache"), "dir");
 
-    const run = (script, attempt, runId = "741") => {
+    const run = (script, attempt, runId = "741", timeoutMs = 10_000) => {
       const env = {
         ...process.env,
         HOME: home,
@@ -283,9 +283,12 @@ test("actual OCR npm prefix and cleanup survive shared temp erasure and symlink 
         GITHUB_PATH: ghPath,
       };
       return spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
-        env, encoding: "utf8",
+        env, encoding: "utf8", timeout: timeoutMs, killSignal: "SIGKILL",
       });
     };
+    // Prove a stuck shell cannot hold the entire Node unit-test suite forever.
+    const timeoutProbe = run("while :; do :; done", 1, "741", 100);
+    assert.equal(timeoutProbe.error?.code, "ETIMEDOUT");
     const prefix = (attempt) => join(home, ".pxgo-ocr-npm-741-" + attempt);
     for (const attempt of [1, 2]) {
       const result = run(setup, attempt);
