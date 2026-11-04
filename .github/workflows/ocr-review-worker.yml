@@ -209,9 +209,13 @@ jobs:
         if: steps.ocr-config.outputs.ready == 'true'
         shell: bash
         run: |
-          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] && [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
+          umask 077
+          mkdir -p "${HOME}/.cache"
           prefix="${HOME}/.cache/pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p "${prefix}/bin"
+          mkdir "$prefix"  # refuse preexisting path or symlink on a shared HOME
+          mkdir "${prefix}/bin"
           echo "NPM_CONFIG_PREFIX=${prefix}" >> "$GITHUB_ENV"
           echo "${prefix}/bin" >> "$GITHUB_PATH"
 
@@ -242,7 +246,8 @@ jobs:
         if: always() && steps.ocr-config.outputs.ready == 'true'
         shell: bash
         run: |
-          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] && [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
           prefix="${HOME}/.cache/pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           if [[ -d "$prefix" && ! -L "$prefix" ]]; then
             rm -rf -- "$prefix"
