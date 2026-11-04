@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import vm from "node:vm";
+import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { buildClaimStatus, isRetryableGhRead, parseWorkerInputs } from "../../../scripts/ci/github-runner-fallback.mjs";
 import { summarizeRunnerSamples } from "../../../scripts/ci/summarize-runner-fallback.mjs";
@@ -225,4 +228,146 @@ test("actual trusted-base claim gate rejects spoofed, missing, duplicate and fai
   ]);
   assert.deepEqual(granted.failures, []);
   assert.deepEqual(granted.info, ["Scheduler claim granted: " + claimContext]);
+});
+
+// Execute the real workflow shell, not a reimplementation. Persistent runner
+// temporary-file cleanup must never unlink a still-running OCR CLI.
+function ocrWorkerShellStep(workflow, name) {
+  // Match one named workflow step and fail closed if its body stops using
+  // the expected literal shell form. Do not accidentally read a later step.
+  const lines = workflow.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === "      - name: " + name);
+  assert.ok(start >= 0, "worker step missing: " + name);
+  const endOffset = lines.slice(start + 1).findIndex((line) => /^      - name: /.test(line));
+  const end = endOffset < 0 ? lines.length : start + 1 + endOffset;
+  const step = lines.slice(start + 1, end);
+  const bodyStart = step.findIndex((line) => /^        run: \|$/.test(line));
+  assert.ok(bodyStart >= 0, "no literal shell body in worker step " + name);
+  const body = step.slice(bodyStart + 1);
+  while (body.at(-1) === "") body.pop();
+  assert.ok(body.length > 0 && body.every((line) => !line || line.startsWith("          ")),
+    "unsupported YAML shell indentation in step " + name);
+  return body.map((line) => line ? line.slice(10) : "").join("\n") + "\n";
+}
+
+test("actual OCR npm prefix and cleanup survive shared temp erasure and symlink attacks",
+  { skip: process.platform === "win32" ? "requires POSIX shell, symlinks and file modes" : false }, async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/ocr-review-worker.yml", import.meta.url), "utf8"
+  );
+  const setup = ocrWorkerShellStep(workflow, "Isolate OCR CLI npm prefix for this worker run");
+  const cleanup = ocrWorkerShellStep(workflow, "Clean isolated OCR CLI npm prefix");
+  const root = await mkdtemp(join(tmpdir(), "pxgo-ocr-worker-prefix-"));
+  try {
+    const home = join(root, "home");
+    const temp = join(root, "runner-temp");
+    const outsider = join(root, "unrelated");
+    const ghEnv = join(root, "github-env");
+    const ghPath = join(root, "github-path");
+    await mkdir(home);
+    await mkdir(temp);
+    await mkdir(outsider);
+    await writeFile(join(outsider, "keep"), "protected");
+    await writeFile(ghEnv, "");
+    await writeFile(ghPath, "");
+    await symlink(outsider, join(home, ".cache"), "dir");
+
+    const run = (script, attempt, runId = "741", timeoutMs = 10_000) => {
+      const env = {
+        ...process.env,
+        HOME: home,
+        RUNNER_TEMP: temp,
+        GITHUB_RUN_ID: runId,
+        GITHUB_RUN_ATTEMPT: String(attempt),
+        GITHUB_ENV: ghEnv,
+        GITHUB_PATH: ghPath,
+      };
+      return spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
+        env, encoding: "utf8", timeout: timeoutMs, killSignal: "SIGKILL",
+      });
+    };
+    // Prove a stuck shell cannot hold the entire Node unit-test suite forever.
+    const timeoutProbe = run("while :; do :; done", 1, "741", 100);
+    assert.equal(timeoutProbe.error?.code, "ETIMEDOUT");
+    const prefix = (attempt) => join(home, ".pxgo-ocr-npm-741-" + attempt);
+    for (const attempt of [1, 2]) {
+      const result = run(setup, attempt);
+      assert.equal(result.status, 0, result.stderr);
+      const mode = (await stat(prefix(attempt))).mode & 0o077;
+      assert.equal(mode, 0, "npm prefix must not be accessible to other users");
+      await writeFile(join(prefix(attempt), "bin", "ocr"), "binary-" + attempt);
+    }
+
+    await rm(temp, { recursive: true });
+    assert.equal(await readFile(join(prefix(1), "bin", "ocr"), "utf8"), "binary-1");
+    assert.equal(await readFile(join(prefix(2), "bin", "ocr"), "utf8"), "binary-2");
+    assert.equal(await readFile(join(outsider, "keep"), "utf8"), "protected");
+    assert.match(await readFile(ghEnv, "utf8"), /NPM_CONFIG_PREFIX=/);
+
+    for (const malformed of ["", "0", "abc", "0001", "1-2", "../"]) {
+      assert.notEqual(run(setup, 3, malformed).status, 0, "accepted run ID " + malformed);
+    }
+    await symlink(outsider, prefix(3), "dir");
+    assert.notEqual(run(setup, 3).status, 0, "preexisting symlink accepted as npm install root");
+    assert.equal(run(cleanup, 3).status, 0);
+    assert.equal(await readFile(join(outsider, "keep"), "utf8"), "protected");
+
+    // Replace the prior install directory with a symlink before cleanup:
+    // find -P must unlink the symlink and never traverse the other directory.
+    const saved = join(home, "renamed-1");
+    await rename(prefix(1), saved);
+    await symlink(outsider, prefix(1), "dir");
+    assert.equal(run(cleanup, 1).status, 0);
+    await assert.rejects(access(prefix(1)));
+    assert.equal(await readFile(join(saved, "bin", "ocr"), "utf8"), "binary-1");
+    assert.equal(await readFile(join(outsider, "keep"), "utf8"), "protected");
+    assert.equal(await readFile(join(prefix(2), "bin", "ocr"), "utf8"), "binary-2");
+
+    // Exercise the actual process lifetime boundary. An actively running
+    // shell CLI must finish cleanly even if cleanup unlinks its entrypoint.
+    const executable = join(prefix(2), "bin", "ocr");
+    const ready = join(root, "ocr-started");
+    const release = join(root, "ocr-release");
+    const survived = join(root, "ocr-survived");
+    await writeFile(executable, [
+      "#!/bin/sh",
+      'printf "ready\n" > "$1"',
+      'while [ ! -f "$2" ]; do sleep 0.05; done',
+      'printf "alive\n" > "$3"',
+    ].join("\n") + "\n");
+    // writeFile preserves mode of the previously created nonexecutable file.
+    await chmod(executable, 0o700);
+    const child = spawn(executable, [ready, release, survived], { stdio: "ignore" });
+    const childExit = new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    const waitForFile = async (file) => {
+      for (let i = 0; i < 100; i += 1) {
+        try { await access(file); return; } catch { /* child may be starting */ }
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      throw new Error("active OCR CLI did not produce " + file);
+    };
+    let deadline;
+    try {
+      await waitForFile(ready);
+      assert.equal(run(cleanup, 2).status, 0);
+      await assert.rejects(access(prefix(2)));
+      await writeFile(release, "go");
+      const outcome = await Promise.race([
+        childExit,
+        new Promise((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("active OCR CLI did not exit")), 5000);
+        }),
+      ]);
+      assert.deepEqual(outcome, { code: 0, signal: null });
+      assert.equal(await readFile(survived, "utf8"), "alive\n");
+    } finally {
+      clearTimeout(deadline);
+      if (child.exitCode === null) child.kill();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
