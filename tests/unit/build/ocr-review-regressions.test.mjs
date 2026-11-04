@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import vm from "node:vm";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { buildClaimStatus, isRetryableGhRead, parseWorkerInputs } from "../../../scripts/ci/github-runner-fallback.mjs";
 import { summarizeRunnerSamples } from "../../../scripts/ci/summarize-runner-fallback.mjs";
@@ -225,4 +228,96 @@ test("actual trusted-base claim gate rejects spoofed, missing, duplicate and fai
   ]);
   assert.deepEqual(granted.failures, []);
   assert.deepEqual(granted.info, ["Scheduler claim granted: " + claimContext]);
+});
+
+// Execute the real workflow shell, not a reimplementation. Persistent runner
+// temporary-file cleanup must never unlink a still-running OCR CLI.
+function ocrWorkerShellStep(workflow, name) {
+  const marker = "      - name: " + name;
+  const start = workflow.indexOf(marker);
+  assert.ok(start >= 0, "worker step missing: " + name);
+  const header = "        run: |" + String.fromCharCode(10);
+  const scriptStart = workflow.indexOf(header, start);
+  assert.ok(scriptStart >= 0, "no shell body for " + name);
+  const begin = scriptStart + header.length;
+  const end = workflow.indexOf(String.fromCharCode(10) + "      - name:", begin);
+  return workflow.slice(begin, end < 0 ? workflow.length : end)
+    .split(String.fromCharCode(10))
+    .map((line) => line.startsWith("          ") ? line.slice(10) : line)
+    .join(String.fromCharCode(10));
+}
+
+test("actual OCR npm prefix and cleanup survive shared temp erasure and symlink attacks", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/ocr-review-worker.yml", import.meta.url), "utf8"
+  );
+  const setup = ocrWorkerShellStep(workflow, "Isolate OCR CLI npm prefix for this worker run");
+  const cleanup = ocrWorkerShellStep(workflow, "Clean isolated OCR CLI npm prefix");
+  const root = await mkdtemp(join(tmpdir(), "pxgo-ocr-worker-prefix-"));
+  try {
+    const home = join(root, "home");
+    const temp = join(root, "runner-temp");
+    const outsider = join(root, "unrelated");
+    const ghEnv = join(root, "github-env");
+    const ghPath = join(root, "github-path");
+    await mkdir(home);
+    await mkdir(temp);
+    await mkdir(outsider);
+    await writeFile(join(outsider, "keep"), "protected");
+    await writeFile(ghEnv, "");
+    await writeFile(ghPath, "");
+    await symlink(outsider, join(home, ".cache"), "dir");
+
+    const run = (script, attempt, runId = "741") => {
+      const env = {
+        ...process.env,
+        HOME: home,
+        RUNNER_TEMP: temp,
+        GITHUB_RUN_ID: runId,
+        GITHUB_RUN_ATTEMPT: String(attempt),
+        GITHUB_ENV: ghEnv,
+        GITHUB_PATH: ghPath,
+      };
+      return spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
+        env, encoding: "utf8",
+      });
+    };
+    const prefix = (attempt) => join(home, ".pxgo-ocr-npm-741-" + attempt);
+    for (const attempt of [1, 2]) {
+      const result = run(setup, attempt);
+      assert.equal(result.status, 0, result.stderr);
+      const mode = (await stat(prefix(attempt))).mode & 0o077;
+      assert.equal(mode, 0, "npm prefix must not be accessible to other users");
+      await writeFile(join(prefix(attempt), "bin", "ocr"), "binary-" + attempt);
+    }
+
+    await rm(temp, { recursive: true });
+    assert.equal(await readFile(join(prefix(1), "bin", "ocr"), "utf8"), "binary-1");
+    assert.equal(await readFile(join(prefix(2), "bin", "ocr"), "utf8"), "binary-2");
+    assert.equal(await readFile(join(outsider, "keep"), "utf8"), "protected");
+    assert.match(await readFile(ghEnv, "utf8"), /NPM_CONFIG_PREFIX=/);
+
+    for (const malformed of ["", "0", "abc", "0001", "1-2", "../"]) {
+      assert.notEqual(run(setup, 3, malformed).status, 0, "accepted run ID " + malformed);
+    }
+    await symlink(outsider, prefix(3), "dir");
+    assert.notEqual(run(setup, 3).status, 0, "preexisting symlink accepted as npm install root");
+    assert.equal(run(cleanup, 3).status, 0);
+    assert.equal(await readFile(join(outsider, "keep"), "utf8"), "protected");
+
+    // Replace the prior install directory with a symlink before cleanup:
+    // find -P must unlink the symlink and never traverse the other directory.
+    const saved = join(home, "renamed-1");
+    await rename(prefix(1), saved);
+    await symlink(outsider, prefix(1), "dir");
+    assert.equal(run(cleanup, 1).status, 0);
+    await assert.rejects(access(prefix(1)));
+    assert.equal(await readFile(join(saved, "bin", "ocr"), "utf8"), "binary-1");
+    assert.equal(await readFile(join(outsider, "keep"), "utf8"), "protected");
+    assert.equal(await readFile(join(prefix(2), "bin", "ocr"), "utf8"), "binary-2");
+    assert.equal(run(cleanup, 2).status, 0);
+    await assert.rejects(access(prefix(2)));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
