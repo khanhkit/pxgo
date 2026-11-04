@@ -1,0 +1,184 @@
+{
+  "experiment": "synthetic controller comparison, NOT live PxGo network benchmark",
+  "observability": "oracle",
+  "dt": 0.25,
+  "horizon": 75,
+  "seeds": 6,
+  "scenarios": [
+    "step_2560",
+    "pulse_oscillation",
+    "resource_cliff",
+    "sensor_gap",
+    "mixed_ramp",
+    "idle_recovery"
+  ],
+  "metric_warnings": [
+    "backlog_integral in connection-seconds, not measured TCP latency",
+    "simulated resource cliff allows existing healthy sockets to drain; above-cap usage is not a forced-eviction violation",
+    "simulator uses perfect safety oracle; real telemetry stale/unknown behavior requires production hard gates",
+    "score weights are explicitly hypothetical, not user acceptance thresholds"
+  ],
+  "summary": [
+    {
+      "controller": "hpa",
+      "score": 12827.42,
+      "avg_backlog_integral": 9669,
+      "avg_controller_churn": 7183,
+      "avg_step_2560_s": 2.5,
+      "max_above_cap_integral": 7182.0,
+      "max_simulated_violations": 0
+    },
+    {
+      "controller": "r11_aimd",
+      "score": 13030.27,
+      "avg_backlog_integral": 8376,
+      "avg_controller_churn": 4544,
+      "avg_step_2560_s": 2.75,
+      "max_above_cap_integral": 7182.0,
+      "max_simulated_violations": 0
+    },
+    {
+      "controller": "pi",
+      "score": 13298.64,
+      "avg_backlog_integral": 7895,
+      "avg_controller_churn": 8415,
+      "avg_step_2560_s": 2.5,
+      "max_above_cap_integral": 7182.0,
+      "max_simulated_violations": 0
+    },
+    {
+      "controller": "pid",
+      "score": 13534.73,
+      "avg_backlog_integral": 8369,
+      "avg_controller_churn": 8574,
+      "avg_step_2560_s": 3.5,
+      "max_above_cap_integral": 7182.0,
+      "max_simulated_violations": 0
+    },
+    {
+      "controller": "guarded_pi",
+      "score": 13913.67,
+      "avg_backlog_integral": 9022,
+      "avg_controller_churn": 8343,
+      "avg_step_2560_s": 2.5,
+      "max_above_cap_integral": 6931.3,
+      "max_simulated_violations": 0
+    },
+    {
+      "controller": "linear_aimd",
+      "score": 67877.78,
+      "avg_backlog_integral": 48054,
+      "avg_controller_churn": 2991,
+      "avg_step_2560_s": 35.0,
+      "max_above_cap_integral": 344.0,
+      "max_simulated_violations": 0
+    },
+    {
+      "controller": "fixed256",
+      "score": 217739.7,
+      "avg_backlog_integral": 133517,
+      "avg_controller_churn": 0,
+      "avg_step_2560_s": null,
+      "max_above_cap_integral": 0.0,
+      "max_simulated_violations": 0
+    }
+  ],
+  "top_pid_sweep": [
+    {
+      "controller": "guarded_pi",
+      "kp": 0.1,
+      "ki": 0.0,
+      "kd": 0.0,
+      "score": 12195.07,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "guarded_pi",
+      "kp": 0.2,
+      "ki": 0.0,
+      "kd": 0.0,
+      "score": 12538.95,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "guarded_pi",
+      "kp": 0.35,
+      "ki": 0.0,
+      "kd": 0.0,
+      "score": 12787.52,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "pi",
+      "kp": 0.55,
+      "ki": 0.02,
+      "kd": 0.0,
+      "score": 13006.88,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "pid",
+      "kp": 0.55,
+      "ki": 0.02,
+      "kd": 0.0,
+      "score": 13006.88,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "pi",
+      "kp": 0.55,
+      "ki": 0.0,
+      "kd": 0.0,
+      "score": 13010.63,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "pid",
+      "kp": 0.55,
+      "ki": 0.0,
+      "kd": 0.0,
+      "score": 13010.63,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "pi",
+      "kp": 0.55,
+      "ki": 0.07,
+      "kd": 0.0,
+      "score": 13019.75,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "pid",
+      "kp": 0.55,
+      "ki": 0.07,
+      "kd": 0.0,
+      "score": 13019.75,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "pi",
+      "kp": 0.35,
+      "ki": 0.0,
+      "kd": 0.0,
+      "score": 13042.17,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "pid",
+      "kp": 0.35,
+      "ki": 0.0,
+      "kd": 0.0,
+      "score": 13042.17,
+      "worst_above_cap": 7182.0
+    },
+    {
+      "controller": "guarded_pi",
+      "kp": 0.55,
+      "ki": 0.02,
+      "kd": 0.0,
+      "score": 13124.85,
+      "worst_above_cap": 7182.0
+    }
+  ]
+}
