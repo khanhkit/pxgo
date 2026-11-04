@@ -212,8 +212,9 @@ jobs:
           [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
           [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
           umask 077
-          mkdir -p "${HOME}/.cache"
-          prefix="${HOME}/.cache/pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # Use a direct child of the trusted HOME: no intermediate .cache
+          # symlink can redirect the private OCR CLI location.
+          prefix="${HOME}/.pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir "$prefix"  # refuse preexisting path or symlink on a shared HOME
           mkdir "${prefix}/bin"
           echo "NPM_CONFIG_PREFIX=${prefix}" >> "$GITHUB_ENV"
@@ -248,7 +249,9 @@ jobs:
         run: |
           [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]] || exit 1
           [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
-          prefix="${HOME}/.cache/pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if [[ -d "$prefix" && ! -L "$prefix" ]]; then
-            rm -rf -- "$prefix"
+          prefix="${HOME}/.pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # -P disables symlink following during the recursive removal.
+          # This cleanup is intentionally scoped to the one trusted run ID.
+          if [[ -e "$prefix" || -L "$prefix" ]]; then
+            find -P "$prefix" -depth -delete
           fi
