@@ -176,3 +176,82 @@ func TestResolveProviderUnixCaseSensitiveBrewRoot(t *testing.T) {
 		t.Fatalf("case-sensitive Linux root is not the official /opt/homebrew: %q", detected)
 	}
 }
+
+func TestResolveProviderPortableManagerNamedProfileIsDirect(t *testing.T) {
+	for _, file := range []string{
+		`C:\Users\scoop\Downloads\pxgo.exe`,
+		`C:\Users\winget\Desktop\pxgo.exe`,
+	} {
+		for _, configured := range []Provider{ProviderAuto, ProviderDirect} {
+			got, err := ResolveProvider(configured, file, "windows")
+			if err != nil || got != ProviderDirect {
+				t.Errorf("manager name in username is not an install owner: file=%q configured=%q got=%q err=%v", file, configured, got, err)
+			}
+		}
+	}
+}
+
+func TestResolveProviderPortableCellarNamedProfileIsDirect(t *testing.T) {
+	file := "/Users/Cellar/Downloads/pxgo"
+	for _, configured := range []Provider{ProviderAuto, ProviderDirect} {
+		got, err := ResolveProvider(configured, file, "darwin")
+		if err != nil || got != ProviderDirect {
+			t.Errorf("plain user named Cellar should not mark Homebrew: got=%q err=%v", got, err)
+		}
+	}
+}
+
+func TestResolveProviderNonPxGoManagerShapedPathsStayDirect(t *testing.T) {
+	for _, tc := range []struct {
+		goos string
+		file string
+	}{
+		{"darwin", "/tmp/Cellar/other/1.0/bin/pxgo"},
+		{"linux", "/opt/sandbox/Cellar/notpxgo/1.0/bin/pxgo"},
+		{"windows", "C:/tmp/not-scoop/apps/other/current/pxgo.exe"},
+		{"windows", "C:/tmp/scoop/apps/other/current/pxgo.exe"},
+		{"windows", "C:/tmp/winget/packages/OtherApp_1.0/pxgo.exe"},
+		{"windows", "C:/tmp/not-winget/packages/KhanhKit.PxGo_test/pxgo.exe"},
+	} {
+		for _, configured := range []Provider{ProviderAuto, ProviderDirect} {
+			got, err := ResolveProvider(configured, tc.file, tc.goos)
+			if err != nil || got != ProviderDirect {
+				t.Errorf("unrelated manager-shaped path must remain portable: %q %q got=%q err=%v", tc.goos, tc.file, got, err)
+			}
+		}
+	}
+}
+
+func TestResolveProviderPortableFalsePositiveManagerHints(t *testing.T) {
+	cases := []struct{ goos, exe string }{
+		{"windows", `C:\tmp\scoop\shims\pxgo.exe`},
+		{"windows", `C:\tmp\winget\links\pxgo.exe`},
+		{"windows", `C:\tmp\winget\packages\khanhkit.pxgoevil\pxgo.exe`},
+		{"windows", `C:\tmp\winget\packages\khanhkit.pxgo_\pxgo.exe`},
+	}
+	for _, tc := range cases {
+		for _, configured := range []Provider{ProviderAuto, ProviderDirect} {
+			got, err := ResolveProvider(configured, tc.exe, tc.goos)
+			if err != nil || got != ProviderDirect {
+				t.Errorf("false manager hint: %q %s got=%q err=%v", tc.exe, configured, got, err)
+			}
+		}
+	}
+}
+
+func TestResolveProviderCanonicalManagerShimsRemainAmbiguous(t *testing.T) {
+	for _, tc := range []struct {
+		goos, executable string
+		provider         Provider
+	}{
+		{"windows", "C:/Users/me/scoop/shims/pxgo.exe", ProviderScoop},
+		{"windows", "C:/Users/me/AppData/Local/Microsoft/WinGet/Links/pxgo.exe", ProviderWinGet},
+	} {
+		if _, err := ResolveProvider(ProviderAuto, tc.executable, tc.goos); err == nil {
+			t.Errorf("canonical manager shim must remain ambiguous: %q", tc.executable)
+		}
+		if got, err := ResolveProvider(tc.provider, tc.executable, tc.goos); err != nil || got != tc.provider {
+			t.Errorf("explicit canonical manager owner: %q got=%q err=%v", tc.executable, got, err)
+		}
+	}
+}
