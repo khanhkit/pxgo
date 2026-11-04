@@ -67,8 +67,12 @@ test("worker validates PR SHA and repo before using OCR secrets", async () => {
   const a = y.indexOf("Wait for scheduler claim before secret-bearing review");
   const b = y.indexOf("Revalidate requested PR context after scheduler claim");
   const c = y.indexOf("Detect OCR configuration");
+  const isolate = y.indexOf("Isolate OCR CLI npm prefix for this worker run");
   const d = y.indexOf("Run OpenCodeReview");
-  assert.ok(a >= 0 && b > a && c > b && d > c);
+  assert.ok(a >= 0 && b > a && c > b && isolate > c && d > isolate);
+  assert.ok(y.includes('NPM_CONFIG_PREFIX=${prefix}'));
+  assert.ok(y.includes('echo "${prefix}/bin" >> "$GITHUB_PATH"'));
+  assert.match(y, /prefix="\$\{RUNNER_TEMP\}\/pxgo-ocr-npm-\$\{GITHUB_RUN_ID\}-\$\{GITHUB_RUN_ATTEMPT\}"/);
   for (const input of ["OCR_LLM_URL", "OCR_LLM_AUTH_TOKEN", "OCR_LLM_MODEL", "OCR_LLM_USE_ANTHROPIC"]) {
     assert.ok(y.includes(input), input);
   }

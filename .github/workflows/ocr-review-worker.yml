@@ -201,6 +201,18 @@ jobs:
           fi
           echo "ready=true" >> "${GITHUB_OUTPUT}"
 
+      # Each run on a shared persistent runner needs its own npm global bin.
+      # A concurrent npm -g reinstall can unlink the `ocr` executable
+      # between the composite action's install/configure/review steps.
+      - name: Isolate OCR CLI npm prefix for this worker run
+        if: steps.ocr-config.outputs.ready == 'true'
+        shell: bash
+        run: |
+          prefix="${RUNNER_TEMP}/pxgo-ocr-npm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${prefix}/bin"
+          echo "NPM_CONFIG_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          echo "${prefix}/bin" >> "$GITHUB_PATH"
+
       - name: Run OpenCodeReview
         if: steps.ocr-config.outputs.ready == 'true'
         uses: alibaba/open-code-review@375f64cd6f67a48a135da83cfcf59c52669a09cb # v1.13.3
