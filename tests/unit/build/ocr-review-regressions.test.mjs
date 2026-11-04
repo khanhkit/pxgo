@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import vm from "node:vm";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -233,21 +233,25 @@ test("actual trusted-base claim gate rejects spoofed, missing, duplicate and fai
 // Execute the real workflow shell, not a reimplementation. Persistent runner
 // temporary-file cleanup must never unlink a still-running OCR CLI.
 function ocrWorkerShellStep(workflow, name) {
-  const marker = "      - name: " + name;
-  const start = workflow.indexOf(marker);
+  // Match one named workflow step and fail closed if its body stops using
+  // the expected literal shell form. Do not accidentally read a later step.
+  const lines = workflow.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === "      - name: " + name);
   assert.ok(start >= 0, "worker step missing: " + name);
-  const header = "        run: |" + String.fromCharCode(10);
-  const scriptStart = workflow.indexOf(header, start);
-  assert.ok(scriptStart >= 0, "no shell body for " + name);
-  const begin = scriptStart + header.length;
-  const end = workflow.indexOf(String.fromCharCode(10) + "      - name:", begin);
-  return workflow.slice(begin, end < 0 ? workflow.length : end)
-    .split(String.fromCharCode(10))
-    .map((line) => line.startsWith("          ") ? line.slice(10) : line)
-    .join(String.fromCharCode(10));
+  const endOffset = lines.slice(start + 1).findIndex((line) => /^      - name: /.test(line));
+  const end = endOffset < 0 ? lines.length : start + 1 + endOffset;
+  const step = lines.slice(start + 1, end);
+  const bodyStart = step.findIndex((line) => /^        run: \|$/.test(line));
+  assert.ok(bodyStart >= 0, "no literal shell body in worker step " + name);
+  const body = step.slice(bodyStart + 1);
+  while (body.at(-1) === "") body.pop();
+  assert.ok(body.length > 0 && body.every((line) => !line || line.startsWith("          ")),
+    "unsupported YAML shell indentation in step " + name);
+  return body.map((line) => line ? line.slice(10) : "").join("\n") + "\n";
 }
 
-test("actual OCR npm prefix and cleanup survive shared temp erasure and symlink attacks", async () => {
+test("actual OCR npm prefix and cleanup survive shared temp erasure and symlink attacks",
+  { skip: process.platform === "win32" ? "requires POSIX shell, symlinks and file modes" : false }, async () => {
   const workflow = await readFile(
     new URL("../../../.github/workflows/ocr-review-worker.yml", import.meta.url), "utf8"
   );
@@ -315,8 +319,51 @@ test("actual OCR npm prefix and cleanup survive shared temp erasure and symlink 
     assert.equal(await readFile(join(saved, "bin", "ocr"), "utf8"), "binary-1");
     assert.equal(await readFile(join(outsider, "keep"), "utf8"), "protected");
     assert.equal(await readFile(join(prefix(2), "bin", "ocr"), "utf8"), "binary-2");
-    assert.equal(run(cleanup, 2).status, 0);
-    await assert.rejects(access(prefix(2)));
+
+    // Exercise the actual process lifetime boundary. An actively running
+    // shell CLI must finish cleanly even if cleanup unlinks its entrypoint.
+    const executable = join(prefix(2), "bin", "ocr");
+    const ready = join(root, "ocr-started");
+    const release = join(root, "ocr-release");
+    const survived = join(root, "ocr-survived");
+    await writeFile(executable, [
+      "#!/bin/sh",
+      'printf "ready\n" > "$1"',
+      'while [ ! -f "$2" ]; do sleep 0.05; done',
+      'printf "alive\n" > "$3"',
+    ].join("\n") + "\n");
+    // writeFile preserves mode of the previously created nonexecutable file.
+    await chmod(executable, 0o700);
+    const child = spawn(executable, [ready, release, survived], { stdio: "ignore" });
+    const childExit = new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    const waitForFile = async (file) => {
+      for (let i = 0; i < 100; i += 1) {
+        try { await access(file); return; } catch { /* child may be starting */ }
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      throw new Error("active OCR CLI did not produce " + file);
+    };
+    let deadline;
+    try {
+      await waitForFile(ready);
+      assert.equal(run(cleanup, 2).status, 0);
+      await assert.rejects(access(prefix(2)));
+      await writeFile(release, "go");
+      const outcome = await Promise.race([
+        childExit,
+        new Promise((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("active OCR CLI did not exit")), 5000);
+        }),
+      ]);
+      assert.deepEqual(outcome, { code: 0, signal: null });
+      assert.equal(await readFile(survived, "utf8"), "alive\n");
+    } finally {
+      clearTimeout(deadline);
+      if (child.exitCode === null) child.kill();
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
