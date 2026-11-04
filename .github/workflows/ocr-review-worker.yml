@@ -45,6 +45,12 @@ jobs:
     name: Portable ${{ inputs.logical_task }} (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 40
+    # The pinned v1.13.3 composite action predates upstream's updater guard.
+    # All installation, configuration and review substeps retain one pinned CLI.
+    # The npm wrapper otherwise spawns detached update.js, which can replace
+    # the global ocr shim in the middle of a review (macOS Intel E2E proven).
+    env:
+      OCR_NO_UPDATE: "1"
     permissions:
       contents: read
       statuses: write
