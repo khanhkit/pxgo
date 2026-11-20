@@ -593,7 +593,7 @@ func applyMap(cfg *Config, values map[string]string, source string) error {
 
 func isAuxiliaryEnvKey(name string) bool {
 	switch name {
-	case keySave, keyDotenv, "keyring_file", "keyring_plaintext", "kerberos_flavor", "kerberos_password", "kerberos_principal", "bin":
+	case keySave, keyDotenv, "keyring_file", "keyring_plaintext", "kerberos_flavor", "kerberos_password", "kerberos_principal", "auth_prompt", "bin":
 		return true
 	default:
 		return false

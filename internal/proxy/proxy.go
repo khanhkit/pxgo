@@ -60,6 +60,8 @@ type Server struct {
 	clients       sync.Map // remoteAddr string -> *clientState
 	krb           *kerberos.Manager
 	authMechanism authMechanismTracker
+	authPromptMu sync.Mutex
+	upstreamCredentials atomic.Pointer[upstreamCredential]
 	sup           *supervisor.Supervisor
 	closed        chan struct{}
 	once          sync.Once
@@ -960,10 +962,11 @@ func (s *Server) needsReplayableBody(req *http.Request, proxies []wproxy.Server)
 	if req.Header.Get("Proxy-Authorization") != "" {
 		return true // passthrough auth is retried on 407
 	}
-	if len(upstreamAuthModes(s.cfg.Auth)) == 0 {
+	cfg := s.upstreamAuthConfig()
+	if len(upstreamAuthModes(cfg.Auth)) == 0 {
 		return false // auth=NONE: never retried
 	}
-	if s.cfg.Username != "" && s.cfg.Password != "" {
+	if cfg.Username != "" && cfg.Password != "" {
 		return true
 	}
 	return runtime.GOOS == goosWindows // SSPI may authenticate without configured credentials
@@ -979,13 +982,14 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 			debug.Dprintf("HTTP: trying proxy %s:%d for %s", candidate.Host, candidate.Port, targetURL)
 		}
 		usesUpstreamProxy := candidate != wproxy.Direct
+		authCfg := s.upstreamAuthConfig()
 		authIdentity := ""
 		var (
 			transport  *http.Transport
 			pooledAuth *transportCacheEntry
 		)
 		if usesUpstreamProxy {
-			authIdentity = upstreamConnectionAuthIdentity(s.cfg, incomingProxyAuth)
+			authIdentity = upstreamConnectionAuthIdentity(authCfg, incomingProxyAuth)
 			if authIdentity != "" {
 				if cached, ok := s.cachedConnectionAuthTransport(candidate, authIdentity); ok {
 					pooledAuth = cached
@@ -1021,7 +1025,7 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 			continue
 		}
 		if usesUpstreamProxy {
-			if auth := upstreamProxyAuthHeader(s.cfg, req.Method, targetURL, "", incomingProxyAuth); auth != "" {
+			if auth := upstreamProxyAuthHeader(authCfg, req.Method, targetURL, "", incomingProxyAuth); auth != "" {
 				outReq.Header.Set("Proxy-Authorization", auth)
 			}
 		}

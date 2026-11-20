@@ -25,6 +25,8 @@ import (
 type upstreamConnectStatusError struct {
 	StatusCode int
 	Status     string
+	Challenges []string
+	SSPIAttempted bool
 }
 
 func (e *upstreamConnectStatusError) Error() string {
@@ -112,6 +114,7 @@ func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingP
 // system-DNS bootstrap dialer, avoiding DoH -> proxy -> DoH recursion.
 func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incomingProxyAuth string, proxies []wproxy.Server, dial contextDialFunc) (net.Conn, []byte, error) {
 	timeout := time.Duration(s.cfg.SockTimeout * float64(time.Second))
+	authCfg := s.upstreamAuthConfig()
 	var lastErr error
 	for _, p := range s.orderedProxyCandidates(proxyCandidates(proxies)) {
 		var upstream net.Conn
@@ -137,7 +140,7 @@ func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incom
 					cancel()
 					if err == nil {
 						upstream = tlsConn
-						leftover, err = s.sendUpstreamConnectBounded(ctx, upstream, target, p.Host, incomingProxyAuth, timeout)
+						leftover, err = s.sendUpstreamConnectBoundedWithConfig(ctx, upstream, target, p.Host, incomingProxyAuth, timeout, authCfg)
 					}
 				}
 			case strings.HasPrefix(scheme, "socks"):
@@ -145,7 +148,22 @@ func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incom
 			default:
 				upstream, err = dial(ctx, "tcp", addr)
 				if err == nil {
-					leftover, err = s.sendUpstreamConnectBounded(ctx, upstream, target, p.Host, incomingProxyAuth, timeout)
+					leftover, err = s.sendUpstreamConnectBoundedWithConfig(ctx, upstream, target, p.Host, incomingProxyAuth, timeout, authCfg)
+				}
+			}
+		}
+		if err != nil {
+			var authErr *upstreamConnectStatusError
+			if errors.As(err, &authErr) && authErr.StatusCode == http.StatusProxyAuthRequired && authErr.SSPIAttempted {
+				if upstream != nil {
+					_ = upstream.Close()
+					upstream = nil
+				}
+				retryConn, retryLeftover, retryErr := s.retryConnectWithPrompt(ctx, target, incomingProxyAuth, p, dial, timeout)
+				if retryErr != nil {
+					debug.Dprint("CONNECT credential fallback failed: " + retryErr.Error())
+				} else if retryConn != nil {
+					upstream, leftover, err = retryConn, retryLeftover, nil
 				}
 			}
 		}
@@ -183,13 +201,17 @@ func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incom
 }
 
 func (s *Server) sendUpstreamConnectBounded(ctx context.Context, conn net.Conn, target, proxyHost, passthroughAuth string, timeout time.Duration) ([]byte, error) {
+	return s.sendUpstreamConnectBoundedWithConfig(ctx, conn, target, proxyHost, passthroughAuth, timeout, s.upstreamAuthConfig())
+}
+
+func (s *Server) sendUpstreamConnectBoundedWithConfig(ctx context.Context, conn net.Conn, target, proxyHost, passthroughAuth string, timeout time.Duration, cfg config.Config) ([]byte, error) {
 	if timeout > 0 {
 		_ = conn.SetDeadline(time.Now().Add(timeout))
 	}
 	stopCancel := context.AfterFunc(ctx, func() {
 		_ = conn.SetDeadline(time.Now())
 	})
-	leftover, err := s.sendUpstreamConnect(conn, target, proxyHost, passthroughAuth)
+	leftover, err := s.sendUpstreamConnectWithConfig(conn, target, proxyHost, passthroughAuth, cfg)
 	stopCancel()
 	_ = conn.SetDeadline(time.Time{})
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -199,11 +221,15 @@ func (s *Server) sendUpstreamConnectBounded(ctx context.Context, conn net.Conn, 
 }
 
 func (s *Server) sendUpstreamConnect(conn net.Conn, target, proxyHost, passthroughAuth string) ([]byte, error) {
+	return s.sendUpstreamConnectWithConfig(conn, target, proxyHost, passthroughAuth, s.upstreamAuthConfig())
+}
+
+func (s *Server) sendUpstreamConnectWithConfig(conn net.Conn, target, proxyHost, passthroughAuth string, cfg config.Config) ([]byte, error) {
 	return sendUpstreamConnectWithAuthObservedKerberos(
 		conn,
 		target,
 		proxyHost,
-		s.cfg,
+		cfg,
 		"",
 		passthroughAuth,
 		s.krb,
@@ -211,6 +237,47 @@ func (s *Server) sendUpstreamConnect(conn net.Conn, target, proxyHost, passthrou
 		s.authMechanism.Record,
 	)
 }
+
+func (s *Server) retryConnectWithPrompt(ctx context.Context, target, passthroughAuth string, candidate wproxy.Server, dial contextDialFunc, timeout time.Duration) (net.Conn, []byte, error) {
+	scheme := proxyScheme(candidate)
+	if scheme != httpScheme && scheme != httpsScheme {
+		return nil, nil, nil
+	}
+	cfg, remember, prompted, releasePrompt, err := s.promptUpstreamCredentials(candidate.Host)
+	if err != nil || !prompted {
+		return nil, nil, err
+	}
+	defer releasePrompt()
+
+	addr := net.JoinHostPort(candidate.Host, strconv.Itoa(candidate.Port))
+	conn, err := dial(ctx, "tcp", addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	if scheme == httpsScheme {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: candidate.Host})
+		handshakeCtx := ctx
+		cancel := func() {}
+		if timeout > 0 {
+			handshakeCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
+		err = tlsConn.HandshakeContext(handshakeCtx)
+		cancel()
+		if err != nil {
+			_ = conn.Close()
+			return nil, nil, err
+		}
+		conn = tlsConn
+	}
+	leftover, err := s.sendUpstreamConnectBoundedWithConfig(ctx, conn, target, candidate.Host, passthroughAuth, timeout, cfg)
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	s.acceptPromptedCredentials(cfg, remember)
+	return conn, leftover, nil
+}
+
 
 // sendUpstreamConnectWithAuth performs the CONNECT handshake with the upstream
 // proxy and returns any tunnel bytes the upstream sent behind its response
@@ -360,8 +427,15 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 		if onAuthFailure != nil {
 			onAuthFailure(resp)
 		}
+		challenges := resp.Header.Values("Proxy-Authenticate")
+		selected := selectProxyAuthenticateChallenge(effectiveUpstreamAuth(cfg), challenges)
 		_ = resp.Body.Close()
-		return &upstreamConnectStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
+		return &upstreamConnectStatusError{
+			StatusCode: resp.StatusCode,
+			Status: resp.Status,
+			Challenges: challenges,
+			SSPIAttempted: sspiSessionCandidate(cfg, selected),
+		}
 	}
 	return nil
 }

@@ -115,6 +115,13 @@ SSPI. Omit `--kerberos` and explicit upstream username/password credentials to u
 that path. `Negotiate` is reported as Kerberos only when mechanism evidence is
 available; otherwise it remains `Negotiate` or `NTLM`.
 
+When Windows SSO receives a final upstream `407 Proxy Authentication Required`,
+PxGo opens the native Windows credential dialog and retries using the entered
+username/password using its existing NTLM challenge-response path. Credentials
+are kept in memory after a successful retry; selecting **Remember my credentials**
+also saves them to the OS keyring. Set `PXGO_AUTH_PROMPT=0` to disable the
+interactive fallback for unattended runs.
+
 The build-tagged MIT/Heimdal integration harness covers ticket lifecycle and can
 also exercise real `HTTP/<proxy-host>` SPNEGO acquisition by setting
 `PXGO_KERBEROS_PROXY_HOST`.
