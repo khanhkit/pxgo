@@ -28,7 +28,7 @@ for f in "${dockerfiles[@]}"; do
   done < <(awk '$1=="FROM" {print $2}' "$f")
 done
 
-grep -Fq 'golang:1.26.10-alpine3.24@sha256:' Dockerfile ||
+grep -Fq 'golang:1.26.11-alpine3.24@sha256:' Dockerfile ||
   bad "published builder is not pinned to Go 1.26.10 / Alpine 3.24"
 grep -Fq 'USER 65532:65532' Dockerfile || bad "published runtime USER is not fixed non-root 65532:65532"
 grep -Fq 'HOME=/home/pxgo' Dockerfile || bad "published runtime HOME contract missing"
