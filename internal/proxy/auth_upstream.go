@@ -305,7 +305,7 @@ func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *ht
 			resp.TransferEncoding = nil
 			resp.Header.Del("Transfer-Encoding")
 		}
-		return finish(resp), nil
+		return finish(resp), nil //nolint:nilerr
 	}
 	cfg, remember, prompted, retryDialog, releasePrompt, err := s.promptUpstreamCredentials(proxyHost, false)
 	if err != nil {
