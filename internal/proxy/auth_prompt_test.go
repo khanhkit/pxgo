@@ -5,11 +5,11 @@ import (
 	"errors"
 	"io"
 	"net"
-	"time"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/khanhkit/pxgo/internal/config"
 	"github.com/khanhkit/pxgo/internal/wproxy"
@@ -104,11 +104,10 @@ func TestUpstreamAuthPromptCanBeDisabledForUnattendedRuns(t *testing.T) {
 	}
 }
 
-
 func TestNormalizeUpstreamProxyHostRemovesAllTrailingDots(t *testing.T) {
 	for input, want := range map[string]string{
-		" Proxy.Example. ":  "proxy.example",
-		"PROXY.EXAMPLE..":   "proxy.example",
+		" Proxy.Example. ":   "proxy.example",
+		"PROXY.EXAMPLE..":    "proxy.example",
 		" proxy.example... ": "proxy.example",
 	} {
 		if got := normalizeUpstreamProxyHost(input); got != want {
