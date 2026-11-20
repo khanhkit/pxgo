@@ -23,14 +23,22 @@ import (
 // connectTarget defaults the port to 443 when the CONNECT host has none,
 // including bracketed IPv6 literals like "[::1]".
 type upstreamConnectStatusError struct {
-	StatusCode int
-	Status     string
-	Challenges []string
+	StatusCode    int
+	Status        string
+	Challenges    []string
 	SSPIAttempted bool
+	Cause         error
 }
 
 func (e *upstreamConnectStatusError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("upstream CONNECT failed: %s: %v", e.Status, e.Cause)
+	}
 	return "upstream CONNECT failed: " + e.Status
+}
+
+func (e *upstreamConnectStatusError) Unwrap() error {
+	return e.Cause
 }
 
 func connectTarget(host string) string {
@@ -362,7 +370,17 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 		var err error
 		auth, err = sspiSessionAuth(session, challenge)
 		if err != nil {
-			return fmt.Errorf("continue upstream CONNECT authentication: %w", err)
+			wrapped := fmt.Errorf("continue upstream CONNECT authentication: %w", err)
+			if sspiSessionCandidate(cfg, challenge) {
+				return &upstreamConnectStatusError{
+					StatusCode: http.StatusProxyAuthRequired,
+					Status: "407 Proxy Authentication Required",
+					Challenges: []string{challenge},
+					SSPIAttempted: true,
+					Cause: wrapped,
+				}
+			}
+			return wrapped
 		}
 	} else {
 		auth = upstreamProxyAuthHeader(cfg, http.MethodConnect, target, challenge, passthroughAuth)
@@ -406,7 +424,16 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 		} else if nextSession == nil && sspiSessionCandidate(cfg, nextChallenge) {
 			nextSession, err = sspiSessionFactory(nextChallenge, proxyHost)
 			if err != nil {
-				return fmt.Errorf("start SSPI CONNECT authentication: %w", err)
+				if onAuthFailure != nil {
+					onAuthFailure(resp)
+				}
+				return &upstreamConnectStatusError{
+					StatusCode: resp.StatusCode,
+					Status: resp.Status,
+					Challenges: resp.Header.Values("Proxy-Authenticate"),
+					SSPIAttempted: true,
+					Cause: fmt.Errorf("start SSPI CONNECT authentication: %w", err),
+				}
 			}
 			createdSession = true
 		}

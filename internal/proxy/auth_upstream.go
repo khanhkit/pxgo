@@ -205,7 +205,7 @@ func (s *Server) retryHTTPProxyAuthWithPoolConfig(transport *http.Transport, req
 				}
 				return nil, failAuth(err)
 			}
-			if handled {}
+			if handled {
 				auth = sessionAuth
 			} else {
 				auth = upstreamProxyAuthHeader(cfg, req.Method, targetURL, challenge, passthroughAuth)
