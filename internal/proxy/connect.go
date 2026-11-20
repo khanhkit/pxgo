@@ -126,9 +126,9 @@ func (s *Server) connectWithProxyFallback(ctx context.Context, target, incomingP
 // system-DNS bootstrap dialer, avoiding DoH -> proxy -> DoH recursion.
 func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incomingProxyAuth string, proxies []wproxy.Server, dial contextDialFunc) (net.Conn, []byte, error) {
 	timeout := time.Duration(s.cfg.SockTimeout * float64(time.Second))
-	authCfg := s.upstreamAuthConfig(p.Host)
 	var lastErr error
 	for _, p := range s.orderedProxyCandidates(proxyCandidates(proxies)) {
+		authCfg := s.upstreamAuthConfig(p.Host)
 		var upstream net.Conn
 		var leftover []byte
 		var err error
