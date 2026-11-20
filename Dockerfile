@@ -12,7 +12,7 @@ FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c03
 
 RUN apk add --no-cache \
       ca-certificates=20261020-r0 \
-      krb5=1.22.2-r1 \
+      krb5=1.22.3-r0 \
       tini=0.19.0-r3 && \
     addgroup -S -g 65532 pxgo && \
     adduser -S -D -H -u 65532 -G pxgo -h /home/pxgo -s /sbin/nologin pxgo && \

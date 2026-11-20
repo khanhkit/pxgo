@@ -43,7 +43,7 @@ for f in Dockerfile docker/Dockerfile.heimdal-client docker/Dockerfile.heimdal-k
 done
 
 grep -Fq 'ca-certificates=20261020-r0' Dockerfile || bad "ca-certificates version pin missing"
-grep -Fq 'krb5=1.22.2-r1' Dockerfile || bad "krb5 version pin missing"
+grep -Fq 'krb5=1.22.3-r0' Dockerfile || bad "krb5 version pin missing"
 grep -Fq 'tini=0.19.0-r3' Dockerfile || bad "tini version pin missing"
 grep -Fq 'heimdal=7.8.0-r5' docker/Dockerfile.heimdal-client || bad "Heimdal client version pin missing"
 grep -Fq 'heimdal-kdc=7.8.git20221117.28daf24+dfsg-2' docker/Dockerfile.heimdal-kdc || bad "Heimdal KDC version pin missing"
