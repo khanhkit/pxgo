@@ -29,7 +29,7 @@ for f in "${dockerfiles[@]}"; do
 done
 
 grep -Fq 'golang:1.26.11-alpine3.24@sha256:' Dockerfile ||
-  bad "published builder is not pinned to Go 1.26.10 / Alpine 3.24"
+  bad "published builder is not pinned to Go 1.26.11 / Alpine 3.24"
 grep -Fq 'USER 65532:65532' Dockerfile || bad "published runtime USER is not fixed non-root 65532:65532"
 grep -Fq 'HOME=/home/pxgo' Dockerfile || bad "published runtime HOME contract missing"
 grep -Fq 'XDG_CONFIG_HOME=/home/pxgo/.config' Dockerfile || bad "published runtime XDG config contract missing"

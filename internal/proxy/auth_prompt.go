@@ -45,7 +45,7 @@ func upstreamAuthPromptEnabled() bool {
 }
 
 func normalizeUpstreamProxyHost(host string) string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	return strings.TrimRight(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
 func upstreamCredentialRealm(proxyHost string) string {

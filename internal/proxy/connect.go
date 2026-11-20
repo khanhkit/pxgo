@@ -247,6 +247,10 @@ func (s *Server) sendUpstreamConnectWithConfig(conn net.Conn, target, proxyHost,
 }
 
 func (s *Server) retryConnectWithPrompt(ctx context.Context, target, passthroughAuth string, candidate wproxy.Server, dial contextDialFunc, timeout time.Duration) (net.Conn, []byte, error) {
+	// Only HTTP CONNECT proxies can use the upstream HTTP authentication fallback.
+	if scheme := proxyScheme(candidate); scheme != httpScheme && scheme != httpsScheme {
+		return nil, nil, nil
+	}
 	cfg, remember, prompted, retryDialog, releasePrompt, err := s.promptUpstreamCredentials(candidate.Host, false)
 	if err != nil || !prompted {
 		return nil, nil, err

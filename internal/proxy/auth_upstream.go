@@ -295,7 +295,17 @@ func (s *Server) retryHTTPProxyAuthAfterSSPIFailure(
 func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, resp *http.Response, finish func(*http.Response) *http.Response) (*http.Response, error) {
 	// Make every entry path safe before the dialog can block or be cancelled.
 	if err := detachUpstream407Body(resp); err != nil {
-		return nil, err
+		debug.Dprint("HTTP proxy 407 body detachment failed: " + err.Error())
+		// Preserve the authentication challenge when its body cannot be buffered.
+		// The body may already be partially consumed or closed, so expose an empty
+		// body rather than converting an upstream 407 into a local transport error.
+		if resp != nil {
+			resp.Body = http.NoBody
+			resp.ContentLength = 0
+			resp.TransferEncoding = nil
+			resp.Header.Del("Transfer-Encoding")
+		}
+		return finish(resp), nil
 	}
 	cfg, remember, prompted, retryDialog, releasePrompt, err := s.promptUpstreamCredentials(proxyHost, false)
 	if err != nil {
