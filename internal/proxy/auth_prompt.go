@@ -33,6 +33,11 @@ type pendingUpstreamPrompt struct {
 	users                int
 }
 
+type storedUpstreamCredential struct {
+	Username string `json:"username"`
+	Value    string `json:"value"`
+}
+
 var upstreamCredentialPrompt = promptWindowsUpstreamCredentials
 
 func upstreamAuthPromptEnabled() bool {
@@ -83,7 +88,9 @@ func (s *Server) promptUpstreamCredentials(proxyHost string, forceDialog bool) (
 	savedOK := false
 	if !forceDialog {
 		if encoded, ok := config.GetPassword(upstreamCredentialRealm(host), upstreamCredentialAccount); ok {
-			if err := json.Unmarshal([]byte(encoded), &saved); err == nil && saved.Username != "" && saved.Password != "" {
+			var stored storedUpstreamCredential
+			if err := json.Unmarshal([]byte(encoded), &stored); err == nil && stored.Username != "" && stored.Value != "" {
+				saved = promptedUpstreamCredential{Username: stored.Username, Password: stored.Value}
 				savedOK = true
 			} else {
 				debug.Dprint("ignore invalid host-scoped upstream credential entry")
@@ -104,7 +111,7 @@ func (s *Server) promptUpstreamCredentials(proxyHost string, forceDialog bool) (
 		}
 	}
 	if s.pendingAuthPrompts != nil {
-		if pending := s.pendingAuthPrompts[host]; pending != nil {
+		if pending := s.pendingAuthPrompts[host]; pending != nil && !(forceDialog && pending.retryDialogOnFailure) {
 			pending.users++
 			cfg.Username = pending.credential.Username
 			cfg.Password = pending.credential.Password
@@ -177,7 +184,7 @@ func (s *Server) acceptPromptedCredentials(proxyHost string, cfg config.Config, 
 	s.authPromptMu.Unlock()
 
 	if remember {
-		encoded, err := json.Marshal(promptedUpstreamCredential{Username: cfg.Username, Password: cfg.Password})
+		encoded, err := json.Marshal(storedUpstreamCredential{Username: cfg.Username, Value: cfg.Password})
 		if err == nil {
 			if err := config.StorePassword(upstreamCredentialRealm(host), upstreamCredentialAccount, string(encoded)); err != nil {
 				// Authentication succeeded; keyring failure must not fail the request.

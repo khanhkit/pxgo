@@ -173,7 +173,7 @@ func (s *Server) retryHTTPProxyAuthWithPoolConfig(transport *http.Transport, req
 	s.forceKerberosReloadForUpstreamAuth(resp)
 	if resp != nil && resp.StatusCode == http.StatusProxyAuthRequired {
 		removePooled()
-		if allowPrompt && usedSSPI && (cfg.Username == "" || cfg.Password == "") && upstreamAuthPromptEnabled() {
+		if allowPrompt && upstreamAuthPromptEnabled() && ((usedSSPI && (cfg.Username == "" || cfg.Password == "")) || s.hasPromptedCredentials(proxyHost, cfg)) {
 			return s.retryHTTPProxyAuthAfterSSPIFailure(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, &session, closeEphemeral, finish)
 		}
 	}
@@ -295,7 +295,8 @@ func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *ht
 	cfg, remember, prompted, retryDialog, releasePrompt, err := s.promptUpstreamCredentials(proxyHost, false)
 	if err != nil {
 		debug.Dprint("HTTP proxy credential prompt unavailable: " + err.Error())
-		return finish(resp), nil
+		// Preserve the upstream 407; an unavailable UI is not a transport failure.
+		return finish(resp), nil //nolint:nilerr
 	}
 	if !prompted {
 		return finish(resp), nil
@@ -312,7 +313,8 @@ func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *ht
 		cfg, remember, prompted, _, releasePrompt, err = s.promptUpstreamCredentials(proxyHost, true)
 		if err != nil {
 			debug.Dprint("HTTP proxy credential re-prompt unavailable: " + err.Error())
-			return result, nil
+			// Preserve the upstream 407 if the replacement dialog cannot be opened.
+			return result, nil //nolint:nilerr
 		}
 		if !prompted {
 			return result, nil
