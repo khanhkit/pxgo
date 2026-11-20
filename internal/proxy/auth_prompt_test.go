@@ -1,14 +1,18 @@
 package proxy
 
 import (
+	"context"
 	"errors"
 	"io"
+	"net"
+	"time"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/khanhkit/pxgo/internal/config"
+	"github.com/khanhkit/pxgo/internal/wproxy"
 )
 
 func TestPromptUpstreamCredentialsKeepsAcceptedCredentialsScopedToProxy(t *testing.T) {
@@ -100,6 +104,19 @@ func TestUpstreamAuthPromptCanBeDisabledForUnattendedRuns(t *testing.T) {
 	}
 }
 
+
+func TestNormalizeUpstreamProxyHostRemovesAllTrailingDots(t *testing.T) {
+	for input, want := range map[string]string{
+		" Proxy.Example. ":  "proxy.example",
+		"PROXY.EXAMPLE..":   "proxy.example",
+		" proxy.example... ": "proxy.example",
+	} {
+		if got := normalizeUpstreamProxyHost(input); got != want {
+			t.Errorf("normalizeUpstreamProxyHost(%q)=%q, want %q", input, got, want)
+		}
+	}
+}
+
 type trackedPromptResponseBody struct {
 	*strings.Reader
 	closed bool
@@ -150,5 +167,71 @@ func TestDetachUpstream407BodyRejectsOversizedBody(t *testing.T) {
 	}
 	if !body.closed {
 		t.Fatal("oversized upstream 407 body was not closed")
+	}
+}
+
+type failingPromptResponseBody struct {
+	readErr error
+	closed  bool
+}
+
+func (b *failingPromptResponseBody) Read([]byte) (int, error) {
+	return 0, b.readErr
+}
+
+func (b *failingPromptResponseBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestRetryHTTPProxyAuthWithPromptPreserves407WhenBodyDetachFails(t *testing.T) {
+	upstreamBody := &failingPromptResponseBody{readErr: errors.New("upstream 407 body read failed")}
+	resp := &http.Response{
+		StatusCode: http.StatusProxyAuthRequired,
+		Body:       upstreamBody,
+		Header:     make(http.Header),
+	}
+	s := &Server{cfg: config.Default()}
+	got, err := s.retryHTTPProxyAuthWithPrompt(nil, nil, nil, nil, "", "", "proxy.corp.example", wproxy.Server{}, resp, func(r *http.Response) *http.Response { return r })
+	if err != nil {
+		t.Fatalf("prompt fallback returned error instead of 407: %v", err)
+	}
+	if got != resp || got.StatusCode != http.StatusProxyAuthRequired {
+		t.Fatalf("response=%v, want original 407", got)
+	}
+	if !upstreamBody.closed {
+		t.Fatal("upstream response body was not closed")
+	}
+	if got.Body != http.NoBody {
+		t.Fatal("failed detach should return an empty, closed 407 body")
+	}
+}
+
+func TestRetryConnectWithPromptSkipsUnsupportedProxyScheme(t *testing.T) {
+	oldPrompt := upstreamCredentialPrompt
+	t.Cleanup(func() { upstreamCredentialPrompt = oldPrompt })
+	called := false
+	upstreamCredentialPrompt = func(string) (promptedUpstreamCredential, error) {
+		called = true
+		return promptedUpstreamCredential{Username: "user", Password: "secret"}, nil
+	}
+
+	s := &Server{cfg: config.Default()}
+	conn, leftover, err := s.retryConnectWithPrompt(
+		context.Background(),
+		"example.com:443",
+		"",
+		wproxy.Server{Scheme: "socks5", Host: "proxy.corp.example", Port: 1080},
+		func(context.Context, string, string) (net.Conn, error) {
+			t.Fatal("unsupported proxy scheme must not dial")
+			return nil, nil
+		},
+		time.Second,
+	)
+	if err != nil || conn != nil || leftover != nil {
+		t.Fatalf("result=(%v,%v,%v), want (nil,nil,nil)", conn, leftover, err)
+	}
+	if called {
+		t.Fatal("unsupported proxy scheme must not open credential dialog")
 	}
 }
