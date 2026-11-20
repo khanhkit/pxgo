@@ -47,30 +47,30 @@ const (
 )
 
 type Server struct {
-	cfg           config.Config
-	w             *wproxy.Wproxy
-	wmu           sync.RWMutex
-	routingClosed bool // protected by wmu; publication is terminal after Shutdown begins
-	lastReload    time.Time
-	startedAt     time.Time
-	srv           *http.Server
-	listeners     []net.Listener
-	port          int
-	stateMu       sync.RWMutex
-	clients       sync.Map // remoteAddr string -> *clientState
-	krb           *kerberos.Manager
-	authMechanism authMechanismTracker
-	authPromptMu sync.Mutex
+	cfg                 config.Config
+	w                   *wproxy.Wproxy
+	wmu                 sync.RWMutex
+	routingClosed       bool // protected by wmu; publication is terminal after Shutdown begins
+	lastReload          time.Time
+	startedAt           time.Time
+	srv                 *http.Server
+	listeners           []net.Listener
+	port                int
+	stateMu             sync.RWMutex
+	clients             sync.Map // remoteAddr string -> *clientState
+	krb                 *kerberos.Manager
+	authMechanism       authMechanismTracker
+	authPromptMu        sync.Mutex
 	upstreamCredentials atomic.Pointer[upstreamCredential]
-	sup           *supervisor.Supervisor
-	closed        chan struct{}
-	once          sync.Once
-	active        int64
-	transports    *boundedTransportCache
-	dnsResolver   *dnsresolver.Policy
-	dohBootstrap  *dohBootstrapRoute // independently resolved, reloadable OS-DNS routing
-	dnsCache      *dnscache.Cache
-
+	sup                 *supervisor.Supervisor
+	closed              chan struct{}
+	once                sync.Once
+	active              int64
+	transports          *boundedTransportCache
+	dnsResolver         *dnsresolver.Policy
+	dohBootstrap        *dohBootstrapRoute // independently resolved, reloadable OS-DNS routing
+	dnsCache            *dnscache.Cache
+}
 	tunnelMu           sync.Mutex
 	tunnels            map[*managedTunnel]struct{}
 	tunnelPending      int

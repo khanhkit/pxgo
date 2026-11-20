@@ -286,7 +286,6 @@ func (s *Server) retryConnectWithPrompt(ctx context.Context, target, passthrough
 	return conn, leftover, nil
 }
 
-
 // sendUpstreamConnectWithAuth performs the CONNECT handshake with the upstream
 // proxy and returns any tunnel bytes the upstream sent behind its response
 // headers (they end up in the response reader's buffer and must be forwarded
@@ -428,9 +427,9 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 					onAuthFailure(resp)
 				}
 				return &upstreamConnectStatusError{
-					StatusCode: resp.StatusCode,
-					Status: resp.Status,
-					Challenges: resp.Header.Values("Proxy-Authenticate"),
+					StatusCode:    resp.StatusCode,
+					Status:        resp.Status,
+					Challenges:    resp.Header.Values("Proxy-Authenticate"),
 					SSPIAttempted: true,
 					Cause: fmt.Errorf("start SSPI CONNECT authentication: %w", err),
 				}
@@ -458,9 +457,9 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 		selected := selectProxyAuthenticateChallenge(effectiveUpstreamAuth(cfg), challenges)
 		_ = resp.Body.Close()
 		return &upstreamConnectStatusError{
-			StatusCode: resp.StatusCode,
-			Status: resp.Status,
-			Challenges: challenges,
+			StatusCode:    resp.StatusCode,
+			Status:        resp.Status,
+			Challenges:    challenges,
 			SSPIAttempted: sspiSessionCandidate(cfg, selected),
 		}
 	}

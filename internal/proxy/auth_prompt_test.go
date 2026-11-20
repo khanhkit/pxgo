@@ -45,7 +45,7 @@ func TestPromptUpstreamCredentialsCancelReleasesPromptLock(t *testing.T) {
 	s := &Server{cfg: config.Default()}
 	_, _, prompted, release, err := s.promptUpstreamCredentials("proxy.corp.example")
 	if err != nil || prompted || release != nil {
-		t.Fatalf("prompted=%t release=%v err=%v, want clean cancellation", prompted, release, err)
+		t.Fatalf("prompted=%t release-present=%t err=%v, want clean cancellation", prompted, release != nil, err)
 	}
 
 	upstreamCredentialPrompt = func(string) (promptedUpstreamCredential, error) {
