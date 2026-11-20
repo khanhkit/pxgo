@@ -28,8 +28,8 @@ for f in "${dockerfiles[@]}"; do
   done < <(awk '$1=="FROM" {print $2}' "$f")
 done
 
-grep -Fq 'golang:1.26.10-alpine3.24@sha256:' Dockerfile ||
-  bad "published builder is not pinned to Go 1.26.10 / Alpine 3.24"
+grep -Fq 'golang:1.26.11-alpine3.24@sha256:' Dockerfile ||
+  bad "published builder is not pinned to Go 1.26.11 / Alpine 3.24"
 grep -Fq 'USER 65532:65532' Dockerfile || bad "published runtime USER is not fixed non-root 65532:65532"
 grep -Fq 'HOME=/home/pxgo' Dockerfile || bad "published runtime HOME contract missing"
 grep -Fq 'XDG_CONFIG_HOME=/home/pxgo/.config' Dockerfile || bad "published runtime XDG config contract missing"
@@ -43,7 +43,7 @@ for f in Dockerfile docker/Dockerfile.heimdal-client docker/Dockerfile.heimdal-k
 done
 
 grep -Fq 'ca-certificates=20261020-r0' Dockerfile || bad "ca-certificates version pin missing"
-grep -Fq 'krb5=1.22.2-r1' Dockerfile || bad "krb5 version pin missing"
+grep -Fq 'krb5=1.22.3-r0' Dockerfile || bad "krb5 version pin missing"
 grep -Fq 'tini=0.19.0-r3' Dockerfile || bad "tini version pin missing"
 grep -Fq 'heimdal=7.8.0-r5' docker/Dockerfile.heimdal-client || bad "Heimdal client version pin missing"
 grep -Fq 'heimdal-kdc=7.8.git20221117.28daf24+dfsg-2' docker/Dockerfile.heimdal-kdc || bad "Heimdal KDC version pin missing"

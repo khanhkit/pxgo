@@ -22,13 +22,27 @@ import (
 
 // connectTarget defaults the port to 443 when the CONNECT host has none,
 // including bracketed IPv6 literals like "[::1]".
+const (
+	proxyAuthRequiredStatus = "407 Proxy Authentication Required"
+)
+
 type upstreamConnectStatusError struct {
-	StatusCode int
-	Status     string
+	StatusCode    int
+	Status        string
+	Challenges    []string
+	SSPIAttempted bool
+	Cause         error
 }
 
 func (e *upstreamConnectStatusError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("upstream CONNECT failed: %s: %v", e.Status, e.Cause)
+	}
 	return "upstream CONNECT failed: " + e.Status
+}
+
+func (e *upstreamConnectStatusError) Unwrap() error {
+	return e.Cause
 }
 
 func connectTarget(host string) string {
@@ -114,6 +128,7 @@ func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incom
 	timeout := time.Duration(s.cfg.SockTimeout * float64(time.Second))
 	var lastErr error
 	for _, p := range s.orderedProxyCandidates(proxyCandidates(proxies)) {
+		authCfg := s.upstreamAuthConfig(p.Host)
 		var upstream net.Conn
 		var leftover []byte
 		var err error
@@ -137,7 +152,7 @@ func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incom
 					cancel()
 					if err == nil {
 						upstream = tlsConn
-						leftover, err = s.sendUpstreamConnectBounded(ctx, upstream, target, p.Host, incomingProxyAuth, timeout)
+						leftover, err = s.sendUpstreamConnectBoundedWithConfig(ctx, upstream, target, p.Host, incomingProxyAuth, timeout, authCfg)
 					}
 				}
 			case strings.HasPrefix(scheme, "socks"):
@@ -145,7 +160,22 @@ func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incom
 			default:
 				upstream, err = dial(ctx, "tcp", addr)
 				if err == nil {
-					leftover, err = s.sendUpstreamConnectBounded(ctx, upstream, target, p.Host, incomingProxyAuth, timeout)
+					leftover, err = s.sendUpstreamConnectBoundedWithConfig(ctx, upstream, target, p.Host, incomingProxyAuth, timeout, authCfg)
+				}
+			}
+		}
+		if err != nil {
+			var authErr *upstreamConnectStatusError
+			if errors.As(err, &authErr) && authErr.StatusCode == http.StatusProxyAuthRequired && authErr.SSPIAttempted {
+				if upstream != nil {
+					_ = upstream.Close()
+					upstream = nil
+				}
+				retryConn, retryLeftover, retryErr := s.retryConnectWithPrompt(ctx, target, incomingProxyAuth, p, dial, timeout)
+				if retryErr != nil {
+					debug.Dprint("CONNECT credential fallback failed: " + retryErr.Error())
+				} else if retryConn != nil {
+					upstream, leftover, err = retryConn, retryLeftover, nil
 				}
 			}
 		}
@@ -182,14 +212,14 @@ func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incom
 	return nil, nil, lastErr
 }
 
-func (s *Server) sendUpstreamConnectBounded(ctx context.Context, conn net.Conn, target, proxyHost, passthroughAuth string, timeout time.Duration) ([]byte, error) {
+func (s *Server) sendUpstreamConnectBoundedWithConfig(ctx context.Context, conn net.Conn, target, proxyHost, passthroughAuth string, timeout time.Duration, cfg config.Config) ([]byte, error) {
 	if timeout > 0 {
 		_ = conn.SetDeadline(time.Now().Add(timeout))
 	}
 	stopCancel := context.AfterFunc(ctx, func() {
 		_ = conn.SetDeadline(time.Now())
 	})
-	leftover, err := s.sendUpstreamConnect(conn, target, proxyHost, passthroughAuth)
+	leftover, err := s.sendUpstreamConnectWithConfig(conn, target, proxyHost, passthroughAuth, cfg)
 	stopCancel()
 	_ = conn.SetDeadline(time.Time{})
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -199,17 +229,85 @@ func (s *Server) sendUpstreamConnectBounded(ctx context.Context, conn net.Conn, 
 }
 
 func (s *Server) sendUpstreamConnect(conn net.Conn, target, proxyHost, passthroughAuth string) ([]byte, error) {
+	return s.sendUpstreamConnectWithConfig(conn, target, proxyHost, passthroughAuth, s.upstreamAuthConfig(proxyHost))
+}
+
+func (s *Server) sendUpstreamConnectWithConfig(conn net.Conn, target, proxyHost, passthroughAuth string, cfg config.Config) ([]byte, error) {
 	return sendUpstreamConnectWithAuthObservedKerberos(
 		conn,
 		target,
 		proxyHost,
-		s.cfg,
+		cfg,
 		"",
 		passthroughAuth,
 		s.krb,
 		s.forceKerberosReloadForUpstreamAuth,
 		s.authMechanism.Record,
 	)
+}
+
+func (s *Server) retryConnectWithPrompt(ctx context.Context, target, passthroughAuth string, candidate wproxy.Server, dial contextDialFunc, timeout time.Duration) (net.Conn, []byte, error) {
+	// Only HTTP CONNECT proxies can use the upstream HTTP authentication fallback.
+	if scheme := proxyScheme(candidate); scheme != httpScheme && scheme != httpsScheme {
+		return nil, nil, nil
+	}
+	cfg, remember, prompted, retryDialog, releasePrompt, err := s.promptUpstreamCredentials(candidate.Host, false)
+	if err != nil || !prompted {
+		return nil, nil, err
+	}
+	conn, leftover, err := s.retryConnectWithCredentials(ctx, target, passthroughAuth, candidate, dial, timeout, cfg)
+	releasePrompt()
+	if err == nil {
+		s.acceptPromptedCredentials(candidate.Host, cfg, remember)
+		return conn, leftover, nil
+	}
+
+	var authErr *upstreamConnectStatusError
+	if retryDialog && upstreamAuthPromptEnabled() && errors.As(err, &authErr) && authErr.StatusCode == http.StatusProxyAuthRequired {
+		cfg, remember, prompted, _, releasePrompt, promptErr := s.promptUpstreamCredentials(candidate.Host, true)
+		if promptErr != nil || !prompted {
+			return nil, nil, promptErr
+		}
+		conn, leftover, err = s.retryConnectWithCredentials(ctx, target, passthroughAuth, candidate, dial, timeout, cfg)
+		releasePrompt()
+		if err == nil {
+			s.acceptPromptedCredentials(candidate.Host, cfg, remember)
+		}
+	}
+	return conn, leftover, err
+}
+
+func (s *Server) retryConnectWithCredentials(ctx context.Context, target, passthroughAuth string, candidate wproxy.Server, dial contextDialFunc, timeout time.Duration, cfg config.Config) (net.Conn, []byte, error) {
+	scheme := proxyScheme(candidate)
+	if scheme != httpScheme && scheme != httpsScheme {
+		return nil, nil, nil
+	}
+	addr := net.JoinHostPort(candidate.Host, strconv.Itoa(candidate.Port))
+	conn, err := dial(ctx, "tcp", addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	if scheme == httpsScheme {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: candidate.Host})
+		handshakeCtx := ctx
+		cancel := func() {}
+		if timeout > 0 {
+			handshakeCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
+		err = tlsConn.HandshakeContext(handshakeCtx)
+		cancel()
+		if err != nil {
+			_ = conn.Close()
+			return nil, nil, err
+		}
+		conn = tlsConn
+	}
+	leftover, err := s.sendUpstreamConnectBoundedWithConfig(ctx, conn, target, candidate.Host, passthroughAuth, timeout, cfg)
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	return conn, leftover, nil
 }
 
 // sendUpstreamConnectWithAuth performs the CONNECT handshake with the upstream
@@ -295,7 +393,17 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 		var err error
 		auth, err = sspiSessionAuth(session, challenge)
 		if err != nil {
-			return fmt.Errorf("continue upstream CONNECT authentication: %w", err)
+			wrapped := fmt.Errorf("continue upstream CONNECT authentication: %w", err)
+			if sspiSessionCandidate(cfg, challenge) {
+				return &upstreamConnectStatusError{
+					StatusCode:    http.StatusProxyAuthRequired,
+					Status:        proxyAuthRequiredStatus,
+					Challenges:    []string{challenge},
+					SSPIAttempted: true,
+					Cause:         wrapped,
+				}
+			}
+			return wrapped
 		}
 	} else {
 		auth = upstreamProxyAuthHeader(cfg, http.MethodConnect, target, challenge, passthroughAuth)
@@ -339,7 +447,16 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 		} else if nextSession == nil && sspiSessionCandidate(cfg, nextChallenge) {
 			nextSession, err = sspiSessionFactory(nextChallenge, proxyHost)
 			if err != nil {
-				return fmt.Errorf("start SSPI CONNECT authentication: %w", err)
+				if onAuthFailure != nil {
+					onAuthFailure(resp)
+				}
+				return &upstreamConnectStatusError{
+					StatusCode:    resp.StatusCode,
+					Status:        resp.Status,
+					Challenges:    resp.Header.Values("Proxy-Authenticate"),
+					SSPIAttempted: true,
+					Cause:         fmt.Errorf("start SSPI CONNECT authentication: %w", err),
+				}
 			}
 			createdSession = true
 		}
@@ -360,8 +477,15 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 		if onAuthFailure != nil {
 			onAuthFailure(resp)
 		}
+		challenges := resp.Header.Values("Proxy-Authenticate")
+		selected := selectProxyAuthenticateChallenge(effectiveUpstreamAuth(cfg), challenges)
 		_ = resp.Body.Close()
-		return &upstreamConnectStatusError{StatusCode: resp.StatusCode, Status: resp.Status}
+		return &upstreamConnectStatusError{
+			StatusCode:    resp.StatusCode,
+			Status:        resp.Status,
+			Challenges:    challenges,
+			SSPIAttempted: sspiSessionCandidate(cfg, selected),
+		}
 	}
 	return nil
 }

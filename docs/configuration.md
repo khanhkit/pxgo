@@ -205,6 +205,26 @@ Direct updates use the pinned `khanhkit/pxgo` GitHub release identity. PxGo sele
 
 Stable releases are the default and automatic flows do not downgrade. Prereleases are considered only when `update_channel=prerelease` is explicitly configured.
 
+## Interactive SSO fallback
+
+On Windows, PxGo tries the logged-in user's SSPI credentials first. If the
+upstream proxy still returns an authentication challenge, PxGo can show the
+native Windows username/password dialog and retry with the existing NTLM
+challenge-response implementation. Credentials are kept in memory for the
+running process. The dialog's **Remember my credentials** choice stores them
+in the OS keyring only after the proxy accepts them.
+
+Disable interactive prompting for services, scheduled tasks, and other
+unattended runs with:
+
+```powershell
+$env:PXGO_AUTH_PROMPT = "0"
+```
+
+The default is enabled on Windows. The setting is read directly by the
+authentication fallback and does not change explicit `--username`/`--password`
+configuration.
+
 ## Passwords
 
 Store credentials interactively (prompts with no echo, saves to OS keyring):
