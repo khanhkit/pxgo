@@ -182,7 +182,7 @@ func (s *Server) retryHTTPProxyAuthWithPoolConfig(transport *http.Transport, req
 			var err error
 			auth, err = sspiSessionAuth(session, challenge)
 			if err != nil {
-				if usedSSPI && resp != nil && resp.StatusCode == http.StatusProxyAuthRequired {
+				if allowPrompt && usedSSPI && resp != nil && resp.StatusCode == http.StatusProxyAuthRequired && upstreamAuthPromptEnabled() {
 					if closeErr := session.Close(); closeErr != nil {
 						return nil, failAuth(fmt.Errorf("close failed SSO session: %w", closeErr))
 					}
@@ -203,7 +203,7 @@ func (s *Server) retryHTTPProxyAuthWithPoolConfig(transport *http.Transport, req
 			started, sessionAuth, handled, err := s.startUpstreamAuthSession(cfg, challenge, proxyHost, resp, &mechanism)
 			session = started
 			if err != nil {
-				if usedSSPI && resp != nil && resp.StatusCode == http.StatusProxyAuthRequired {
+				if allowPrompt && usedSSPI && resp != nil && resp.StatusCode == http.StatusProxyAuthRequired && upstreamAuthPromptEnabled() {
 					removePooled()
 					if resp.Body != nil {
 						_ = resp.Body.Close()

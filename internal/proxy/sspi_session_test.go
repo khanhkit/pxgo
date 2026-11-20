@@ -143,6 +143,7 @@ func TestAPISS0002ConnectPropagatesSessionAuthError(t *testing.T) {
 
 // TC-SSPI-REG-005
 func TestAPISS0002HTTPSSPIStartFailureIsExplicitAndCloses407(t *testing.T) {
+	t.Setenv("PXGO_AUTH_PROMPT", "0")
 	oldCandidate := sspiSessionCandidate
 	oldFactory := sspiSessionFactory
 	t.Cleanup(func() {
