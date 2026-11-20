@@ -28,9 +28,9 @@ type promptedUpstreamCredential struct {
 }
 
 type pendingUpstreamPrompt struct {
-	credential promptedUpstreamCredential
+	credential           promptedUpstreamCredential
 	retryDialogOnFailure bool
-	users int
+	users                int
 }
 
 var upstreamCredentialPrompt = promptWindowsUpstreamCredentials
@@ -141,9 +141,9 @@ func (s *Server) promptUpstreamCredentials(proxyHost string, forceDialog bool) (
 		s.pendingAuthPrompts = make(map[string]*pendingUpstreamPrompt)
 	}
 	pending := &pendingUpstreamPrompt{
-		credential: credential,
+		credential:           credential,
 		retryDialogOnFailure: fromSaved,
-		users: 1,
+		users:                1,
 	}
 	s.pendingAuthPrompts[host] = pending
 	cfg.Username = credential.Username
