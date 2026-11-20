@@ -372,11 +372,11 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 			wrapped := fmt.Errorf("continue upstream CONNECT authentication: %w", err)
 			if sspiSessionCandidate(cfg, challenge) {
 				return &upstreamConnectStatusError{
-					StatusCode: http.StatusProxyAuthRequired,
-					Status: "407 Proxy Authentication Required",
-					Challenges: []string{challenge},
+					StatusCode:    http.StatusProxyAuthRequired,
+					Status:        "407 Proxy Authentication Required",
+					Challenges:    []string{challenge},
 					SSPIAttempted: true,
-					Cause: wrapped,
+					Cause:         wrapped,
 				}
 			}
 			return wrapped
@@ -431,7 +431,7 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 					Status:        resp.Status,
 					Challenges:    resp.Header.Values("Proxy-Authenticate"),
 					SSPIAttempted: true,
-					Cause: fmt.Errorf("start SSPI CONNECT authentication: %w", err),
+					Cause:         fmt.Errorf("start SSPI CONNECT authentication: %w", err),
 				}
 			}
 			createdSession = true

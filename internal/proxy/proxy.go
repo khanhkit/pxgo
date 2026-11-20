@@ -70,7 +70,7 @@ type Server struct {
 	dnsResolver         *dnsresolver.Policy
 	dohBootstrap        *dohBootstrapRoute // independently resolved, reloadable OS-DNS routing
 	dnsCache            *dnscache.Cache
-}
+
 	tunnelMu           sync.Mutex
 	tunnels            map[*managedTunnel]struct{}
 	tunnelPending      int
