@@ -61,9 +61,9 @@ func (s *Server) upstreamAuthConfig(proxyHost string) config.Config {
 	if host == "" {
 		return cfg
 	}
-	s.authPromptMu.Lock()
+	s.authStateMu.Lock()
 	credential, ok := s.upstreamCredentials[host]
-	s.authPromptMu.Unlock()
+	s.authStateMu.Unlock()
 	if ok {
 		cfg.Username = credential.username
 		cfg.Password = credential.password
@@ -98,12 +98,17 @@ func (s *Server) promptUpstreamCredentials(proxyHost string, forceDialog bool) (
 		}
 	}
 
+	// Serialize only the native dialog. Keep runtime credential reads independent
+	// so ordinary requests to this or other proxies do not stall while it is open.
 	s.authPromptMu.Lock()
+	defer s.authPromptMu.Unlock()
+
+	s.authStateMu.Lock()
 	if s.upstreamCredentials != nil {
 		if credential, ok := s.upstreamCredentials[host]; ok && !forceDialog {
 			cfg.Username = credential.username
 			cfg.Password = credential.password
-			s.authPromptMu.Unlock()
+			s.authStateMu.Unlock()
 			return cfg, false, true, true, func() {}, nil
 		}
 		if forceDialog {
@@ -118,12 +123,12 @@ func (s *Server) promptUpstreamCredentials(proxyHost string, forceDialog bool) (
 			release := s.releaseUpstreamPrompt(host, pending)
 			retryDialog := pending.retryDialogOnFailure
 			remember := pending.credential.Remember
-			s.authPromptMu.Unlock()
+			s.authStateMu.Unlock()
 			return cfg, remember, true, retryDialog, release, nil
 		}
 	}
+	s.authStateMu.Unlock()
 	if !upstreamAuthPromptEnabled() {
-		s.authPromptMu.Unlock()
 		return cfg, false, false, false, nil, nil
 	}
 
@@ -133,7 +138,6 @@ func (s *Server) promptUpstreamCredentials(proxyHost string, forceDialog bool) (
 		var err error
 		credential, err = upstreamCredentialPrompt(host)
 		if err != nil {
-			s.authPromptMu.Unlock()
 			if errors.Is(err, errUpstreamCredentialPromptCancelled) {
 				return cfg, false, false, false, nil, nil
 			}
@@ -141,9 +145,9 @@ func (s *Server) promptUpstreamCredentials(proxyHost string, forceDialog bool) (
 		}
 	}
 	if strings.TrimSpace(credential.Username) == "" || credential.Password == "" {
-		s.authPromptMu.Unlock()
 		return cfg, false, false, false, nil, errors.New("username and password are required")
 	}
+	s.authStateMu.Lock()
 	if s.pendingAuthPrompts == nil {
 		s.pendingAuthPrompts = make(map[string]*pendingUpstreamPrompt)
 	}
@@ -153,10 +157,10 @@ func (s *Server) promptUpstreamCredentials(proxyHost string, forceDialog bool) (
 		users:                1,
 	}
 	s.pendingAuthPrompts[host] = pending
+	s.authStateMu.Unlock()
 	cfg.Username = credential.Username
 	cfg.Password = credential.Password
 	release := s.releaseUpstreamPrompt(host, pending)
-	s.authPromptMu.Unlock()
 	return cfg, credential.Remember, true, fromSaved, release, nil
 }
 
@@ -164,24 +168,24 @@ func (s *Server) releaseUpstreamPrompt(host string, pending *pendingUpstreamProm
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			s.authPromptMu.Lock()
+			s.authStateMu.Lock()
 			pending.users--
 			if pending.users <= 0 && s.pendingAuthPrompts[host] == pending {
 				delete(s.pendingAuthPrompts, host)
 			}
-			s.authPromptMu.Unlock()
+			s.authStateMu.Unlock()
 		})
 	}
 }
 
 func (s *Server) acceptPromptedCredentials(proxyHost string, cfg config.Config, remember bool) {
 	host := normalizeUpstreamProxyHost(proxyHost)
-	s.authPromptMu.Lock()
+	s.authStateMu.Lock()
 	if s.upstreamCredentials == nil {
 		s.upstreamCredentials = make(map[string]upstreamCredential)
 	}
 	s.upstreamCredentials[host] = upstreamCredential{username: cfg.Username, password: cfg.Password, prompted: true}
-	s.authPromptMu.Unlock()
+	s.authStateMu.Unlock()
 
 	if remember {
 		encoded, err := json.Marshal(storedUpstreamCredential{Username: cfg.Username, Value: cfg.Password})
@@ -196,8 +200,8 @@ func (s *Server) acceptPromptedCredentials(proxyHost string, cfg config.Config, 
 
 func (s *Server) hasPromptedCredentials(proxyHost string, cfg config.Config) bool {
 	host := normalizeUpstreamProxyHost(proxyHost)
-	s.authPromptMu.Lock()
+	s.authStateMu.Lock()
 	credential, ok := s.upstreamCredentials[host]
-	s.authPromptMu.Unlock()
+	s.authStateMu.Unlock()
 	return ok && credential.prompted && credential.username == cfg.Username && credential.password == cfg.Password
 }

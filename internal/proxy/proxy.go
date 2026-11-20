@@ -60,7 +60,8 @@ type Server struct {
 	clients             sync.Map // remoteAddr string -> *clientState
 	krb                 *kerberos.Manager
 	authMechanism       authMechanismTracker
-	authPromptMu        sync.Mutex
+	authPromptMu        sync.Mutex // serializes native credential dialogs only
+	authStateMu         sync.Mutex // protects host-scoped credential and pending-prompt maps
 	upstreamCredentials map[string]upstreamCredential
 	pendingAuthPrompts  map[string]*pendingUpstreamPrompt
 	sup                 *supervisor.Supervisor
