@@ -53,12 +53,16 @@ func promptWindowsUpstreamCredentials(proxyHost string) (promptedUpstreamCredent
 		messageText: message,
 		captionText: caption,
 	}
-	username := make([]uint16, creduiMaxUsernameLength)
-	password := make([]uint16, creduiMaxPasswordLength)
+	username := make([]uint16, creduiMaxUsernameLength+1)
+	password := make([]uint16, creduiMaxPasswordLength+1)
 	defer func() {
+		for i := range username {
+			username[i] = 0
+		}
 		for i := range password {
 			password[i] = 0
 		}
+		runtime.KeepAlive(username)
 		runtime.KeepAlive(password)
 	}()
 	var remember int32

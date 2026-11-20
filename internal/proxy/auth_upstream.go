@@ -277,13 +277,15 @@ func (s *Server) retryHTTPProxyAuthAfterSSPIFailure(
 	closeEphemeral func(), finish func(*http.Response) *http.Response,
 ) (*http.Response, error) {
 	if *session != nil {
-		if err := (*session).Close(); err != nil {
+		err := (*session).Close()
+		*session = nil
+		if err != nil {
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			closeEphemeral()
 			return nil, fmt.Errorf("close failed SSO session before credential fallback: %w", err)
 		}
-		*session = nil
-	}
-	if resp.Body != nil {
-		_ = resp.Body.Close()
 	}
 	closeEphemeral()
 	return s.retryHTTPProxyAuthWithPrompt(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, finish)
