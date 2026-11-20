@@ -23,7 +23,7 @@ import (
 // connectTarget defaults the port to 443 when the CONNECT host has none,
 // including bracketed IPv6 literals like "[::1]".
 const (
-	proxyAuthRequiredStatus = proxyAuthRequiredStatus
+	proxyAuthRequiredStatus = "407 Proxy Authentication Required"
 )
 
 type upstreamConnectStatusError struct {
