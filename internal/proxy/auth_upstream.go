@@ -25,7 +25,7 @@ func (s *Server) retryHTTPProxyAuth(transport *http.Transport, req *http.Request
 }
 
 func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, authIdentity string, pooled *transportCacheEntry, pooledAlreadyLocked bool, resp *http.Response) (*http.Response, error) {
-	return s.retryHTTPProxyAuthWithPoolConfig(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, authIdentity, pooled, pooledAlreadyLocked, resp, s.upstreamAuthConfig(), true)
+	return s.retryHTTPProxyAuthWithPoolConfig(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, authIdentity, pooled, pooledAlreadyLocked, resp, s.upstreamAuthConfig(proxyHost), true)
 }
 
 func (s *Server) retryHTTPProxyAuthWithPoolConfig(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, authIdentity string, pooled *transportCacheEntry, pooledAlreadyLocked bool, resp *http.Response, cfg config.Config, allowPrompt bool) (retResp *http.Response, retErr error) {

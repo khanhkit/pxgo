@@ -61,7 +61,8 @@ type Server struct {
 	krb                 *kerberos.Manager
 	authMechanism       authMechanismTracker
 	authPromptMu        sync.Mutex
-	upstreamCredentials atomic.Pointer[upstreamCredential]
+	upstreamCredentials map[string]upstreamCredential
+	pendingAuthPrompts  map[string]*pendingUpstreamPrompt
 	sup                 *supervisor.Supervisor
 	closed              chan struct{}
 	once                sync.Once
@@ -962,7 +963,7 @@ func (s *Server) needsReplayableBody(req *http.Request, proxies []wproxy.Server)
 	if req.Header.Get("Proxy-Authorization") != "" {
 		return true // passthrough auth is retried on 407
 	}
-	cfg := s.upstreamAuthConfig()
+	cfg := s.upstreamAuthConfig(candidates[0].Host)
 	if len(upstreamAuthModes(cfg.Auth)) == 0 {
 		return false // auth=NONE: never retried
 	}
@@ -982,7 +983,7 @@ func (s *Server) roundTripHTTPWithProxyFallback(req *http.Request, u *url.URL, b
 			debug.Dprintf("HTTP: trying proxy %s:%d for %s", candidate.Host, candidate.Port, targetURL)
 		}
 		usesUpstreamProxy := candidate != wproxy.Direct
-		authCfg := s.upstreamAuthConfig()
+		authCfg := s.upstreamAuthConfig(candidate.Host)
 		authIdentity := ""
 		var (
 			transport  *http.Transport
