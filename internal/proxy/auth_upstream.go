@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -288,6 +289,9 @@ func (s *Server) retryHTTPProxyAuthAfterSSPIFailure(
 		}
 	}
 	closeEphemeral()
+	if err := detachUpstream407Body(resp); err != nil {
+		return nil, err
+	}
 	return s.retryHTTPProxyAuthWithPrompt(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, finish)
 }
 
@@ -397,6 +401,30 @@ func (s *Server) startUpstreamAuthSession(cfg config.Config, challenge, proxyHos
 }
 
 const maxUpstream407Body = 64 << 10
+
+// detachUpstream407Body closes the upstream response before interactive UI is
+// shown while preserving a bounded 407 body for a cancelled/failed prompt.
+func detachUpstream407Body(resp *http.Response) error {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUpstream407Body+1))
+	closeErr := resp.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("read upstream 407 response before credential prompt: %w", readErr)
+	}
+	if len(body) > maxUpstream407Body {
+		return fmt.Errorf("upstream 407 body exceeds %d bytes", maxUpstream407Body)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close upstream 407 response before credential prompt: %w", closeErr)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.TransferEncoding = nil
+	resp.Header.Del("Transfer-Encoding")
+	return nil
+}
 
 func drainUpstream407Body(body io.ReadCloser) error {
 	if body == nil {

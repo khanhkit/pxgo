@@ -2,6 +2,9 @@ package proxy
 
 import (
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -94,5 +97,58 @@ func TestUpstreamAuthPromptCanBeDisabledForUnattendedRuns(t *testing.T) {
 	t.Setenv("PXGO_AUTH_PROMPT", "1")
 	if !upstreamAuthPromptEnabled() {
 		t.Fatal("auth prompt did not re-enable")
+	}
+}
+
+type trackedPromptResponseBody struct {
+	*strings.Reader
+	closed bool
+}
+
+func (b *trackedPromptResponseBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestDetachUpstream407BodyPreservesBodyAndClosesResponse(t *testing.T) {
+	body := &trackedPromptResponseBody{Reader: strings.NewReader("proxy credentials required")}
+	resp := &http.Response{
+		StatusCode:    http.StatusProxyAuthRequired,
+		Body:          body,
+		ContentLength: -1,
+		Header:        make(http.Header),
+	}
+	resp.Header.Set("Transfer-Encoding", "chunked")
+
+	if err := detachUpstream407Body(resp); err != nil {
+		t.Fatal(err)
+	}
+	if !body.closed {
+		t.Fatal("upstream 407 body was not closed before showing the credential dialog")
+	}
+	if resp.ContentLength != int64(len("proxy credentials required")) {
+		t.Fatalf("content length=%d", resp.ContentLength)
+	}
+	if resp.Header.Get("Transfer-Encoding") != "" {
+		t.Fatal("stale transfer-encoding header remained after buffering")
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "proxy credentials required" {
+		t.Fatalf("detached body=%q", got)
+	}
+	_ = resp.Body.Close()
+}
+
+func TestDetachUpstream407BodyRejectsOversizedBody(t *testing.T) {
+	body := &trackedPromptResponseBody{Reader: strings.NewReader(strings.Repeat("x", maxUpstream407Body+1))}
+	resp := &http.Response{Body: body}
+	if err := detachUpstream407Body(resp); err == nil {
+		t.Fatal("expected oversized 407 body to be rejected")
+	}
+	if !body.closed {
+		t.Fatal("oversized upstream 407 body was not closed")
 	}
 }
