@@ -22,6 +22,10 @@ import (
 
 // connectTarget defaults the port to 443 when the CONNECT host has none,
 // including bracketed IPv6 literals like "[::1]".
+const (
+	proxyAuthRequiredStatus = proxyAuthRequiredStatus
+)
+
 type upstreamConnectStatusError struct {
 	StatusCode    int
 	Status        string
@@ -208,10 +212,6 @@ func (s *Server) connectWithProxyFallbackDial(ctx context.Context, target, incom
 	return nil, nil, lastErr
 }
 
-func (s *Server) sendUpstreamConnectBounded(ctx context.Context, conn net.Conn, target, proxyHost, passthroughAuth string, timeout time.Duration) ([]byte, error) {
-	return s.sendUpstreamConnectBoundedWithConfig(ctx, conn, target, proxyHost, passthroughAuth, timeout, s.upstreamAuthConfig())
-}
-
 func (s *Server) sendUpstreamConnectBoundedWithConfig(ctx context.Context, conn net.Conn, target, proxyHost, passthroughAuth string, timeout time.Duration, cfg config.Config) ([]byte, error) {
 	if timeout > 0 {
 		_ = conn.SetDeadline(time.Now().Add(timeout))
@@ -373,7 +373,7 @@ func sendUpstreamConnectAttemptObservedKerberos(conn net.Conn, reader *bufio.Rea
 			if sspiSessionCandidate(cfg, challenge) {
 				return &upstreamConnectStatusError{
 					StatusCode:    http.StatusProxyAuthRequired,
-					Status:        "407 Proxy Authentication Required",
+					Status:        proxyAuthRequiredStatus,
 					Challenges:    []string{challenge},
 					SSPIAttempted: true,
 					Cause:         wrapped,

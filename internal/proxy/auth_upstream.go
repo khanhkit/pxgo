@@ -29,21 +29,7 @@ func (s *Server) retryHTTPProxyAuthWithPool(transport *http.Transport, req *http
 }
 
 func (s *Server) retryHTTPProxyAuthWithPoolConfig(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, authIdentity string, pooled *transportCacheEntry, pooledAlreadyLocked bool, resp *http.Response, cfg config.Config, allowPrompt bool) (retResp *http.Response, retErr error) {
-	if body == nil && req.Body != nil && req.Body != http.NoBody {
-		// The body was streamed and cannot be replayed; pass the 407 through.
-		// A cached connection that produced this 407 is no longer authoritative.
-		if pooled != nil {
-			if pooledAlreadyLocked {
-				pooled.authenticated = false
-				pooled.authMu.Unlock()
-			} else {
-				pooled.authMu.Lock()
-				pooled.authenticated = false
-				pooled.authMu.Unlock()
-			}
-			s.removeCachedTransport(pooled.key, pooled)
-		}
-		s.forceKerberosReloadForUpstreamAuth(resp)
+	if s.skipUpstreamAuthRetry(req, body, pooled, pooledAlreadyLocked, resp) {
 		return resp, nil
 	}
 
@@ -128,96 +114,30 @@ func (s *Server) retryHTTPProxyAuthWithPoolConfig(transport *http.Transport, req
 		mechanism.ObserveHeader(challenge)
 		scheme := authSchemeFromChallenge(challenge)
 		if isConnectionAuth(scheme) {
-			if activePooled != nil && !strings.EqualFold(activePooled.scheme, scheme) {
-				// The proxy changed connection-auth scheme for this route/identity.
-				// Retire the old state rather than sharing an authenticated socket
-				// across incompatible protocol state.
-				removePooled()
-				lockPooled(nil)
-				activePooled = nil
+			replayResp, retry, prepareErr := s.prepareUpstreamConnectionAuth(
+				req, u, body, candidate, authIdentity, scheme, &transport,
+				&activePooled, &ephemeralPinned, lockPooled, removePooled, resp,
+			)
+			if prepareErr != nil {
+				return nil, prepareErr
 			}
-			if activePooled == nil {
-				if authIdentity != "" && candidate != wproxy.Direct {
-					activePooled, _ = s.connectionAuthTransportForChallenge(candidate, authIdentity, scheme, transport)
-					lockPooled(activePooled)
-					transport = activePooled.transport
-					if activePooled.authenticated {
-						// Another concurrent request finished authenticating this
-						// route+identity while we waited. Discard the stale 407
-						// from the base connection and replay through the pooled
-						// authenticated socket before attempting another handshake.
-						if err := drainUpstream407Body(resp.Body); err != nil {
-							removePooled()
-							return nil, err
-						}
-						replayReq, reqErr := s.newOutboundRequest(req, u, body, "")
-						if reqErr != nil {
-							return nil, reqErr
-						}
-						replayResp, roundTripErr := transport.RoundTrip(replayReq)
-						if roundTripErr != nil {
-							removePooled()
-							return nil, roundTripErr
-						}
-						resp = replayResp
-						if resp.StatusCode != http.StatusProxyAuthRequired {
-							return resp, nil
-						}
-						activePooled.authenticated = false
-						continue
-					}
-				} else if ephemeralPinned == nil {
-					ephemeralPinned = transport.Clone()
-					ephemeralPinned.MaxConnsPerHost = 1
-					ephemeralPinned.MaxIdleConnsPerHost = 1
-					transport = ephemeralPinned
+			if retry {
+				if replayResp.StatusCode != http.StatusProxyAuthRequired {
+					return replayResp, nil
 				}
-			} else {
-				transport = activePooled.transport
+				resp = replayResp
+				activePooled.authenticated = false
+				continue
 			}
 		}
 
-		var auth string
-		if session != nil {
-			var err error
-			auth, err = sspiSessionAuth(session, challenge)
-			if err != nil {
-				if allowPrompt && usedSSPI && resp != nil && resp.StatusCode == http.StatusProxyAuthRequired && upstreamAuthPromptEnabled() {
-					if closeErr := session.Close(); closeErr != nil {
-						return nil, failAuth(fmt.Errorf("close failed SSO session: %w", closeErr))
-					}
-					session = nil
-					removePooled()
-					if resp.Body != nil {
-						_ = resp.Body.Close()
-					}
-					closeEphemeral()
-					return s.retryHTTPProxyAuthWithPrompt(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, finish)
-				}
-				return nil, failAuth(fmt.Errorf("continue upstream proxy authentication: %w", err))
+		auth, authErr := s.upstreamProxyAuthorization(cfg, challenge, proxyHost, req, targetURL, passthroughAuth, resp, &mechanism, &session, &usedSSPI)
+		if authErr != nil {
+			if allowPrompt && usedSSPI && resp.StatusCode == http.StatusProxyAuthRequired && upstreamAuthPromptEnabled() {
+				removePooled()
+				return s.retryHTTPProxyAuthAfterSSPIFailure(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, &session, closeEphemeral, finish)
 			}
-		} else {
-			if sspiSessionCandidate(cfg, challenge) {
-				usedSSPI = true
-			}
-			started, sessionAuth, handled, err := s.startUpstreamAuthSession(cfg, challenge, proxyHost, resp, &mechanism)
-			session = started
-			if err != nil {
-				if allowPrompt && usedSSPI && resp != nil && resp.StatusCode == http.StatusProxyAuthRequired && upstreamAuthPromptEnabled() {
-					removePooled()
-					if resp.Body != nil {
-						_ = resp.Body.Close()
-					}
-					closeEphemeral()
-					return s.retryHTTPProxyAuthWithPrompt(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, finish)
-				}
-				return nil, failAuth(err)
-			}
-			if handled {
-				auth = sessionAuth
-			} else {
-				auth = upstreamProxyAuthHeader(cfg, req.Method, targetURL, challenge, passthroughAuth)
-			}
+			return nil, failAuth(authErr)
 		}
 		if auth == "" {
 			s.forceKerberosReloadForUpstreamAuth(resp)
@@ -254,20 +174,119 @@ func (s *Server) retryHTTPProxyAuthWithPoolConfig(transport *http.Transport, req
 	if resp != nil && resp.StatusCode == http.StatusProxyAuthRequired {
 		removePooled()
 		if allowPrompt && usedSSPI && (cfg.Username == "" || cfg.Password == "") && upstreamAuthPromptEnabled() {
-			if session != nil {
-				if closeErr := session.Close(); closeErr != nil {
-					return nil, fmt.Errorf("close failed SSO session before credential fallback: %w", closeErr)
-				}
-				session = nil
-			}
-			if resp.Body != nil {
-				_ = resp.Body.Close()
-			}
-			closeEphemeral()
-			return s.retryHTTPProxyAuthWithPrompt(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, finish)
+			return s.retryHTTPProxyAuthAfterSSPIFailure(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, &session, closeEphemeral, finish)
 		}
 	}
 	return finish(resp), nil
+}
+
+func (s *Server) skipUpstreamAuthRetry(req *http.Request, body *replayableBody, pooled *transportCacheEntry, pooledAlreadyLocked bool, resp *http.Response) bool {
+	if body != nil || req.Body == nil || req.Body == http.NoBody {
+		return false
+	}
+	if pooled != nil {
+		if pooledAlreadyLocked {
+			pooled.authenticated = false
+			pooled.authMu.Unlock()
+		} else {
+			pooled.authMu.Lock()
+			pooled.authenticated = false
+			pooled.authMu.Unlock()
+		}
+		s.removeCachedTransport(pooled.key, pooled)
+	}
+	s.forceKerberosReloadForUpstreamAuth(resp)
+	return true
+}
+
+func (s *Server) prepareUpstreamConnectionAuth(
+	req *http.Request, u *url.URL, body *replayableBody, candidate wproxy.Server,
+	authIdentity, scheme string, transport **http.Transport, activePooled **transportCacheEntry,
+	ephemeralPinned **http.Transport, lockPooled func(*transportCacheEntry), removePooled func(),
+	resp *http.Response,
+) (*http.Response, bool, error) {
+	if *activePooled != nil && !strings.EqualFold((*activePooled).scheme, scheme) {
+		// Never share an authenticated socket across incompatible connection-auth schemes.
+		removePooled()
+		lockPooled(nil)
+		*activePooled = nil
+	}
+	if *activePooled == nil {
+		if authIdentity != "" && candidate != wproxy.Direct {
+			*activePooled, _ = s.connectionAuthTransportForChallenge(candidate, authIdentity, scheme, *transport)
+			lockPooled(*activePooled)
+			*transport = (*activePooled).transport
+			if !(*activePooled).authenticated {
+				return nil, false, nil
+			}
+			if err := drainUpstream407Body(resp.Body); err != nil {
+				removePooled()
+				return nil, false, err
+			}
+			replayReq, err := s.newOutboundRequest(req, u, body, "")
+			if err != nil {
+				return nil, false, err
+			}
+			replayResp, err := (*transport).RoundTrip(replayReq)
+			if err != nil {
+				removePooled()
+				return nil, false, err
+			}
+			return replayResp, true, nil
+		}
+		if *ephemeralPinned == nil {
+			*ephemeralPinned = (*transport).Clone()
+			(*ephemeralPinned).MaxConnsPerHost = 1
+			(*ephemeralPinned).MaxIdleConnsPerHost = 1
+			*transport = *ephemeralPinned
+		}
+		return nil, false, nil
+	}
+	*transport = (*activePooled).transport
+	return nil, false, nil
+}
+
+func (s *Server) upstreamProxyAuthorization(
+	cfg config.Config, challenge, proxyHost string, req *http.Request, targetURL, passthroughAuth string,
+	resp *http.Response, mechanism *authMechanismObservation, session *authSession, usedSSPI *bool,
+) (string, error) {
+	if *session != nil {
+		auth, err := sspiSessionAuth(*session, challenge)
+		if err != nil {
+			return "", fmt.Errorf("continue upstream proxy authentication: %w", err)
+		}
+		return auth, nil
+	}
+	if sspiSessionCandidate(cfg, challenge) {
+		*usedSSPI = true
+	}
+	started, auth, handled, err := s.startUpstreamAuthSession(cfg, challenge, proxyHost, resp, mechanism)
+	*session = started
+	if err != nil {
+		return "", err
+	}
+	if handled {
+		return auth, nil
+	}
+	return upstreamProxyAuthHeader(cfg, req.Method, targetURL, challenge, passthroughAuth), nil
+}
+
+func (s *Server) retryHTTPProxyAuthAfterSSPIFailure(
+	transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth,
+	proxyHost string, candidate wproxy.Server, resp *http.Response, session *authSession,
+	closeEphemeral func(), finish func(*http.Response) *http.Response,
+) (*http.Response, error) {
+	if *session != nil {
+		if err := (*session).Close(); err != nil {
+			return nil, fmt.Errorf("close failed SSO session before credential fallback: %w", err)
+		}
+		*session = nil
+	}
+	if resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	closeEphemeral()
+	return s.retryHTTPProxyAuthWithPrompt(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, finish)
 }
 
 func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, resp *http.Response, finish func(*http.Response) *http.Response) (*http.Response, error) {
