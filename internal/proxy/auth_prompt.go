@@ -111,7 +111,7 @@ func (s *Server) promptUpstreamCredentials(proxyHost string, forceDialog bool) (
 		}
 	}
 	if s.pendingAuthPrompts != nil {
-		if pending := s.pendingAuthPrompts[host]; pending != nil && !(forceDialog && pending.retryDialogOnFailure) {
+		if pending := s.pendingAuthPrompts[host]; pending != nil && (!forceDialog || !pending.retryDialogOnFailure) {
 			pending.users++
 			cfg.Username = pending.credential.Username
 			cfg.Password = pending.credential.Password
