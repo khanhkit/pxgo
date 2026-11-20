@@ -289,13 +289,14 @@ func (s *Server) retryHTTPProxyAuthAfterSSPIFailure(
 		}
 	}
 	closeEphemeral()
-	if err := detachUpstream407Body(resp); err != nil {
-		return nil, err
-	}
 	return s.retryHTTPProxyAuthWithPrompt(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, finish)
 }
 
 func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, resp *http.Response, finish func(*http.Response) *http.Response) (*http.Response, error) {
+	// Make every entry path safe before the dialog can block or be cancelled.
+	if err := detachUpstream407Body(resp); err != nil {
+		return nil, err
+	}
 	cfg, remember, prompted, retryDialog, releasePrompt, err := s.promptUpstreamCredentials(proxyHost, false)
 	if err != nil {
 		debug.Dprint("HTTP proxy credential prompt unavailable: " + err.Error())
