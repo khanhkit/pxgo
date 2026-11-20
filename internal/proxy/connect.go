@@ -247,16 +247,37 @@ func (s *Server) sendUpstreamConnectWithConfig(conn net.Conn, target, proxyHost,
 }
 
 func (s *Server) retryConnectWithPrompt(ctx context.Context, target, passthroughAuth string, candidate wproxy.Server, dial contextDialFunc, timeout time.Duration) (net.Conn, []byte, error) {
+	cfg, remember, prompted, retryDialog, releasePrompt, err := s.promptUpstreamCredentials(candidate.Host, false)
+	if err != nil || !prompted {
+		return nil, nil, err
+	}
+	conn, leftover, err := s.retryConnectWithCredentials(ctx, target, passthroughAuth, candidate, dial, timeout, cfg)
+	releasePrompt()
+	if err == nil {
+		s.acceptPromptedCredentials(candidate.Host, cfg, remember)
+		return conn, leftover, nil
+	}
+
+	var authErr *upstreamConnectStatusError
+	if retryDialog && upstreamAuthPromptEnabled() && errors.As(err, &authErr) && authErr.StatusCode == http.StatusProxyAuthRequired {
+		cfg, remember, prompted, _, releasePrompt, promptErr := s.promptUpstreamCredentials(candidate.Host, true)
+		if promptErr != nil || !prompted {
+			return nil, nil, promptErr
+		}
+		conn, leftover, err = s.retryConnectWithCredentials(ctx, target, passthroughAuth, candidate, dial, timeout, cfg)
+		releasePrompt()
+		if err == nil {
+			s.acceptPromptedCredentials(candidate.Host, cfg, remember)
+		}
+	}
+	return conn, leftover, err
+}
+
+func (s *Server) retryConnectWithCredentials(ctx context.Context, target, passthroughAuth string, candidate wproxy.Server, dial contextDialFunc, timeout time.Duration, cfg config.Config) (net.Conn, []byte, error) {
 	scheme := proxyScheme(candidate)
 	if scheme != httpScheme && scheme != httpsScheme {
 		return nil, nil, nil
 	}
-	cfg, remember, prompted, releasePrompt, err := s.promptUpstreamCredentials(candidate.Host)
-	if err != nil || !prompted {
-		return nil, nil, err
-	}
-	defer releasePrompt()
-
 	addr := net.JoinHostPort(candidate.Host, strconv.Itoa(candidate.Port))
 	conn, err := dial(ctx, "tcp", addr)
 	if err != nil {
@@ -282,7 +303,6 @@ func (s *Server) retryConnectWithPrompt(ctx context.Context, target, passthrough
 		_ = conn.Close()
 		return nil, nil, err
 	}
-	s.acceptPromptedCredentials(cfg, remember)
 	return conn, leftover, nil
 }
 

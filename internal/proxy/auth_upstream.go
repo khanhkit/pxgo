@@ -292,7 +292,7 @@ func (s *Server) retryHTTPProxyAuthAfterSSPIFailure(
 }
 
 func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, resp *http.Response, finish func(*http.Response) *http.Response) (*http.Response, error) {
-	cfg, remember, prompted, releasePrompt, err := s.promptUpstreamCredentials(proxyHost)
+	cfg, remember, prompted, retryDialog, releasePrompt, err := s.promptUpstreamCredentials(proxyHost, false)
 	if err != nil {
 		debug.Dprint("HTTP proxy credential prompt unavailable: " + err.Error())
 		return finish(resp), nil
@@ -300,7 +300,33 @@ func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *ht
 	if !prompted {
 		return finish(resp), nil
 	}
-	defer releasePrompt()
+	result, err := s.retryHTTPProxyAuthWithCredentials(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, cfg, remember)
+	releasePrompt()
+	if err != nil {
+		return nil, err
+	}
+
+	// A remembered credential can become stale. Retry once with a fresh dialog
+	// instead of silently returning 407 forever.
+	if retryDialog && result != nil && result.StatusCode == http.StatusProxyAuthRequired && upstreamAuthPromptEnabled() {
+		cfg, remember, prompted, _, releasePrompt, err = s.promptUpstreamCredentials(proxyHost, true)
+		if err != nil {
+			debug.Dprint("HTTP proxy credential re-prompt unavailable: " + err.Error())
+			return result, nil
+		}
+		if !prompted {
+			return result, nil
+		}
+		result, err = s.retryHTTPProxyAuthWithCredentials(transport, req, u, body, targetURL, passthroughAuth, proxyHost, candidate, resp, cfg, remember)
+		releasePrompt()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (s *Server) retryHTTPProxyAuthWithCredentials(transport *http.Transport, req *http.Request, u *url.URL, body *replayableBody, targetURL, passthroughAuth, proxyHost string, candidate wproxy.Server, resp *http.Response, cfg config.Config, remember bool) (*http.Response, error) {
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
@@ -322,6 +348,7 @@ func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *ht
 		if firstResp.Body != nil {
 			firstResp.Body = &transportClosingBody{ReadCloser: firstResp.Body, transport: freshTransport}
 		}
+		s.acceptPromptedCredentials(proxyHost, cfg, remember)
 		return firstResp, nil
 	}
 
@@ -334,7 +361,7 @@ func (s *Server) retryHTTPProxyAuthWithPrompt(transport *http.Transport, req *ht
 		result.Body = &transportClosingBody{ReadCloser: result.Body, transport: freshTransport}
 	}
 	if result != nil && result.StatusCode != http.StatusProxyAuthRequired {
-		s.acceptPromptedCredentials(cfg, remember)
+		s.acceptPromptedCredentials(proxyHost, cfg, remember)
 	}
 	return result, nil
 }
