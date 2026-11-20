@@ -86,7 +86,7 @@ test("worker validates PR SHA and repo before using OCR secrets", async () => {
     assert.ok(y.includes(input), input);
   }
   assert.ok(y.includes("steps.ocr-config.outputs.ready == 'true'"));
-  assert.ok(y.includes("alibaba/open-code-review@375f64cd6f67a48a135da83cfcf59c52669a09cb"));
+  assert.ok(y.includes("alibaba/open-code-review@891df1b63f380845d882a289a67a6e36c331120c"));
   for (const key of ["ocr_version: \"1.12.13\"", "sticky_summary: \"true\"",
     "incremental: \"true\"", "checkpoint_range: \"true\"",
     "stream_progress: \"true\"", "upload_artifacts: \"true\"",
@@ -145,11 +145,10 @@ test("main CI executes deterministic OCR fallback regression, not only static co
   assert.match(y, /tests\/unit\/build\/ocr-review-regressions\.test\.mjs/);
 });
 
-// The currently pinned upstream composite action v1.13.3 predates the upstream
-// OCR_NO_UPDATE fix. Keep the legacy CLI's detached npm self-updater disabled
-// across install/config/review steps, not merely one composite substep.
+// Keep the legacy CLI's detached npm self-updater disabled across install,
+// configuration and review steps, not merely one composite substep.
 test("trusted OCR worker suppresses asynchronous CLI self-update at job scope", async () => {
   const y = await read(".github/workflows/ocr-review-worker.yml");
   assert.match(y, /^    env:\n      OCR_NO_UPDATE: "1"$/m);
-  assert.match(y, /alibaba\/open-code-review@375f64cd6f67a48a135da83cfcf59c52669a09cb/);
+  assert.match(y, /alibaba\/open-code-review@891df1b63f380845d882a289a67a6e36c331120c/);
 });
