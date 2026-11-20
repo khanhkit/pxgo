@@ -204,6 +204,9 @@ func TestRetryHTTPProxyAuthWithPromptPreserves407WhenBodyDetachFails(t *testing.
 	if got.Body != http.NoBody {
 		t.Fatal("failed detach should return an empty, closed 407 body")
 	}
+	if err := got.Body.Close(); err != nil {
+		t.Fatalf("close returned 407 body: %v", err)
+	}
 }
 
 func TestRetryConnectWithPromptSkipsUnsupportedProxyScheme(t *testing.T) {
